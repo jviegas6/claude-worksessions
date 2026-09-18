@@ -1,0 +1,519 @@
+#!/usr/bin/env python3
+"""claude-search: find the Claude sessions related to a ticket or a topic.
+
+  claude-search PROJ-123                   sessions on that ticket
+  claude-search "login issues"             sessions that dealt with it
+  claude-search firewall --from 2026-09-01
+  claude-search "fabric mirror" --ai       let Claude judge relevance and say why
+
+It searches each session's title, what you typed, Claude's replies, the commands
+it ran, the session folder, and the meetings, emails and chats the weekly review
+linked to the session. A ticket search also uses the ticket you declared with
+claude-new and the ticket the weekly review booked the session to.
+
+Results are ranked, each with why it matched and the command to resume it.
+"""
+
+import argparse
+import collections
+import csv
+import datetime as dt
+import importlib.machinery
+import importlib.util
+import json
+import math
+import os
+import re
+import subprocess
+import sys
+import tempfile
+
+HOME = os.path.expanduser("~")
+CACHE = os.path.join(HOME, ".claude-session", "cache", "search-index.json")
+INDEX_VERSION = 2  # 2: cwd mapped through _audit/moved-folders.json
+KEY_RE = re.compile(r"\b([A-Za-z][A-Za-z0-9]{1,9})-(\d{1,6})\b")
+
+# Where a word appears says how much the session is about it.
+FIELD_WEIGHTS = {"title": 6.0, "prompts": 3.0, "linked": 2.0, "folder": 2.0, "assistant": 1.0, "tools": 0.5}
+FIELD_NAMES = {"title": "title", "prompts": "what you typed", "linked": "linked activity",
+               "folder": "folder", "assistant": "Claude's replies", "tools": "commands and output"}
+TOOL_CHUNK = 1500
+
+# Related words a search also looks for, at half weight. Written as plain words;
+# they go through the same tokeniser as everything else.
+EXPAND = {
+    "login": "logon signin authentication authenticate auth credentials password sso oauth mfa unauthorized forbidden entra",
+    "auth": "login logon signin authentication credentials password sso oauth mfa unauthorized forbidden entra",
+    "password": "credentials login secret",
+    "permission": "permissions roles rbac access grant privilege entitlement",
+    "access": "permissions roles rbac grant privilege",
+    "role": "permissions rbac access grant",
+    "firewall": "fw egress outbound nsg whitelist allowlist traffic",
+    "network": "vnet subnet dns peering endpoint",
+    "vnet": "subnet network peering",
+    "subnet": "vnet network",
+    "secret": "keyvault kv credentials",
+    "timeout": "timeouts hang slow",
+    "cost": "costs billing spend budget",
+    "billing": "cost costs spend budget",
+    "fail": "failure failed failing error exception incident broken",
+    "error": "failure failed exception incident broken",
+    "ingestion": "ingest landing jdbc",
+    "mirror": "mirroring fabric",
+}
+
+
+def load_audit():
+    """claude-audit's transcript reading, time model and ledger code, reused as is."""
+    path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "claude-audit")
+    if not os.path.isfile(path):
+        path = os.path.join(HOME, ".local", "bin", "claude-audit")
+    loader = importlib.machinery.SourceFileLoader("claude_audit", path)
+    spec = importlib.util.spec_from_loader("claude_audit", loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+CA = load_audit()
+
+
+def terms(text):
+    """Word stems with counts, tokenised exactly as claude-audit matches titles."""
+    out = collections.Counter()
+    for raw in re.findall(r"[a-z0-9]+", (text or "").lower()):
+        if raw.isdigit():
+            continue
+        word = CA.SYNONYMS.get(raw, raw)
+        if word in CA.STOPWORDS or (len(word) < 3 and word not in CA.KEEP_SHORT):
+            continue
+        out[CA._stem(word)] += 1
+    return out
+
+
+def ticket_keys(text):
+    return sorted({m.group(0).upper() for m in KEY_RE.finditer(text or "")
+                   if m.group(1).upper() not in CA.JIRA_DENY})
+
+
+def extract(path):
+    """One session as searchable fields. Sidechains (subagents) are left out."""
+    title, cwd = "", ""
+    prompts, assistant, tools = [], [], []
+    with open(path, errors="ignore") as fh:
+        for line in fh:
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                continue
+            if rec.get("isSidechain"):
+                continue
+            cwd = cwd or rec.get("cwd") or ""
+            kind = rec.get("type")
+            if kind == "ai-title":
+                title = rec.get("aiTitle") or title
+                continue
+            content = (rec.get("message") or {}).get("content")
+            if kind == "user" and not rec.get("isMeta"):
+                if isinstance(content, str):
+                    if not content.startswith("<"):
+                        prompts.append(content)
+                    continue
+                for block in content or []:
+                    if not isinstance(block, dict):
+                        continue
+                    if block.get("type") == "text" and not (block.get("text") or "").startswith("<"):
+                        prompts.append(block["text"])
+                    elif block.get("type") == "tool_result":
+                        inner = block.get("content")
+                        text = inner if isinstance(inner, str) else " ".join(
+                            x.get("text", "") for x in inner or [] if isinstance(x, dict))
+                        tools.append(text[:TOOL_CHUNK])
+            elif kind == "assistant" and isinstance(content, list):
+                for block in content:
+                    if not isinstance(block, dict):
+                        continue
+                    if block.get("type") == "text":
+                        assistant.append(block.get("text") or "")
+                    elif block.get("type") == "tool_use":
+                        tools.append(json.dumps(block.get("input"), ensure_ascii=False)[:TOOL_CHUNK])
+
+    session = CA.read_session(path)
+    if not session:
+        return None
+    stamps = session["stamps"]
+    worked = CA.worked_seconds(stamps, session["turns"], 300, 120)
+    title = title or (session["info"]["opening"] or "")[:80].replace("\n", " ")
+    cwd = CA.moved_path(cwd)
+    folder = " ".join(cwd.rstrip("/").split("/")[-2:])
+    raw = {"title": title, "prompts": "\n".join(prompts), "assistant": "\n".join(assistant),
+           "tools": "\n".join(tools)[:200000], "folder": folder}
+    return {
+        "session_id": os.path.basename(path)[:-6], "cwd": cwd, "title": title,
+        "start": stamps[0].isoformat(), "end": stamps[-1].isoformat(), "worked": worked,
+        "tf": {f: dict(terms(t)) for f, t in raw.items()},
+        "keys": {f: ticket_keys(t) for f, t in raw.items()},
+        "snip": {"prompts": raw["prompts"][:20000], "assistant": raw["assistant"][:30000]},
+    }
+
+
+def build_index():
+    """Re-read only sessions whose transcript changed since the last search."""
+    try:
+        with open(CACHE) as fh:
+            cache = json.load(fh)
+        if cache.get("version") != INDEX_VERSION:
+            cache = {}
+    except (OSError, ValueError):
+        cache = {}
+    entries = cache.get("entries", {})
+    fresh, changed = {}, 0
+    for path in CA.transcript_files():
+        stat = os.stat(path)
+        stamp = [stat.st_mtime, stat.st_size]
+        old = entries.get(path)
+        if old and old["stamp"] == stamp:
+            fresh[path] = old
+            continue
+        doc = extract(path)
+        changed += 1
+        if doc:
+            fresh[path] = {"stamp": stamp, "doc": doc}
+    if changed:
+        os.makedirs(os.path.dirname(CACHE), exist_ok=True)
+        tmp = CACHE + ".tmp"
+        with open(tmp, "w") as fh:
+            json.dump({"version": INDEX_VERSION, "entries": fresh}, fh)
+        os.replace(tmp, CACHE)
+    return [e["doc"] for e in fresh.values()], changed
+
+
+def linked_activity(ledger):
+    """Meeting, email and chat titles the weekly review linked to each subject."""
+    by_subject = collections.defaultdict(list)
+    folder = CA.ACTIVITY_DIR
+    if not (os.path.isdir(folder) and any(f.endswith(".json") for f in os.listdir(folder))):
+        return by_subject
+    rows, _ = CA.load_activity(folder)
+    for row in rows:
+        key = CA.stable_id("evt_", row["source"], row["start"], row["title"])
+        link = ledger["assign"].get(key)
+        if link:
+            by_subject[link["subject"]].append(
+                ("{} {}".format(row["source"], row["title"]), (row.get("_text") or "") + " " + row["title"]))
+    return by_subject
+
+
+def booking(doc, ledger, tasks):
+    """The subject a session sits in, and the task / ticket the weekly review booked it to."""
+    link = ledger["assign"].get(doc["session_id"])
+    subject = link["subject"] if link else CA.clean_title(doc["title"])
+    mapping = ledger["subjects"].get(CA.stable_id("sub_", subject))
+    if not mapping:
+        return subject, "", ""
+    ticket = mapping.get("ticket") or "Other"
+    if ticket == "Other" and (tasks.get(mapping["task"]) or {}).get("default_ticket"):
+        ticket = tasks[mapping["task"]]["default_ticket"]
+    return subject, mapping["task"], ticket
+
+
+def snippet(doc, stems):
+    if not stems:
+        return ""
+    pattern = re.compile(r"\b(" + "|".join(re.escape(s) for s in sorted(stems, key=len, reverse=True)) + r")\w*", re.I)
+    for field, who in (("prompts", "you"), ("assistant", "claude")):
+        text = doc["snip"].get(field) or ""
+        m = pattern.search(text)
+        if m:
+            lo, hi = max(0, m.start() - 70), min(len(text), m.end() + 90)
+            piece = re.sub(r"\s+", " ", text[lo:hi]).strip()
+            return '{}: "{}{}{}"'.format(who, "…" if lo else "", piece, "…" if hi < len(text) else "")
+    return ""
+
+
+def search(query, docs, ledger, jira, linked):
+    tasks = {t["task"]: t for t in ledger.get("tasks") or []}
+    keys = {k.upper() for k in ticket_keys(query)}
+    words = KEY_RE.sub(" ", query)
+    # One concept per query word: the word itself plus its related words. A concept
+    # scores by its best-matching word, so ten related words never outweigh one real one.
+    concepts, weight, shown = [], {}, {}
+    for raw in re.findall(r"[A-Za-z0-9]+", words):
+        for stem in terms(raw):
+            if stem in weight:
+                continue
+            concept = {stem: 1.0}
+            shown[stem] = raw.lower()
+            for extra in EXPAND.get(stem, "").split():
+                for s in terms(extra):
+                    concept.setdefault(s, 0.5)
+                    shown.setdefault(s, extra)
+            concepts.append(concept)
+            weight.update({s: max(weight.get(s, 0), w) for s, w in concept.items()})
+    for key in keys:  # a ticket search also looks for the ticket's own words
+        for s in terms((jira.get(key) or {}).get("summary", "")):
+            if s not in weight:
+                concepts.append({s: 0.35})
+                weight[s] = 0.35
+                shown.setdefault(s, s)
+
+    for doc in docs:
+        subject, task, ticket = booking(doc, ledger, tasks)
+        doc["_subject"], doc["_task"], doc["_ticket"] = subject, task, ticket
+        texts = linked.get(subject, [])
+        doc["_linked_tf"] = dict(terms(" ".join(t for _, t in texts)))
+        doc["_linked_keys"] = ticket_keys(" ".join(t for _, t in texts))
+        doc["_linked"] = texts
+
+    n = len(docs) or 1
+    df = collections.Counter()
+    for doc in docs:
+        present = set(doc["_linked_tf"])
+        for field_tf in doc["tf"].values():
+            present |= set(field_tf)
+        for stem in weight:
+            if stem in present:
+                df[stem] += 1
+    idf = {s: math.log(1 + (n - df[s] + 0.5) / (df[s] + 0.5)) for s in weight}
+
+    def field_tf(doc, field):
+        return doc["_linked_tf"] if field == "linked" else doc["tf"].get(field, {})
+
+    # BM25 length normalisation: a word in a short session says more than the
+    # same word somewhere in a multi-day one.
+    k1, b = 1.2, 0.75
+    avg_len = {f: (sum(sum(field_tf(d, f).values()) for d in docs) / n) or 1.0 for f in FIELD_WEIGHTS}
+
+    results = []
+    phrase = words.strip().lower()
+    for doc in docs:
+        score, hits = 0.0, collections.defaultdict(set)
+        for field, w in FIELD_WEIGHTS.items():
+            tf = field_tf(doc, field)
+            norm = k1 * (1 - b + b * sum(tf.values()) / avg_len[field])
+            for concept in concepts:
+                best, best_stem = 0.0, None
+                for stem, qw in concept.items():
+                    if field == "tools" and qw < 1:  # tool output is full of auth/credential noise
+                        continue
+                    count = tf.get(stem)
+                    if count:
+                        value = qw * idf[stem] * count * (k1 + 1) / (count + norm)
+                        if value > best:
+                            best, best_stem = value, stem
+                if best_stem:
+                    score += w * best
+                    hits[field].add(best_stem)
+        if len(phrase.split()) > 1 and (phrase in doc["title"].lower() or phrase in (doc["snip"]["prompts"] or "").lower()):
+            score += 6.0
+
+        evidence, tier = [], 0  # 2 = on the ticket, 1 = ticket only mentioned in passing
+        meta = CA.session_meta(doc["cwd"])
+        for key in keys:
+            if (meta.get("ticket") or "").upper() == key:
+                score += 12
+                tier = 2
+                evidence.append("declared {} with claude-new".format(key))
+            if doc["_ticket"] == key:
+                score += 10
+                tier = 2
+                evidence.append("booked to {} in the weekly review".format(key))
+            if any(key in doc["keys"].get(f, []) for f in ("title", "prompts", "folder")):
+                score += 8
+                tier = 2
+                evidence.append("you mention {}".format(key))
+            elif any(key in doc["keys"].get(f, []) for f in ("assistant", "tools")) or key in doc["_linked_keys"]:
+                score += 2
+                tier = max(tier, 1)
+                evidence.append("{} comes up in Claude's output".format(key))
+        if score <= 0:
+            continue
+        why = list(evidence)
+        for field in FIELD_WEIGHTS:
+            if hits[field] and field != "linked":
+                why.append("{}: {}".format(FIELD_NAMES[field], ", ".join(sorted(shown[s] for s in hits[field])[:5])))
+        if hits["linked"]:
+            matched = [label for label, text in doc["_linked"] if terms(text).keys() & hits["linked"]]
+            why.append("linked: " + "; ".join(matched[:2]))
+        results.append({"doc": doc, "score": score, "tier": tier, "why": why,
+                        "profile": meta.get("profile") or "unknown",
+                        "snippet": snippet(doc, {s for s in hits["prompts"] | hits["assistant"]} or set(weight))})
+
+    results.sort(key=lambda r: (-r["tier"] if keys else 0, -r["score"], r["doc"]["start"]))
+    if results:
+        top = max(r["score"] for r in results)
+        for r in results:
+            if keys:
+                r["level"] = ("on ticket", "mentioned", "related")[2 - r["tier"]]
+            else:
+                r["level"] = "strong" if r["score"] >= 0.5 * top else "likely" if r["score"] >= 0.2 * top else "possible"
+    return results, keys
+
+
+def ai_rank(query, results):
+    """Ask Claude which candidates are genuinely about the query. No transcript is saved."""
+    cands = results[:20]
+    lines = []
+    for i, r in enumerate(cands, 1):
+        d = r["doc"]
+        lines.append(json.dumps({
+            "n": i, "date": d["start"][:10], "title": d["title"], "ticket": d["_ticket"] or "-",
+            "task": d["_task"] or "-", "folder": d["cwd"].replace(HOME, "~"),
+            "you_typed": re.sub(r"\s+", " ", d["snip"]["prompts"][:600]), "evidence": r["why"], "snippet": r["snippet"],
+        }, ensure_ascii=False))
+    prompt = (
+        "You are ranking Claude Code work sessions for a search.\nQuery: {!r}\n\n"
+        "Candidates are below, one JSON object per line. Keep only the sessions that are genuinely about "
+        "the query, not ones that mention a word in passing. Reply with ONLY a JSON array, most relevant "
+        "first: [{{\"n\": <number>, \"why\": \"<one short sentence>\"}}]. Leave irrelevant sessions out.\n\n{}"
+    ).format(query, "\n".join(lines))
+    try:
+        proc = subprocess.run(["claude", "-p", "--no-session-persistence", "--model", "haiku"],
+                              input=prompt, capture_output=True, text=True, timeout=240,
+                              cwd=tempfile.gettempdir())
+        text = proc.stdout
+        picks = json.loads(text[text.index("["): text.rindex("]") + 1])
+    except (OSError, subprocess.SubprocessError, ValueError) as exc:
+        print("claude-search: Claude ranking unavailable ({}); showing the local ranking".format(
+            str(exc).splitlines()[0][:120]), file=sys.stderr)
+        return results
+    ranked = []
+    for pick in picks:
+        try:
+            r = cands[int(pick["n"]) - 1]
+        except (KeyError, ValueError, IndexError, TypeError):
+            continue
+        if r not in ranked:
+            r["level"] = "claude"
+            r["why"] = [pick.get("why", "")] + r["why"]
+            ranked.append(r)
+    return ranked
+
+
+def short(path):
+    return path.replace(HOME, "~")
+
+
+def shell_path(path):
+    """A path as you would type it: ~ for home, spaces and the like backslash-escaped, no quotes."""
+    path = short(path)
+    head, rest = ("~", path[1:]) if path.startswith("~") else ("", path)
+    return head + re.sub(r"([^\w@%+=:,./-])", r"\\\1", rest)
+
+
+def launcher(r):
+    return "claude-" + r["profile"] if r["profile"] in CA.PROFILES else "claude"
+
+
+def resume_cmd(r):
+    d = r["doc"]
+    return "cd {} && {} --resume {}".format(shell_path(d["cwd"]), launcher(r), d["session_id"])
+
+
+def pick_and_resume(results):
+    """Ask which result to resume, then cd there and start Claude on it (replaces this process)."""
+    try:
+        answer = input("Resume which session? [1-{}, Enter to skip] ".format(len(results))).strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return
+    if not answer:
+        return
+    if not answer.isdigit() or not 1 <= int(answer) <= len(results):
+        sys.exit("claude-search: no session {}".format(answer))
+    r = results[int(answer) - 1]
+    d = r["doc"]
+    if not os.path.isdir(d["cwd"]):
+        sys.exit("claude-search: folder no longer exists: " + short(d["cwd"]))
+    if r["profile"] in ("work", "personal"):  # what the claude-work / claude-personal aliases do
+        os.environ["CLAUDE_CONFIG_DIR"] = os.path.join(HOME, ".claude-" + r["profile"])
+    os.chdir(d["cwd"])
+    print(resume_cmd(r))
+    sys.stdout.flush()
+    os.execvp("claude", ["claude", "--resume", d["session_id"]])
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="claude-search", description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("query", nargs="+", help="a ticket (PROJ-123) and/or any words ('login issues')")
+    ap.add_argument("--from", dest="start", metavar="DATE", help="only sessions active on or after this day")
+    ap.add_argument("--to", dest="end", metavar="DATE", help="only sessions active on or before this day")
+    ap.add_argument("--limit", type=int, default=10, metavar="N", help="how many results (default: 10)")
+    ap.add_argument("--all", action="store_true", help="include weak matches")
+    ap.add_argument("--ai", action="store_true",
+                    help="let Claude read the top candidates, keep the ones genuinely about the query "
+                         "and say why (slower; no session is saved)")
+    ap.add_argument("--no-pick", action="store_true", help="just list; don't offer to resume one")
+    ap.add_argument("--csv", nargs="?", const="-", metavar="FILE", help="write CSV (to stdout by default)")
+    args = ap.parse_args()
+    query = " ".join(args.query)
+
+    docs, changed = build_index()
+    if changed > 5:
+        print("(indexed {} sessions)".format(changed), file=sys.stderr)
+    try:
+        lo = dt.date.fromisoformat(args.start) if args.start else None
+        hi = dt.date.fromisoformat(args.end) if args.end else None
+    except ValueError as exc:
+        sys.exit("claude-search: bad date ({})".format(exc))
+    docs = [d for d in docs if (not lo or d["end"][:10] >= str(lo)) and (not hi or d["start"][:10] <= str(hi))]
+
+    ledger = CA.load_ledger(CA.LEDGER_PATH)
+    jira = {i["key"]: i for i in CA.load_jira()}
+    results, keys = search(query, docs, ledger, jira, linked_activity(ledger))
+    if not args.all:
+        results = [r for r in results if r["level"] != "possible"]
+        if keys:  # a ticket search shows a few passing mentions and look-alikes, not all of them
+            results = ([r for r in results if r["level"] == "on ticket"]
+                       + [r for r in results if r["level"] == "mentioned"][:3]
+                       + [r for r in results if r["level"] == "related"][:3])
+    judged = bool(args.ai and results)
+    if judged:
+        results = ai_rank(query, results)
+    results = results[: args.limit]
+
+    if args.csv is not None:
+        cols = ["rank", "level", "score", "session_id", "start", "end", "worked", "task", "ticket", "title",
+                "folder", "why", "snippet", "resume"]
+        fh = sys.stdout if args.csv == "-" else open(args.csv, "w", newline="")
+        writer = csv.writer(fh)
+        writer.writerow(cols)
+        for i, r in enumerate(results, 1):
+            d = r["doc"]
+            writer.writerow([i, r["level"], round(r["score"], 2), d["session_id"], d["start"][:16], d["end"][:16],
+                             CA.hms(d["worked"]), d["_task"], d["_ticket"], d["title"], d["cwd"],
+                             " · ".join(r["why"]), r["snippet"], resume_cmd(r)])
+        if fh is not sys.stdout:
+            fh.close()
+            print(args.csv)
+        return
+
+    title = jira.get(next(iter(keys)), {}).get("summary") if len(keys) == 1 else None
+    print('claude-search "{}"{} · {} of {} sessions\n'.format(
+        query, " ({})".format(title) if title else "", len(results), len(docs)))
+    if not results:
+        if judged:
+            print("  Claude read the keyword matches and judged none to be about this -- drop --ai to see them")
+        else:
+            print("  nothing found -- try other words, --all for weak matches, or --ai")
+        return
+    for i, r in enumerate(results, 1):
+        d = r["doc"]
+        start, end = dt.datetime.fromisoformat(d["start"]), dt.datetime.fromisoformat(d["end"])
+        span = "{} {}-{}".format(start.strftime("%a %d %b"), start.strftime("%H:%M"),
+                                 end.strftime("%H:%M") if end.date() == start.date() else end.strftime("%d %b %H:%M"))
+        booked = "{} / {}".format(d["_task"], d["_ticket"]) if d["_task"] else "not booked yet"
+        print("{:>2}  {:<9}  {}  {} worked  {}".format(i, r["level"], span, CA.hms(d["worked"])[:-3], booked))
+        print("    " + d["title"])
+        print("    why: " + " · ".join(r["why"]))
+        if r["snippet"]:
+            print("    " + r["snippet"][:220])
+        print("    " + resume_cmd(r))
+        print()
+    if not args.no_pick and sys.stdin.isatty() and sys.stdout.isatty():
+        pick_and_resume(results)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,2110 @@
+#!/usr/bin/env python3
+"""claude-audit: what you worked on, from Claude sessions plus Teams, calendar and mail.
+
+  claude-audit                          this week, summary
+  claude-audit --day [DATE]             one day
+  claude-audit --week [DATE]            the Monday-Sunday week containing DATE
+  claude-audit --month [YYYY-MM]        a month: the weeks that start in it
+  claude-audit --from DATE --to DATE    a range: every week it touches
+
+  --detail        every activity, one row each, with its task and ticket
+  --copy          also copy the table, ready to paste
+  --csv [FILE]    write a CSV instead of printing the table ('-' for stdout)
+
+The summary is the weekly functional-review tracker: one row per task and Jira
+ticket per week, with the phase columns, Leave, Meetings & Interactions and a
+utilisation %. The detail is every session, meeting, email and chat behind it;
+each detail row's row_id names the summary row it rolls up into.
+
+Sessions come from the Claude transcripts (~/.claude-*/projects). Meetings, mail,
+chats and out-of-office come from the day files Claude writes to _audit/activity/
+during a daily recap or weekly review -- this script cannot reach Microsoft 365
+itself. Days without a file show Claude sessions only, and the output says so.
+
+Time worked is not wall-clock: each session is walked turn by turn, a stall inside
+a turn is capped at 5 minutes and the gap between turns at 2, so a session left
+open overnight counts for what was actually done in it.
+
+Which session goes with which meeting, and which task each piece of work belongs
+to, are decided once through the weekly-review skill and kept in
+_audit/review/ledger.json.
+"""
+
+import argparse
+import bisect
+import csv
+import hashlib
+import math
+import datetime as dt
+import json
+import os
+import re
+import subprocess
+import sys
+from collections import defaultdict
+
+HOME = os.path.expanduser("~")
+
+
+def load_config():
+    """claude-worksessions settings: KEY="value" lines from $CWS_CONFIG or
+    ~/.config/claude-worksessions/config.env. Environment variables win."""
+    path = os.environ.get("CWS_CONFIG") or os.path.join(HOME, ".config", "claude-worksessions", "config.env")
+    conf = {}
+    try:
+        with open(path) as fh:
+            for line in fh:
+                m = re.match(r"\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)$", line)
+                if not m:
+                    continue
+                val = m.group(2).strip()
+                if val[:1] in ("'", '"'):          # quoted: up to the closing quote
+                    val = val[1:].split(val[0])[0]
+                else:                               # bare: drop a trailing " # comment"
+                    val = val.split(" #")[0].strip()
+                conf[m.group(1)] = val.replace("${HOME}", HOME).replace("$HOME", HOME)
+    except OSError:
+        pass
+    conf.update({k: v for k, v in os.environ.items() if k.startswith("CWS_")})
+    return conf
+
+
+CONFIG = load_config()
+PROFILES = (CONFIG.get("CWS_PROFILES") or "personal work").split()
+CONFIG_DIRS = [os.path.join(HOME, ".claude-" + p) for p in PROFILES]
+DEFAULT_ROOT = CONFIG.get("CWS_WORK_ROOT") or os.environ.get("CLAUDE_WORK_ROOT") or os.path.join(
+    HOME, "work_sessions")
+# Exports live in their own folder; the root of CLAUDE_WORK_ROOT holds only session folders.
+DEFAULT_OUT_DIR = os.path.join(DEFAULT_ROOT, "_audit")
+
+
+def parse_ts(raw):
+    if not raw or not isinstance(raw, str):
+        return None
+    try:
+        return dt.datetime.fromisoformat(raw.replace("Z", "+00:00")).astimezone()
+    except ValueError:
+        return None
+
+
+def round_up(seconds, slot):
+    """Round a duration up to the next slot (half-hour slots by default)."""
+    if seconds <= 0 or slot <= 0:
+        return seconds
+    return math.ceil(seconds / slot) * slot
+
+
+def hms(seconds):
+    seconds = int(round(seconds))
+    return "{:d}:{:02d}:{:02d}".format(seconds // 3600, (seconds % 3600) // 60, seconds % 60)
+
+
+def transcript_files():
+    """All session transcripts, deduped by real path across both config dirs."""
+    seen, out = set(), []
+    for cfg in CONFIG_DIRS:
+        projects = os.path.join(cfg, "projects")
+        if not os.path.isdir(projects):
+            continue
+        for dirpath, _dirnames, filenames in os.walk(projects, followlinks=True):
+            for fn in filenames:
+                if not fn.endswith(".jsonl") or fn.startswith("agent-"):
+                    continue  # subagent transcripts overlap their parent session
+                real = os.path.realpath(os.path.join(dirpath, fn))
+                if real not in seen:
+                    seen.add(real)
+                    out.append(real)
+    return out
+
+
+_meta_cache = {}
+
+
+def session_meta(cwd):
+    """Profile and Jira ticket recorded by `claude-new` in the session folder."""
+    if not cwd:
+        return {"profile": "unknown", "ticket": "", "audit": True}
+    if cwd not in _meta_cache:
+        found = {}
+        meta = os.path.join(cwd, ".session.json")
+        if os.path.isfile(meta):
+            try:
+                with open(meta) as fh:
+                    found = json.load(fh)
+            except (ValueError, OSError):
+                found = {}
+        _meta_cache[cwd] = {"profile": found.get("profile") or "unknown",
+                            "ticket": (found.get("ticket") or "").strip(),
+                            # `claude-new -n` sessions stay out of the audit and the review.
+                            "audit": found.get("audit") is not False}
+    return _meta_cache[cwd]
+
+
+NO_AUDIT_PATH = os.path.join(DEFAULT_OUT_DIR, "no-audit.txt")
+
+
+def no_audit_ids(path=NO_AUDIT_PATH):
+    """Session ids to leave out: one per line, '#' comments. For sessions that
+    have no claude-new folder to carry the `-n` flag, such as ones started in the root."""
+    try:
+        with open(path) as fh:
+            return {ln.split("#")[0].strip() for ln in fh} - {""}
+    except OSError:
+        return set()
+
+
+def profile_for(cwd):
+    return session_meta(cwd)["profile"]
+
+
+def first_prompt_text(message):
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                return block.get("text", "")
+    return ""
+
+
+MOVED_PATH = os.path.join(DEFAULT_OUT_DIR, "moved-folders.json")
+_moved = None
+
+
+def moved_path(cwd):
+    """Where a session folder lives now. Transcripts keep the cwd they ran in; folders
+    moved later (e.g. flat YYYY-MM-DD_slug -> YYYY/MM/DD/HH-mm-ss_slug) are mapped
+    old -> new in _audit/moved-folders.json."""
+    global _moved
+    if _moved is None:
+        try:
+            with open(MOVED_PATH) as fh:
+                _moved = json.load(fh)
+        except (OSError, ValueError):
+            _moved = {}
+    if not cwd or not _moved:
+        return cwd
+    if cwd in _moved:
+        return _moved[cwd]
+    for old, new in _moved.items():
+        if cwd.startswith(old + "/"):
+            return new + cwd[len(old):]
+    return cwd
+
+
+def read_session(path):
+    """Collapse one transcript into a single audit record."""
+    stamps = []
+    submitted = {}  # promptId -> when that turn was submitted
+    cost = {}
+    info = {"title": "", "cwd": "", "branch": "", "version": "", "last_prompt": "", "opening": "",
+            "prompts": []}
+
+    try:
+        fh = open(path, errors="ignore")
+    except OSError:
+        return None
+    with fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                continue
+
+            ts = parse_ts(rec.get("timestamp"))
+            if ts:
+                stamps.append(ts)
+
+            # A turn opens with the user's message; it is the first record carrying
+            # that promptId, so keep the earliest timestamp seen for each one.
+            pid = rec.get("promptId")
+            if pid and ts and (pid not in submitted or ts < submitted[pid]):
+                submitted[pid] = ts
+
+            rtype = rec.get("type")
+            if rtype == "cost-state":
+                cost = rec
+            elif rtype == "ai-title":
+                info["title"] = rec.get("aiTitle") or info["title"]
+            elif rtype == "last-prompt":
+                info["last_prompt"] = rec.get("lastPrompt") or info["last_prompt"]
+            elif rtype == "user" and not rec.get("isSidechain") and not rec.get("isMeta"):
+                text = first_prompt_text(rec.get("message") or {})
+                if text and not text.startswith("<"):
+                    if not info["opening"]:
+                        info["opening"] = text
+                    # What you typed is the best evidence of what a session was
+                    # about. Kept short, used only for matching, never exported.
+                    if len(info["prompts"]) < 40:
+                        info["prompts"].append(text[:400])
+
+            for key, field in (("cwd", "cwd"), ("gitBranch", "branch"), ("version", "version")):
+                if rec.get(key) and not info[field]:
+                    info[field] = rec[key]
+
+    info["cwd"] = moved_path(info["cwd"])
+    if not stamps:
+        return None
+    stamps.sort()
+    return {
+        "path": path,
+        "stamps": stamps,
+        "turns": sorted(submitted.values()),
+        "cost": cost,
+        "info": info,
+    }
+
+
+def worked_seconds(events, turns, busy_cap, read_cap):
+    """Time actually spent working, turn by turn. See the module docstring."""
+    if len(events) < 2:
+        return 0.0
+
+    starts = list(turns)
+    # Activity can precede the first recorded prompt (a resumed session, or the
+    # tail of a turn that began the previous day). Treat it as its own turn.
+    if not starts or events[0] < starts[0]:
+        starts.insert(0, events[0])
+
+    total = 0.0
+    for i, start in enumerate(starts):
+        nxt = starts[i + 1] if i + 1 < len(starts) else None
+        lo = bisect.bisect_left(events, start)
+        hi = bisect.bisect_left(events, nxt) if nxt is not None else len(events)
+        span = events[lo:hi]
+        if not span:
+            continue
+        # Working, or watching Claude work: counts in full, stalls capped.
+        for a, b in zip(span, span[1:]):
+            total += min((b - a).total_seconds(), busy_cap)
+        # Reading the reply and composing the next prompt.
+        if nxt is not None:
+            total += min((nxt - span[-1]).total_seconds(), read_cap)
+    return total
+
+
+def split_by_day(session):
+    """Split one session into per-calendar-day slices."""
+    buckets = defaultdict(list)
+    for ts in session["stamps"]:
+        buckets[ts.date()].append(ts)
+    last_day = session["stamps"][-1].date()
+    for day in sorted(buckets):
+        final = day == last_day
+        yield {
+            "path": session["path"],
+            "info": session["info"],
+            "stamps": buckets[day],
+            "turns": [t for t in session["turns"] if t.date() == day],
+            # Cost is only known for the session as a whole; book it to the last day.
+            "cost": session["cost"] if final else {},
+        }
+
+
+ACTIVITY_SCHEMA = """
+--activity expects a JSON array of events already converted to LOCAL time
+(the caller normalises; see the workday-recap skill, step 0.5):
+
+  [{"source": "meeting" | "email" | "chat",
+    "start":  "2026-09-09T09:00:00",       # required, local ISO, no zone suffix
+    "end":    "2026-09-09T09:30:00",       # optional; omit for instants (email)
+    "title":  "Stand-Up Business Intelligence",
+    "counterparties": ["a@x.com", "b@x.com"],   # optional
+    "detail": "organiser: Jane Doe",           # optional, free text
+    "ref":    "https://outlook.office365.com/...",   # optional
+    "subject": "Cost pipeline (Jane)"}]         # optional, see below
+
+Use source "personal" for out-of-office blocks (lunch, focus time): they show in
+the timeline but are never billed. Use "leave" for real absence (all-day or
+multi-day out-of-office) -- the weekly review turns it into Leave days -- and
+"notice" for calendar entries you are not attending (tentative invites, change
+windows), so they are visible but never counted as meeting time.
+
+To link a meeting or email to the Claude session it triggered, give them the same
+"subject", and name the sessions in a "subjects" map keyed by session id -- pass
+an object instead of a bare array:
+
+  {"events":   [ ...as above... ],
+   "subjects": {"99c5b9fa-77bf-4d4d-b840-d6bd4e79b08b": "Cost pipeline (Jane)"}}
+
+Events with no subject stand alone under their own title. `duration` is then
+computed per subject and written on that subject's first row only, so the column
+sums to a day total.
+
+Two CSVs are written: the event log (key `event_id`, with `subject_id` and
+`session_id` as foreign keys) and a companion `..._subjects.csv` (key
+`subject_id`, one row per subject). `session_id` joins to the plain session
+export. Ids are derived from content, so they are stable across re-runs, and a
+subject keeps its id across days as long as its name does.
+
+Unknown keys are ignored. A malformed event is skipped with a warning rather
+than failing the whole export.
+"""
+
+
+def load_activity(path):
+    """Read merged-in meetings/emails/chats. Returns (rows, subjects).
+
+    `path` may be a single day's JSON file or a DIRECTORY of them -- the daily
+    files the recap skill writes accumulate in _audit/activity/, so pointing at
+    that directory exports a whole month in one run.
+    """
+    if os.path.isdir(path):
+        files = sorted(f for f in os.listdir(path) if f.endswith(".json"))
+        if not files:
+            sys.exit("claude-audit: no .json activity files in {}".format(path))
+        events, subjects = [], {}
+        for name in files:
+            part_events, part_subjects = load_activity(os.path.join(path, name))
+            events.extend(part_events)
+            subjects.update(part_subjects)
+        return events, subjects
+
+    try:
+        with open(path) as fh:
+            events = json.load(fh)
+    except (OSError, ValueError) as exc:
+        sys.exit("claude-audit: cannot read --activity file ({})".format(exc))
+    subjects = {}
+    if isinstance(events, dict):
+        subjects = events.get("subjects") or {}
+        events = events.get("events")
+    if not isinstance(events, list):
+        sys.exit("claude-audit: --activity file must be a JSON array, or an object "
+                 "with an \"events\" array (optionally with a \"subjects\" map)")
+    if not isinstance(subjects, dict):
+        sys.exit("claude-audit: \"subjects\" must be an object mapping session id -> subject")
+
+    rows = []
+    for i, ev in enumerate(events):
+        if not isinstance(ev, dict):
+            print("claude-audit: skipping activity[{}]: not an object".format(i), file=sys.stderr)
+            continue
+        start = parse_local(ev.get("start"))
+        if start is None:
+            print("claude-audit: skipping activity[{}]: bad or missing start".format(i), file=sys.stderr)
+            continue
+        end = parse_local(ev.get("end"))
+        source = str(ev.get("source") or "other")
+        parties = ev.get("counterparties") or []
+        if isinstance(parties, str):
+            parties = [parties]
+        rows.append({
+            "date": start.strftime("%Y-%m-%d"),
+            "weekday": start.strftime("%a"),
+            "start": start.strftime("%Y-%m-%d %H:%M:%S"),
+            "end": end.strftime("%Y-%m-%d %H:%M:%S") if end else "",
+            "source": source,
+            "title": str(ev.get("title") or ""),
+            "counterparties": "; ".join(str(x) for x in parties),
+            "detail": str(ev.get("detail") or "").replace("\n", " "),
+            "worked_exact": "",
+            "worked_h": "",
+            # Meetings only: booked time. It overlaps Claude worked time (a session
+            # can run during a meeting) and must never be summed with it. A chat
+            # burst has a span but is not scheduled, so it reports elapsed only.
+            "scheduled_h": (round((end - start).total_seconds() / 3600.0, 2)
+                            if end and source == "meeting" else ""),
+            "elapsed": hms((end - start).total_seconds()) if end else "",
+            "cost_usd": "",
+            "session_id": "",
+            "ref": str(ev.get("ref") or ""),
+            "_start": start,
+            "_end": end,
+            "_worked_s": 0.0,
+            "_subject": str(ev.get("subject") or "").strip(),
+            "_text": " ".join([str(ev.get("detail") or ""), "; ".join(str(x) for x in parties)]),
+            "_key": "{}[{}]".format(os.path.basename(path), i),
+        })
+    return rows, subjects
+
+
+def parse_local(raw):
+    """Parse a local ISO timestamp from the activity file.
+
+    Values are local wall clock, so attach the local zone: session timestamps are
+    timezone-aware and the two must be comparable to merge.
+    """
+    if not raw or not isinstance(raw, str):
+        return None
+    try:
+        parsed = dt.datetime.fromisoformat(raw.replace("Z", "").strip())
+    except ValueError:
+        return None
+    return parsed.astimezone() if parsed.tzinfo is None else parsed.astimezone()
+
+
+def session_as_event(row):
+    """Re-shape a session row into the unified event schema."""
+    return {
+        "date": row["date"], "weekday": row["weekday"],
+        "start": row["start"], "end": row["end"],
+        "source": "claude", "title": row["title"],
+        "counterparties": "", "detail": row["folder"],
+        "worked_exact": row["worked_exact"], "worked_h": row["worked_h"],
+        "scheduled_h": "", "elapsed": row["elapsed"],
+        "cost_usd": row["cost_usd"], "session_id": row["session_id"], "ref": "",
+        "_start": row["_start"], "_end": row["_end"],
+        "_worked_s": row["_worked_s"], "_key": row["session_id"],
+        "_stamps": row["_stamps"], "_folder": row["_folder"], "_text": row["_text"],
+        "_ticket": row["ticket"], "_opening": row["_opening"], "_lines": row["_lines"],
+    }
+
+
+def stable_id(prefix, *parts):
+    """A short deterministic key.
+
+    Derived from content, not position, so re-running the export gives a row the
+    same id, and a subject keeps its id across days as long as its name is stable
+    -- which is what makes joining a week's exports together work.
+    """
+    raw = "\x1f".join(str(p) for p in parts)
+    return prefix + hashlib.sha1(raw.encode("utf-8")).hexdigest()[:10]
+
+
+def _overlaps(a_start, a_end, b_start, b_end):
+    return a_start < b_end and b_start < a_end
+
+
+def subject_seconds(group, slot, read_cap):
+    """Time attributable to one subject, rounded up to the next slot.
+
+    Measured session work counts in full. A meeting adds its booked time ONLY if
+    no session in the same subject was running through it -- otherwise the same
+    wall clock would be counted twice, once as worked and once as scheduled.
+
+    Emails and chat bursts are evidence of work, not additional time, so they add
+    nothing to a subject that already has a session or a meeting. A subject made
+    ONLY of them is measured the same way `worked` is: each message's own span
+    plus the gaps between them, each gap capped at --read-cap. So a burst of
+    replies counts, a lone email is an instant and costs nothing, and two mails
+    three hours apart are two minutes of work, not three hours. Anything else
+    with no measured time stays at zero -- an out-of-office block is not work.
+    """
+    worked = sum(r.get("_worked_s") or 0.0 for r in group)
+
+    windows = [(r["_start"], r["_end"]) for r in group
+               if r["source"] == "claude" and r.get("_end")]
+    extra = 0.0
+    for row in group:
+        if row["source"] != "meeting" or not row.get("_end"):
+            continue
+        if any(_overlaps(row["_start"], row["_end"], w0, w1) for w0, w1 in windows):
+            continue
+        extra += (row["_end"] - row["_start"]).total_seconds()
+
+    total = worked + extra
+    if total == 0 and all(r["source"] in ("email", "chat") for r in group):
+        ordered = sorted(group, key=lambda r: r["_start"])
+        for row in ordered:
+            if row.get("_end"):
+                total += (row["_end"] - row["_start"]).total_seconds()
+        for earlier, later in zip(ordered, ordered[1:]):
+            gap = (later["_start"] - (earlier.get("_end") or earlier["_start"])).total_seconds()
+            total += min(max(gap, 0.0), read_cap)
+
+    return round_up(total, slot)
+
+
+def build_row(session, busy_cap, read_cap, slot):
+    stamps, info, cost = session["stamps"], session["info"], session["cost"]
+    start, end = stamps[0], stamps[-1]
+    worked = worked_seconds(stamps, session["turns"], busy_cap, read_cap)
+    models = sorted((cost.get("modelUsage") or {}).keys())
+    title = info["title"] or (info["opening"][:80].replace("\n", " ") if info["opening"] else "")
+
+    return {
+        "date": start.strftime("%Y-%m-%d"),
+        "weekday": start.strftime("%a"),
+        "start": start.strftime("%Y-%m-%d %H:%M:%S"),
+        "end": end.strftime("%Y-%m-%d %H:%M:%S"),
+        "worked_h": round(round_up(worked, slot) / 3600.0, 2),
+        "worked_exact": hms(worked),
+        "elapsed": hms((end - start).total_seconds()),
+        "profile": session_meta(info["cwd"])["profile"],
+        "ticket": session_meta(info["cwd"])["ticket"],
+        "title": title,
+        "folder": info["cwd"],
+        "git_branch": info["branch"],
+        "turns": len(session["turns"]),
+        "cost_usd": round(cost.get("totalCostUSD", 0.0), 4) if cost else "",
+        "lines_added": cost.get("totalLinesAdded", "") if cost else "",
+        "lines_removed": cost.get("totalLinesRemoved", "") if cost else "",
+        "models": ", ".join(m.replace("claude-", "") for m in models),
+        "last_prompt": (info["last_prompt"] or "")[:200].replace("\n", " "),
+        "session_id": os.path.basename(session["path"])[:-6],
+        "cli_version": info["version"],
+        "_start": start,
+        "_end": end,
+        "_worked_s": worked,
+        "_stamps": stamps,
+        "_folder": info["cwd"],
+        "_opening": info["opening"][:300],
+        "_lines": cost.get("totalLinesAdded") if cost else None,
+        "_text": " ".join([info["opening"][:400]] + info["prompts"]),
+    }
+
+
+COLUMNS = [
+    "date", "weekday", "start", "end", "worked_h", "worked_exact", "elapsed", "profile", "ticket", "title",
+    "folder", "git_branch", "turns", "cost_usd", "lines_added", "lines_removed",
+    "models", "last_prompt", "session_id", "cli_version",
+]
+
+
+# ===================================================================== weekly review
+#
+# The weekly functional-review tracker has one row per (week, task, Jira ticket).
+# Getting there takes three layers:
+#
+#   items     sessions (split per day) plus the week's meetings, emails and chats
+#   subjects  items grouped into units of work
+#   rows      subjects grouped by the task and ticket they belong to
+#
+# Both groupings are judgement calls, so each is made once and remembered in the
+# review ledger (_audit/review/ledger.json). --propose scores only what is not yet
+# decided and splits it into "likely" (confirm) and "possible" (your call);
+# --apply records the answers; a plain --week run turns decided subjects into
+# tracker rows. A ticket declared with `claude-new -t` is a fact, not an
+# inference, so a session carrying one maps to its task without being asked.
+
+LEDGER_PATH = os.path.join(DEFAULT_OUT_DIR, "review", "ledger.json")
+JIRA_PATH = os.path.join(DEFAULT_OUT_DIR, "review", "jira.json")
+
+# The tracker's own header row, spelling included, so rows paste straight in.
+REVIEW_COLUMNS = [
+    "Week", "Task", "Jira Ticket", "Comments", "Refernce Architectures", "Func Spec",
+    "HLD", "LLD", "Development", "Hypercare", "Prod Support", "Leave",
+    "Meetings & Interactions", "Utilization Perception",
+]
+FLAG_KEYS = ["ref_arch", "func_spec", "hld", "lld", "development", "hypercare", "prod_support"]
+FLAG_HEADERS = dict(zip(FLAG_KEYS, REVIEW_COLUMNS[4:11]))
+
+BREAKDOWN_COLUMNS = [
+    "row_id", "week", "task", "ticket", "utilization", "hours", "hours_exact",
+    "sessions", "meetings", "emails", "chats", "confirmed", "declared", "auto_mapped", "inferred",
+    "standalone", "flags_from", "jira_status", "flag_evidence", "comments_from",
+    "subject_ids", "subjects",
+]
+
+IGNORE_TASK = "(ignore)"
+UNMAPPED_TASK = "(unmapped)"
+LIKELY, POSSIBLE = 0.6, 0.3
+COMMS = ("meeting", "email", "chat")
+NOT_WORK = ("leave", "personal", "notice")
+
+# Evidence words per tracker column, following the tracker's own header definitions:
+# E Assessments, Roadmaps, Reference Architectures, Security, Standards · F Func Spec
+# support · G HLD delivered · H LLD support · I Development support · J Post-deployment
+# support (Hypercare) · K Production issue support.
+FLAG_HINTS = {
+    # Not "governance": in this estate it is a Unity Catalog name (governance_*) and a
+    # repo, so it fires on any session that merely touches them.
+    "ref_arch": ("assessment", "roadmap", "reference architect", "architecture", "security",
+                 "standard", "permission", "access", "roles", "abac", "entra",
+                 "naming convention", "private endpoint", "policy", "compliance"),
+    "func_spec": ("requirement", "functional", "func spec", "specification", "scope",
+                  "business rule", "user story", "acceptance criteria"),
+    "hld": ("hld", "high level design", "high-level design", "solution design", "design",
+            "options", "approach", "proposal"),
+    "lld": ("lld", "low level design", "low-level design", "detailed design", "configuration",
+            "subnet", "sizing", "cidr", "runbook"),
+    "development": ("script", "code", "notebook", "pipeline", "job", "bundle", "dlt", "etl",
+                    "ingestion", "migration", "deploy", "agent", "automation", "backup",
+                    "query", "sql"),
+    "hypercare": ("hypercare", "post deployment", "post-deployment", "go-live", "go live",
+                  "cutover", "after release", "smoke test"),
+    "prod_support": ("fail", "incident", "outage", "error", "fix", "triage", "recovery",
+                     "timeout", "broken", "restore", "monitor", "firewall issue", "fw issue",
+                     "degradation", "prod issue"),
+}
+# Recurring rituals say nothing about the kind of work: Meetings & Interactions only.
+RITUAL = re.compile(r"\b(daily|dailies|stand-?up|all[- ]hands|1-1|1:1|one to one|catch[- ]?up|"
+                    r"sync|weekly|show (&|and) tell)\b", re.I)
+
+STOPWORDS = frozenset("""
+a an and are as at be but by can could do does for from get got had has have how i if
+in into is it its let lets me my no not of on or our please so that the their them then
+there these this to up us was we were what when where which who why will with would you
+your yes ok okay thanks thank hi hello new all any also just like need want check stuff
+about more some via per claude session sessions accepted tentative declined meeting
+meetings sync call calls daily weekly standup data team teams issue issues work
+update info
+""".split()) | frozenset((CONFIG.get("CWS_ORG") or "").lower().split())
+SYNONYMS = {"firewall": "fw", "keyvault": "kv", "vault": "kv", "dbx": "databricks",
+            "adb": "databricks", "dbw": "databricks", "pvt": "private"}
+KEEP_SHORT = frozenset({"bi", "ai", "fw", "kv", "uc", "dp", "ip", "vm", "ms"})
+
+JIRA_RE = re.compile(r"\b([A-Z][A-Z0-9]{1,9})-(\d{1,6})\b")
+JIRA_DENY = frozenset({"UTF", "SHA", "AES", "ISO", "GPT", "RFC", "TLS", "SSL", "HTTP",
+                       "IPV", "MD", "CVE", "COVID", "WE"})
+CALENDAR_REPLY = re.compile(r"^\s*(accepted|tentative|declined|canceled|cancelled)\s*:", re.I)
+SEPARATOR = re.compile(r"\s+[-\u2013\u2014:|]+\s+")
+MAIL_PREFIX = re.compile(r"^\s*((re|fw|fwd|aw|tr|sv|accepted|tentative|declined|"
+                         r"canceled|cancelled)\s*:\s*)+", re.I)
+
+
+def empty_ledger():
+    return {"version": 1, "leave_task": "Leave", "default_task": "", "jira_prefixes": [], "ignore_tickets": [], "tasks": [],
+            "assign": {}, "reject": [], "subjects": {}, "weeks": {}}
+
+
+def load_ledger(path):
+    """Every correlation and mapping the user has confirmed, so none is asked twice."""
+    ledger = empty_ledger()
+    if os.path.exists(path):
+        try:
+            with open(path) as fh:
+                ledger.update(json.load(fh))
+        except (OSError, ValueError) as exc:
+            sys.exit("claude-audit: cannot read ledger {} ({})".format(path, exc))
+    return ledger
+
+
+def save_ledger(path, ledger):
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w") as fh:
+        json.dump(ledger, fh, indent=1, ensure_ascii=False, sort_keys=True)
+    os.replace(tmp, path)  # a crash mid-write must never leave a half ledger
+
+
+def load_jira(path=JIRA_PATH):
+    """Optional ticket list the review skill caches from Jira: [{key, summary, status}]."""
+    try:
+        with open(path) as fh:
+            issues = json.load(fh)
+    except (OSError, ValueError):
+        return []
+    return [i for i in issues if isinstance(i, dict) and i.get("key")]
+
+
+def _stem(word):
+    for suffix in ("ations", "ation", "ings", "ing", "ures", "ure", "ied", "ed", "s"):
+        if word.endswith(suffix) and len(word) - len(suffix) >= 3:
+            return word[: -len(suffix)]
+    return word
+
+
+def tokens(text):
+    """Content words, lightly normalised, for matching titles against each other."""
+    out = set()
+    for raw in re.findall(r"[a-z0-9]+", (text or "").lower()):
+        if raw.isdigit():
+            continue
+        word = SYNONYMS.get(raw, raw)
+        if word in STOPWORDS or (len(word) < 3 and word not in KEEP_SHORT):
+            continue
+        out.add(_stem(word))
+    return out
+
+
+def jira_keys(text, prefixes):
+    keys = set()
+    for match in JIRA_RE.finditer(text or ""):
+        prefix = match.group(1)
+        if (prefixes and prefix not in prefixes) or (not prefixes and prefix in JIRA_DENY):
+            continue
+        keys.add(match.group(0))
+    return keys
+
+
+def idf_table(docs):
+    n = max(len(docs), 1)
+    df = defaultdict(int)
+    for doc in docs:
+        for tok in doc:
+            df[tok] += 1
+    return {tok: math.log(1.0 + n / count) for tok, count in df.items()}, n
+
+
+def weighted_overlap(a, b, idf, base=None):
+    """How much of `base` (default: the lighter side) the shared words cover.
+
+    Words are weighted by rarity across the week. A word that turns up in more
+    than a quarter of all items -- "data" or "azure" for this user -- is never
+    allowed to create a match on its own.
+    """
+    table, n = idf
+    unseen = math.log(1.0 + n)
+    weight = lambda toks: sum(table.get(t, unseen) for t in toks)
+    floor = math.log(1.0 + 1 / 0.25)
+    shared = {t for t in (a & b) if table.get(t, unseen) >= floor}
+    if not shared:
+        return 0.0, []
+    if base is None:
+        base = a if weight(a) <= weight(b) else b
+    denom = weight(base)
+    if denom <= 0:
+        return 0.0, []
+    ranked = sorted(shared, key=lambda t: -table.get(t, unseen))
+    return min(1.0, weight(shared) / denom), ranked[:4]
+
+
+def week_bounds(day):
+    monday = day - dt.timedelta(days=day.weekday())
+    return monday, monday + dt.timedelta(days=6)
+
+
+def _at(day, hour=0, minute=0):
+    """Local wall clock, timezone-aware like every other timestamp in this tool."""
+    return dt.datetime.combine(day, dt.time(hour, minute)).astimezone()
+
+
+def clean_title(title):
+    """Title without mail prefixes or spaced separators, so variants of one name meet."""
+    title = MAIL_PREFIX.sub("", title or "").strip()
+    return re.sub(r"\s+", " ", SEPARATOR.sub(" ", title)).strip()
+
+
+def label(it):
+    when = it["_start"].strftime("%a %H:%M")
+    text = it["_clean"][:60]
+    if it["source"] == "claude":
+        return "{} claude  {} ({} worked)".format(when, text, hms(it.get("_worked_s") or 0)[:-3])
+    return "{} {:<7} {}".format(when, it["source"], text)
+
+
+def prepare_items(items, subjects_map, ledger):
+    """Give every item its matching features and its current subject.
+
+    Subject precedence: a link the user confirmed (ledger) beats the daily
+    recap's inference, which beats the item standing alone under its own title.
+    Standalone titles drop mail prefixes, so a reply chain -- and a calendar
+    acceptance with the meeting it accepts -- fall together by themselves.
+    """
+    prefixes = set(ledger.get("jira_prefixes") or [])
+    for it in items:
+        title = clean_title(it["title"]) or it["source"]
+        folder = it.get("_folder") or ""
+        text = it.get("_text") or ""
+        it["_clean"] = title
+        it["_lkey"] = it.get("session_id") or stable_id("evt_", it["source"], it["start"], it["title"])
+        it["_tok"] = tokens(" ".join((title, text, os.path.basename(folder))))
+        it["_title_tok"] = tokens(title + " " + os.path.basename(folder))
+        it["_jira"] = jira_keys(" ".join((it["title"], text, folder)), prefixes)
+        declared = (it.get("_ticket") or "").upper()
+        it["_declared"] = declared if declared and declared != "OTHER" else ""
+        ignored = set(ledger.get("ignore_tickets") or [])
+        if it["_declared"] in ignored:
+            it["_declared"] = ""
+        if it["_declared"]:
+            it["_jira"].add(it["_declared"])
+        it["_jira"] -= ignored
+        confirmed = ledger["assign"].get(it["_lkey"])
+        inferred = (it.get("_subject") or subjects_map.get(it.get("_key") or "") or "").strip()
+        if confirmed:
+            it["subject"], it["_status"] = confirmed["subject"], "confirmed"
+        elif inferred and inferred not in (it["title"].strip(), title):
+            it["subject"], it["_status"] = inferred, "inferred"
+        else:
+            it["subject"], it["_status"] = title, "standalone"
+        it["subject_id"] = stable_id("sub_", it["subject"])
+
+
+def _active_near(stamps, t0, t1):
+    """True if the session recorded any activity between t0 and t1.
+
+    Uses the session's own timestamps, not its first-to-last span, so a session
+    left open all day does not look related to every meeting in between.
+    """
+    if not stamps:
+        return False
+    i = bisect.bisect_left(stamps, t0)
+    return i < len(stamps) and stamps[i] <= t1
+
+
+def score_link(s, e, idf):
+    """How strongly a Claude session and a meeting/email/chat look like one piece of work."""
+    score, why = 0.0, []
+    keys = s["_jira"] & e["_jira"]
+    if keys:
+        score += 0.6
+        why.append("both mention " + ", ".join(sorted(keys)))
+    if s["_status"] != "standalone" and s["subject"] == e["subject"]:
+        score += 0.35
+        why.append("grouped together by the daily recap")
+    sim, words = weighted_overlap(s["_tok"], e["_tok"], idf)
+    if sim:
+        score += 0.5 * sim
+        why.append("shared words: " + ", ".join(words))
+
+    stamps = s.get("_stamps") or [s["_start"]]
+    e0 = e["_start"]
+    e1 = e.get("_end") or e0
+    minutes = lambda a, b: (b - a).total_seconds() / 60.0
+    if e["source"] == "meeting":
+        if _active_near(stamps, e0, e1):
+            score += 0.25
+            why.append("session active during the meeting")
+        elif 0 <= minutes(e1, stamps[0]) <= 45:
+            score += 0.2
+            why.append("session started {:.0f} min after the meeting".format(minutes(e1, stamps[0])))
+        elif _active_near(stamps, e0 - dt.timedelta(minutes=30), e0):
+            score += 0.15
+            why.append("meeting began right after session activity")
+    elif e["source"] == "email":
+        near = dt.timedelta(minutes=15)
+        if _active_near(stamps, e0 - near, e0 + near):
+            score += 0.15
+            why.append("email sent while the session was active")
+        elif 0 <= minutes(e0, stamps[0]) <= 60:
+            score += 0.1
+            why.append("email sent {:.0f} min before the session".format(minutes(e0, stamps[0])))
+        elif 0 <= minutes(stamps[-1], e0) <= 60:
+            score += 0.1
+            why.append("email sent {:.0f} min after the session".format(minutes(stamps[-1], e0)))
+    elif e["source"] == "chat":
+        pad = dt.timedelta(minutes=10)
+        if _active_near(stamps, e0 - pad, e1 + pad):
+            score += 0.15
+            why.append("chat while the session was active")
+    return min(score, 1.0), why
+
+
+def link_subject(s, e):
+    """The subject a confirmed link would put both sides under."""
+    for side in (s, e):
+        if side["_status"] in ("confirmed", "inferred"):
+            return side["subject"]
+    return s["_clean"]
+
+
+def candidate_links(items, ledger, idf):
+    """Session <-> meeting/email/chat links worth asking about, strongest first.
+
+    Events sharing a subject -- a reply chain, three pilot sends of one mail -- form
+    a single candidate, so one answer settles all of them. Calendar acceptances
+    are never candidates: they travel with the meeting they accept.
+    """
+    rejected = {tuple(sorted(pair)) for pair in ledger.get("reject") or []}
+    sessions = [it for it in items if it["source"] == "claude" and (it.get("_worked_s") or 0) >= 120]
+    events = [it for it in items
+              if it["source"] in COMMS and not CALENDAR_REPLY.match(it["title"] or "")]
+    best = {}
+    for s in sessions:
+        for e in events:
+            if abs((e["_start"] - s["_start"]).total_seconds()) > 36 * 3600:
+                continue
+            if tuple(sorted((s["_lkey"], e["_lkey"]))) in rejected:
+                continue
+            if s["_status"] == "confirmed" and e["_status"] == "confirmed":
+                continue  # both sides already decided
+            if e["_status"] == "confirmed" and e["subject"] == s["subject"]:
+                continue
+            score, why = score_link(s, e, idf)
+            if score < POSSIBLE:
+                continue
+            key = (s["_lkey"], e["subject"])
+            cand = best.get(key)
+            if cand is None:
+                best[key] = {"score": score, "why": why, "session": s, "events": [e]}
+                continue
+            if e["_lkey"] not in {x["_lkey"] for x in cand["events"]}:
+                cand["events"].append(e)
+            if score > cand["score"]:
+                cand["score"], cand["why"] = score, why
+    # An event subject belongs to at most one session: keep its strongest pairing.
+    by_subject = {}
+    for cand in best.values():
+        k = cand["events"][0]["subject"]
+        if k not in by_subject or cand["score"] > by_subject[k]["score"]:
+            by_subject[k] = cand
+    for cand in by_subject.values():
+        cand["score"] = round(cand["score"], 2)
+        cand["events"].sort(key=lambda e: e["_start"])
+    return sorted(by_subject.values(), key=lambda c: (-c["score"], c["session"]["_start"]))
+
+
+def task_vocab(task, ledger):
+    words = [task["task"]] + list(task.get("keywords") or [])
+    words += [m["subject"] for m in ledger["subjects"].values() if m.get("task") == task["task"]]
+    return tokens(" ".join(words))
+
+
+def jira_match(subject_tok, issues, idf):
+    """The Jira ticket whose summary best describes this subject, if any clears the bar."""
+    best = None
+    for issue in issues:
+        summary_tok = tokens(issue.get("summary"))
+        sim, words = weighted_overlap(subject_tok, summary_tok, idf, base=summary_tok)
+        if sim >= POSSIBLE and (best is None or sim > best["sim"]):
+            best = {"key": issue["key"], "summary": issue.get("summary", ""), "sim": round(sim, 2),
+                    "words": words}
+    return best
+
+
+def candidate_tasks(subject, ledger, issues, idf):
+    """Rank registry tasks for a subject nobody has mapped yet."""
+    group = subject["group"]
+    tok = set().union(*(it["_title_tok"] for it in group)) | tokens(subject["name"])
+    keys = set().union(*(it["_jira"] for it in group))
+    folders = {it.get("_folder") or "" for it in group if it["source"] == "claude"}
+    jira = jira_match(tok, issues, idf)
+    ranked = []
+    for task in ledger.get("tasks") or []:
+        tickets = set(task.get("tickets") or [])
+        score, why = 0.0, []
+        hit = keys & tickets
+        if hit:
+            score += 0.7
+            why.append("mentions " + ", ".join(sorted(hit)))
+        if jira and jira["key"] in tickets and jira["key"] not in hit:
+            score += 0.5 * jira["sim"]
+            why.append("matches {} \"{}\"".format(jira["key"], jira["summary"][:50]))
+        paths = [p for p in task.get("paths") or [] if any(p.lower() in f.lower() for f in folders)]
+        if paths:
+            score += 0.35
+            why.append("session under .../" + paths[0])
+        table, n = idf
+        floor = math.log(1.0 + 1 / 0.25)
+        hits = sorted(t for t in (tok & task_vocab(task, ledger))
+                      if table.get(t, math.log(1.0 + n)) >= floor)
+        if hits:
+            score += min(0.5, 0.3 + 0.15 * (len(hits) - 1))
+            why.append("keywords: " + ", ".join(hits[:4]))
+        if score <= 0:
+            continue
+        if hit:
+            ticket = sorted(hit)[0]
+        elif jira:
+            ticket = jira["key"]
+        elif keys:
+            ticket = sorted(keys)[0]
+        else:
+            ticket = task.get("default_ticket") or (task.get("tickets") or ["Other"])[0]
+        ranked.append({"task": task["task"], "ticket": ticket, "score": round(min(score, 1.0), 2),
+                       "why": why})
+    ranked.sort(key=lambda r: -r["score"])
+    return ranked[:3], jira
+
+
+def leave_days(items, days):
+    """Working days covered by out-of-office, to the half day (09:00-17:00)."""
+    blocks = sorted((it["_start"], it.get("_end") or it["_start"])
+                    for it in items if it["source"] == "leave")
+    out = []
+    for day in days:
+        d0, d1 = _at(day, 9), _at(day, 17)
+        covered, cursor = 0.0, d0
+        for b0, b1 in blocks:
+            lo, hi = max(b0, cursor), min(b1, d1)
+            if hi > lo:
+                covered += (hi - lo).total_seconds()
+                cursor = hi
+        fraction = round(min(1.0, covered / (8 * 3600)) * 2) / 2
+        if fraction:
+            out.append((day, fraction))
+    return out
+
+
+def allocate(weights, total_pct, step):
+    """Split total_pct across weights in whole steps that sum exactly.
+
+    Every row that had time first gets one step -- the user's rule: work that
+    happened never shows 0%. The steps left over go in proportion to how far each
+    row exceeds that first step (largest remainder), so small rows cannot level the
+    big ones. build_review halves the step when there are as many rows as steps,
+    since at that point no split could reflect the rows' sizes.
+    """
+    units = int(round(total_pct / float(step)))
+    mass = sum(weights)
+    if units <= 0 or mass <= 0:
+        return [0] * len(weights)
+    live = [i for i, w in enumerate(weights) if w > 0]
+    if len(live) > units:  # cannot give everyone a step: plain largest remainder
+        raw = [w / mass * units for w in weights]
+        alloc = [int(math.floor(r)) for r in raw]
+        for i in sorted(range(len(weights)), key=lambda i: raw[i] - alloc[i], reverse=True)[: units - sum(alloc)]:
+            alloc[i] += 1
+        return [a * step for a in alloc]
+    raw = [w / mass * units for w in weights]
+    alloc = [1 if i in live else 0 for i in range(len(weights))]
+    left = units - len(live)
+    excess = [max(0.0, raw[i] - 1) if i in live else 0.0 for i in range(len(weights))]
+    spread = sum(excess)
+    if left and spread > 0:
+        share = [e / spread * left for e in excess]
+        extra = [int(math.floor(x)) for x in share]
+        for i in sorted(live, key=lambda i: share[i] - extra[i], reverse=True)[: left - sum(extra)]:
+            extra[i] += 1
+        alloc = [a + x for a, x in zip(alloc, extra)]
+    elif left:
+        for i in sorted(live, key=lambda i: -raw[i])[:left]:
+            alloc[i] += 1
+    return [a * step for a in alloc]
+
+
+def infer_flags(items):
+    """Columns E-K for one tracker row, from what the row's work actually was.
+
+    Returns the flags and a readable note of which words set each one, which goes
+    into the detail CSV so every Yes can be traced back to the work behind it.
+    """
+    found = defaultdict(list)
+    for it in items:
+        if it["source"] == "meeting" and RITUAL.search(it["title"] or ""):
+            continue
+        if it["source"] == "claude":
+            # Title and the folder's own name only. Parent directories (~/Repos/Governance/)
+            # say where a repo lives, and the opening message is conversational ("a manual
+            # process prone to error" is not a production issue).
+            parts = [it["_clean"], os.path.basename(it.get("_folder") or "")]
+            lines = it.get("_lines")
+            if isinstance(lines, int) and lines > 0 and "code changed" not in found["development"]:
+                found["development"].append("code changed")
+        else:
+            parts = [it["_clean"], it.get("detail") or ""]
+        text = " ".join(parts).lower()
+        for key, hints in FLAG_HINTS.items():
+            for hint in hints:
+                if hint in text and hint not in found[key]:
+                    found[key].append(hint)
+    flags = {k: ("Yes" if found[k] else "") for k in FLAG_KEYS}
+    note = "; ".join("{}: {}".format(FLAG_HEADERS[k], ", ".join(found[k][:4]))
+                     for k in FLAG_KEYS if found[k])
+    return flags, note
+
+
+def summarise_subjects(items, ledger, args, read_cap):
+    """Group the week's work items into subjects and attach each one's mapping."""
+    tasks_by_ticket = {}
+    for task in ledger.get("tasks") or []:
+        for ticket in task.get("tickets") or []:
+            tasks_by_ticket.setdefault(ticket, task["task"])
+
+    groups = defaultdict(list)
+    for it in items:
+        if it["source"] not in NOT_WORK:
+            groups[it["subject"]].append(it)
+
+    subjects = []
+    for name, group in groups.items():
+        sid = stable_id("sub_", name)
+        mapping = ledger["subjects"].get(sid)
+        if mapping is None:
+            declared = {it["_declared"] for it in group if it.get("_declared")}
+            if len(declared) == 1:
+                ticket = declared.pop()
+                if ticket in tasks_by_ticket:
+                    mapping = {"subject": name, "task": tasks_by_ticket[ticket], "ticket": ticket,
+                               "status": "declared"}
+        seconds = subject_seconds(group, 0, read_cap)
+        subjects.append({"name": name, "id": sid, "group": group, "seconds": seconds,
+                         "mapping": mapping,
+                         "minor": seconds < args.min_subject * 60 and not mapping})
+    return subjects
+
+
+def auto_map_small(subjects, ledger, tasks, idf):
+    """Count small subjects without asking about them (the user's rule, 2026-09-11).
+
+    A subject under --min-subject that nobody has mapped goes to the registry task
+    it matches best -- in practice BI work to BI Migration -- and always on that
+    task's default ticket, never a specific one, so a five-minute item cannot open
+    a tracker row of its own. Anything matching nothing goes to the default task.
+    Marked "auto" so the detail CSV shows which rows hold guesses.
+    """
+    if idf is None:
+        return
+    default = ledger.get("default_task")
+    ignored = set(ledger.get("ignore_tickets") or [])
+    issues = [i for i in load_jira() if i["key"] not in ignored]
+    for s in subjects:
+        if s["mapping"] or not s["minor"]:
+            continue
+        ranked, _ = candidate_tasks(s, ledger, issues, idf)
+        if ranked and ranked[0]["score"] >= POSSIBLE:
+            task = ranked[0]["task"]
+        elif default:
+            task = default
+        else:
+            continue
+        tdef = tasks.get(task) or {}
+        sole = tdef.get("tickets") or []
+        ticket = tdef.get("default_ticket") or (sole[0] if len(sole) == 1 else "Other")
+        s["mapping"] = {"subject": s["name"], "task": task, "ticket": ticket, "status": "auto"}
+        s["minor"] = False
+
+
+def build_review(items, ledger, bucket_key, days, week_cfg, args, read_cap, idf=None):
+    """Tracker rows for one week (or one day), plus a breakdown row per tracker row."""
+    overrides = week_cfg.get("rows") or {}
+    tasks = {t["task"]: t for t in ledger.get("tasks") or []}
+    jira_status = {i["key"]: i.get("status", "") for i in load_jira()}
+    subjects = summarise_subjects(items, ledger, args, read_cap)
+    auto_map_small(subjects, ledger, tasks, idf)
+
+    rows = {}
+    for s in subjects:
+        if s["minor"]:
+            continue
+        m = s["mapping"]
+        task = m["task"] if m else UNMAPPED_TASK
+        if task == IGNORE_TASK:
+            continue
+        ticket = (m.get("ticket") or "Other") if m else ""
+        if ticket == "Other" and (tasks.get(task) or {}).get("default_ticket"):
+            ticket = tasks[task]["default_ticket"]
+        row = rows.setdefault((task, ticket), {"task": task, "ticket": ticket, "seconds": 0.0,
+                                               "subjects": []})
+        row["seconds"] += s["seconds"]
+        row["subjects"].append(s)
+
+    detected = leave_days(items, days)
+    leave = week_cfg.get("leave_days")
+    if leave is None:
+        leave = sum(f for _, f in detected)
+    step = args.util_step
+    leave_pct = min(100, int(round(leave / float(len(days)) * 100 / step)) * step) if days else 0
+
+    ordered = sorted(rows.values(), key=lambda r: (r["task"] == UNMAPPED_TASK, -r["seconds"]))
+    fixed = {}
+    for r in ordered:
+        o = overrides.get("{}|{}".format(r["task"], r["ticket"])) or {}
+        if "utilization" in o:
+            fixed[id(r)] = int(o["utilization"])
+    free = [r for r in ordered if id(r) not in fixed]
+    remaining = max(0, 100 - leave_pct - sum(fixed.values()))
+    # More rows than steps left after leave would force a 0%: use finer steps instead.
+    live = sum(1 for r in free if r["seconds"] > 0)
+    alloc_step = step
+    while alloc_step > 1 and live >= int(round(remaining / float(alloc_step))) and live > 1:
+        alloc_step = max(1, alloc_step // 2)
+    for r, pct in zip(free, allocate([r["seconds"] for r in free], remaining, alloc_step)):
+        r["pct"] = pct
+    for r in ordered:
+        if id(r) in fixed:
+            r["pct"] = fixed[id(r)]
+
+    paste, detail = [], []
+    for r in ordered:
+        key = "{}|{}".format(r["task"], r["ticket"])
+        o = overrides.get(key) or {}
+        tdef = tasks.get(r["task"]) or {}
+        its = [it for s in r["subjects"] for it in s["group"]]
+        flags, flag_evidence = infer_flags(its)
+        flags_from = "evidence"
+        if o.get("flags"):
+            flags.update(o["flags"])
+            flags_from = "evidence + confirmed"
+        if o.get("comments"):
+            comments, comments_from = o["comments"], "week override"
+        elif (tdef.get("comments") or {}).get(r["ticket"]):
+            comments, comments_from = tdef["comments"][r["ticket"]], "task default"
+        else:
+            names = [s["name"] for s in sorted(r["subjects"], key=lambda s: -s["seconds"])]
+            comments, comments_from = "; ".join(names), "subject names"
+            if len(comments) > 160:
+                comments = comments[:157].rstrip("; ") + "..."
+        meetings = o.get("meetings") or ("Yes" if any(it["source"] in COMMS for it in its) else "")
+        count = lambda src: sum(1 for it in its if it["source"] == src)
+        status = lambda st: sum(1 for s in r["subjects"] for it in s["group"] if it["_status"] == st)
+        declared = sum(1 for s in r["subjects"] if s["mapping"] and s["mapping"].get("status") == "declared")
+        detail.append({
+            "row_id": stable_id("row_", bucket_key, r["task"], r["ticket"]),
+            "week": bucket_key, "task": r["task"], "ticket": r["ticket"],
+            "utilization": r["pct"], "hours": round(round_up(r["seconds"], 1800) / 3600.0, 2),
+            "hours_exact": hms(r["seconds"]),
+            "sessions": count("claude"), "meetings": count("meeting"),
+            "emails": count("email"), "chats": count("chat"),
+            "confirmed": status("confirmed"), "declared": declared,
+            "auto_mapped": sum(1 for s in r["subjects"] if s["mapping"] and s["mapping"].get("status") == "auto"),
+            "inferred": status("inferred"), "standalone": status("standalone"),
+            "flags_from": flags_from, "jira_status": jira_status.get(r["ticket"], ""),
+            "flag_evidence": flag_evidence, "comments_from": comments_from,
+            "subject_ids": "; ".join(s["id"] for s in r["subjects"]),
+            "subjects": "; ".join(s["name"] for s in r["subjects"]),
+        })
+        if r["task"] == UNMAPPED_TASK:
+            continue  # never paste guesses into the tracker
+        row = {"Week": bucket_key, "Task": r["task"], "Jira Ticket": r["ticket"], "Comments": comments}
+        for k in FLAG_KEYS:
+            row[FLAG_HEADERS[k]] = flags[k]
+        row.update({"Leave": "", "Meetings & Interactions": meetings,
+                    "Utilization Perception": "{}%".format(r["pct"])})
+        paste.append(row)
+
+    if leave_pct:
+        days = ", ".join("{} {}{}".format(d.strftime("%a"), d.day, "" if f == 1 else " (half)")
+                         for d, f in detected)
+        row = {"Week": bucket_key, "Task": ledger.get("leave_task") or "Leave", "Jira Ticket": "",
+               "Comments": "Out of office: " + (days or "{:g} days".format(leave))}
+        for k in FLAG_KEYS:
+            row[FLAG_HEADERS[k]] = ""
+        row.update({"Leave": "Yes", "Meetings & Interactions": "",
+                    "Utilization Perception": "{}%".format(leave_pct)})
+        paste.append(row)
+
+    return paste, detail, {"subjects": subjects, "rows": ordered, "leave": detected,
+                           "leave_days": leave, "leave_pct": leave_pct, "alloc_step": alloc_step}
+
+
+def propose_week(items, ledger, week_key, week_start, args, read_cap, idf):
+    """Score everything not yet decided and write it out for the review skill to ask about."""
+    ignored = set(ledger.get("ignore_tickets") or [])
+    issues = [i for i in load_jira() if i["key"] not in ignored]
+    links = candidate_links(items, ledger, idf)
+    _, _, report = build_review(items, ledger, week_key, workdays(week_start, week_start + dt.timedelta(days=6)),
+                                ledger["weeks"].get(week_key) or {}, args, read_cap, idf)
+
+    out_links, counters = [], defaultdict(int)
+    for c in links:
+        s, evs = c["session"], c["events"]
+        tier = "likely" if c["score"] >= LIKELY else "possible"
+        counters[tier] += 1
+        out_links.append({
+            "id": "{}{}".format("L" if tier == "likely" else "P", counters[tier]), "tier": tier,
+            "score": c["score"], "why": c["why"], "subject": link_subject(s, evs[0]),
+            "session_key": s["_lkey"], "session": label(s),
+            "event_keys": [e["_lkey"] for e in evs], "events": [label(e) for e in evs],
+        })
+
+    out_tasks, minor = [], []
+    for s in sorted(report["subjects"], key=lambda s: -s["seconds"]):
+        if s["mapping"]:
+            if s["mapping"].get("status") == "auto":
+                minor.append(s)
+            continue
+        ranked, jira = candidate_tasks(s, ledger, issues, idf)
+        best = ranked[0] if ranked else None
+        # Unticketed work falls to the user's placeholder task rather than "no idea".
+        # Suggested, never applied silently: some ticketless work has a real home.
+        default = ledger.get("default_task")
+        declared = {it["_declared"] for it in s["group"] if it.get("_declared")}
+        if default and not declared and (best is None or best["score"] < POSSIBLE):
+            best = {"task": default, "ticket": "Other", "score": POSSIBLE,
+                    "why": ["no ticket evidence: your default task for unticketed work"]}
+            ranked = [best] + ranked
+        tier = ("likely" if best and best["score"] >= LIKELY else
+                "possible" if best and best["score"] >= POSSIBLE else "unknown")
+        mix = defaultdict(int)
+        for it in s["group"]:
+            mix[it["source"]] += 1
+        counters["task_" + tier] += 1
+        out_tasks.append({
+            "id": "{}{}".format({"likely": "T", "possible": "Q", "unknown": "U"}[tier],
+                                counters["task_" + tier]),
+            "tier": tier, "subject": s["name"], "subject_id": s["id"],
+            "hours": round(s["seconds"] / 3600.0, 2),
+            "items": ", ".join("{} {}".format(v, k) for k, v in sorted(mix.items())),
+            "evidence": [label(it) for it in sorted(s["group"], key=lambda it: it["_start"])[:4]],
+            "declared": sorted({it["_declared"] for it in s["group"] if it.get("_declared")}),
+            "jira_match": jira, "suggestion": best, "alternatives": ranked[1:],
+        })
+
+    mix = defaultdict(int)
+    for it in items:
+        mix[it["source"]] += 1
+    proposal = {
+        "week": week_key, "generated": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
+        "counts": dict(mix), "links": out_links, "tasks": out_tasks,
+        "minor": {"count": len(minor), "hours": round(sum(s["seconds"] for s in minor) / 3600.0, 2),
+                  "subjects": [s["name"] for s in minor],
+                  "mapped_to": ["{} / {}".format(s["mapping"]["task"], s["mapping"]["ticket"]) for s in minor]},
+        "leave": [{"day": d.isoformat(), "fraction": f} for d, f in report["leave"]],
+        "jira_tickets_known": len(issues),
+    }
+    out = os.path.join(os.path.dirname(args.ledger or LEDGER_PATH), "proposals_{}.json".format(week_key))
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    with open(out, "w") as fh:
+        json.dump(proposal, fh, indent=1, ensure_ascii=False)
+
+    print("Week of {}  ·  {}".format(week_key, ", ".join(
+        "{} {}".format(v, k) for k, v in sorted(mix.items()))))
+    if report["leave"]:
+        print("Leave detected: " + ", ".join("{} {}{}".format(d.strftime("%a"), d.day,
+              "" if f == 1 else " (half)") for d, f in report["leave"]))
+    for tier, title in (("likely", "CORRELATIONS - likely, confirm"),
+                        ("possible", "CORRELATIONS - possible, your call")):
+        chosen = [l for l in out_links if l["tier"] == tier]
+        if chosen:
+            print("\n" + title)
+            for l in chosen:
+                print("  {:<4} {:.2f}  {}".format(l["id"], l["score"], l["session"]))
+                for ev in l["events"]:
+                    print("              <-> " + ev)
+                print("              " + "; ".join(l["why"]))
+    for tier, title in (("likely", "TASK MAPPING - likely, confirm"),
+                        ("possible", "TASK MAPPING - possible, your call"),
+                        ("unknown", "TASK MAPPING - no idea, needs you")):
+        chosen = [t for t in out_tasks if t["tier"] == tier]
+        if chosen:
+            print("\n" + title)
+            for t in chosen:
+                sug = t["suggestion"]
+                guess = "{} / {}  ({:.2f})".format(sug["task"], sug["ticket"], sug["score"]) if sug else "-"
+                print("  {:<4} {:>4.1f}h  {}\n              -> {}   [{}]".format(
+                    t["id"], t["hours"], t["subject"][:60], guess, t["items"]))
+                if t["jira_match"]:
+                    j = t["jira_match"]
+                    print("              Jira: {} \"{}\" ({:.2f})".format(j["key"], j["summary"][:60], j["sim"]))
+    if minor:
+        print("\n{} small subjects under {:g} min ({:.1f}h) mapped automatically, not asked about "
+              "- map one explicitly to override".format(len(minor), args.min_subject, proposal["minor"]["hours"]))
+    print("\n" + out)
+
+
+def apply_decisions(path, ledger_path):
+    """Merge the user's confirmed answers into the ledger."""
+    try:
+        with open(path) as fh:
+            decisions = json.load(fh)
+    except (OSError, ValueError) as exc:
+        sys.exit("claude-audit: cannot read decisions {} ({})".format(path, exc))
+    ledger = load_ledger(ledger_path)
+    stamp = dt.date.today().isoformat()
+    counts = defaultdict(int)
+
+    for a in decisions.get("assign") or []:
+        ledger["assign"][a["key"]] = {"subject": a["subject"].strip(), "status": "confirmed", "at": stamp}
+        counts["items linked"] += 1
+    for pair in decisions.get("reject") or []:
+        pair = sorted(pair)
+        if pair not in ledger["reject"]:
+            ledger["reject"].append(pair)
+            counts["links rejected"] += 1
+
+    removed = set(decisions.get("remove_tasks") or [])
+    if removed:
+        before = len(ledger["tasks"])
+        ledger["tasks"] = [t for t in ledger["tasks"] if t["task"] not in removed]
+        counts["tasks removed"] += before - len(ledger["tasks"])
+    ignored = set(decisions.get("ignore_tickets") or [])
+    if ignored:
+        ledger["ignore_tickets"] = sorted(set(ledger.get("ignore_tickets") or []) | ignored)
+        for t in ledger["tasks"]:
+            t["tickets"] = [k for k in t.get("tickets") or [] if k not in ignored]
+        counts["tickets ignored"] += len(ignored)
+    ignored = set(ledger.get("ignore_tickets") or [])
+
+    by_name = {t["task"]: t for t in ledger["tasks"]}
+    for t in decisions.get("tasks") or []:
+        existing = by_name.get(t["task"])
+        if existing is None:
+            ledger["tasks"].append({k: v for k, v in t.items() if v is not None})
+            by_name[t["task"]] = ledger["tasks"][-1]
+            counts["tasks added"] += 1
+            continue
+        for k, v in t.items():
+            if v is None:
+                existing.pop(k, None)
+                continue
+            if isinstance(v, list):
+                existing[k] = sorted(set(existing.get(k) or []) | set(v))
+            elif isinstance(v, dict):
+                existing.setdefault(k, {}).update(v)
+            else:
+                existing[k] = v
+        counts["tasks updated"] += 1
+
+    for s in decisions.get("subjects") or []:
+        name, task = s["subject"].strip(), s["task"]
+        ticket = (s.get("ticket") or "Other").strip()
+        if task != IGNORE_TASK:
+            target = by_name.get(task)
+            if target is None:
+                target = {"task": task, "tickets": []}
+                ledger["tasks"].append(target)
+                by_name[task] = target
+                counts["tasks added"] += 1
+            if ticket != "Other" and ticket not in ignored and ticket not in (target.get("tickets") or []):
+                target["tickets"] = sorted(set(target.get("tickets") or []) | {ticket})
+        ledger["subjects"][stable_id("sub_", name)] = {
+            "subject": name, "task": task, "ticket": ticket, "status": "confirmed", "at": stamp}
+        counts["subjects mapped"] += 1
+
+    for week, cfg in (decisions.get("weeks") or {}).items():
+        target = ledger["weeks"].setdefault(week, {})
+        for k, v in cfg.items():
+            if k == "rows":
+                rows = target.setdefault("rows", {})
+                for rk, rv in v.items():
+                    if rv is None:
+                        rows.pop(rk, None)  # null clears a row override
+                    else:
+                        rows.setdefault(rk, {}).update(rv)
+            else:
+                target[k] = v
+        counts["week overrides"] += 1
+    for prefix in decisions.get("jira_prefixes") or []:
+        if prefix not in ledger["jira_prefixes"]:
+            ledger["jira_prefixes"].append(prefix)
+    if decisions.get("leave_task"):
+        ledger["leave_task"] = decisions["leave_task"]
+    if decisions.get("default_task"):
+        ledger["default_task"] = decisions["default_task"]
+
+    save_ledger(ledger_path, ledger)
+    print("ledger updated: {}  ({})".format(
+        ", ".join("{} {}".format(n, k) for k, n in counts.items()) or "no changes", ledger_path))
+
+
+# ========================================================================== views
+#
+# One command line on top of everything above: a period (a day, a week, a month or
+# a range), a view (the tracker summary, or every activity in detail) and an output
+# (a terminal table, the clipboard, or a CSV).
+
+ACTIVITY_DIR = os.path.join(DEFAULT_OUT_DIR, "activity")
+
+ACTIVITY_COLUMNS = [
+    "date", "weekday", "start", "end", "source", "task", "ticket", "title", "subject",
+    "duration", "duration_exact", "worked", "scheduled", "counterparties", "detail", "cost_usd",
+    "event_id", "subject_id", "session_id", "row_id",
+]
+NOT_WORK_TASK = {"leave": "Leave", "personal": "(personal)", "notice": "(notice)"}
+
+
+def daterange(first, last):
+    day = first
+    while day <= last:
+        yield day
+        day += dt.timedelta(days=1)
+
+
+def workdays(first, last):
+    return [d for d in daterange(first, last) if d.weekday() < 5]
+
+
+def parse_day(raw, today):
+    if raw in (None, "today"):
+        return today
+    try:
+        return dt.date.fromisoformat(raw)
+    except ValueError as exc:
+        sys.exit("claude-audit: bad date {!r} -- use YYYY-MM-DD ({})".format(raw, exc))
+
+
+def resolve_period(args, today):
+    """(kind, first day, last day, label) for the options given; this week by default."""
+    if sum(1 for x in (args.day, args.week, args.month) if x) > 1:
+        sys.exit("claude-audit: pick one of --day, --week or --month")
+    if args.start or args.end:
+        if args.day or args.week or args.month:
+            sys.exit("claude-audit: use --day/--week/--month or --from/--to, not both")
+        if not args.start:
+            sys.exit("claude-audit: --to needs --from")
+        first, last = parse_day(args.start, today), parse_day(args.end, today)
+        if first > last:
+            sys.exit("claude-audit: --from is after --to")
+        return "range", first, last, "{}_{}".format(first, last)
+    if args.day:
+        day = parse_day(args.day, today)
+        return "day", day, day, str(day)
+    if args.month:
+        if args.month == "this":
+            year, month = today.year, today.month
+        else:
+            try:
+                year, month = (int(x) for x in args.month.split("-"))
+                dt.date(year, month, 1)
+            except ValueError:
+                sys.exit("claude-audit: bad --month {!r} -- use YYYY-MM".format(args.month))
+        first = dt.date(year, month, 1)
+        last = dt.date(year + (month == 12), month % 12 + 1, 1) - dt.timedelta(days=1)
+        return "month", first, last, "{:04d}-{:02d}".format(year, month)
+    monday, sunday = week_bounds(parse_day(args.week, today))
+    return "week", monday, sunday, "week-{}".format(monday)
+
+
+def summary_weeks(kind, first, last):
+    """The tracker is weekly, so a summary is built from whole weeks.
+
+    A month is the weeks that START in it: each week belongs to exactly one month,
+    so pasting month after month never repeats a week. A range is every week it
+    touches. A day is just that day.
+    """
+    if kind == "day":
+        return [(first, first)]
+    if kind == "month":
+        mondays = [d for d in daterange(first, last) if d.weekday() == 0]
+    else:
+        mondays, monday = [], week_bounds(first)[0]
+        while monday <= last:
+            mondays.append(monday)
+            monday += dt.timedelta(days=7)
+    return [(m, m + dt.timedelta(days=6)) for m in mondays]
+
+
+def missing_activity(activity, days):
+    """Weekdays with no activity file: those show Claude sessions only."""
+    if os.path.isfile(activity):
+        return []
+    have = set()
+    if os.path.isdir(activity):
+        have = {f[:-5] for f in os.listdir(activity) if f.endswith(".json")}
+    return [d for d in days if d.weekday() < 5 and d.isoformat() not in have]
+
+
+def describe_days(days):
+    if len(days) <= 5:
+        return ", ".join("{} {}".format(d.strftime("%a"), d.day) for d in days)
+    return "{} weekdays, {} to {}".format(len(days), days[0].strftime("%a %d %b"),
+                                         days[-1].strftime("%a %d %b"))
+
+
+def gather(args, first, last, busy_cap, read_cap):
+    """Everything that happened from first to last: day-split sessions plus activity."""
+    rows = []
+    skip = no_audit_ids()
+    for path in transcript_files():
+        if os.path.basename(path)[:-6] in skip:
+            continue
+        session = read_session(path)
+        if not session or not session_meta(session["info"]["cwd"])["audit"]:
+            continue
+        for part in split_by_day(session):
+            row = build_row(part, busy_cap, read_cap, args.round_to * 60)
+            if first <= row["_start"].date() <= last:
+                rows.append(row)
+    rows.sort(key=lambda r: r["_start"])
+    act_rows, subjects_map = [], {}
+    if os.path.isfile(args.activity) or (
+            os.path.isdir(args.activity) and any(f.endswith(".json") for f in os.listdir(args.activity))):
+        act_rows, subjects_map = load_activity(args.activity)
+    lo, hi = _at(first), _at(last + dt.timedelta(days=1))
+    items = [session_as_event(r) for r in rows]
+    # Overlap, not start date: a leave block that began the week before still counts.
+    items += [e for e in act_rows if e["_start"] < hi and (e.get("_end") or e["_start"]) >= lo]
+    items.sort(key=lambda r: r["_start"])
+    ledger = load_ledger(args.ledger)
+    prepare_items(items, subjects_map, ledger)
+    return items, ledger, idf_table([it["_tok"] for it in items]), rows
+
+
+def target_for(mapping, tasks):
+    ticket = mapping.get("ticket") or "Other"
+    if ticket == "Other" and (tasks.get(mapping["task"]) or {}).get("default_ticket"):
+        ticket = tasks[mapping["task"]]["default_ticket"]
+    return mapping["task"], ticket
+
+
+def summary_view(items, ledger, idf, args, read_cap, kind, weeks):
+    """Tracker rows week by week (or for one day), plus the breakdown behind each row."""
+    paste, breakdown, notes = [], [], []
+    for b0, b1 in weeks:
+        lo, hi = _at(b0), _at(b1 + dt.timedelta(days=1))
+        its = [it for it in items if it["_start"] < hi and (it.get("_end") or it["_start"]) >= lo]
+        if not its:
+            continue
+        cfg = ledger["weeks"].get(week_bounds(b0)[0].isoformat()) or {}
+        if kind == "day":
+            # A week's confirmed columns, % and leave describe the week, not one day of
+            # it; only the wording of its comments carries over.
+            cfg = {"rows": {k: {"comments": v["comments"]} for k, v in (cfg.get("rows") or {}).items()
+                            if v.get("comments")}}
+        key = b0.isoformat()
+        rows, detail, report = build_review(its, ledger, key, workdays(b0, b1), cfg, args, read_cap, idf)
+        paste += rows
+        breakdown += detail
+        unmapped = [r for r in report["rows"] if r["task"] == UNMAPPED_TASK]
+        if unmapped:
+            notes.append("{}: {:.1f}h is not mapped to a task yet and is left out of the rows -- ask "
+                         "Claude for the weekly review of that week".format(key, unmapped[0]["seconds"] / 3600.0))
+        if report["alloc_step"] != args.util_step:
+            notes.append("{}: {}% steps -- too many rows for {}% steps once leave is taken".format(
+                key, report["alloc_step"], args.util_step))
+        auto = [s for s in report["subjects"] if s["mapping"] and s["mapping"].get("status") == "auto"]
+        if auto:
+            notes.append("{}: {} small item(s) under {:g} min ({:.1f}h) counted automatically".format(
+                key, len(auto), args.min_subject, sum(s["seconds"] for s in auto) / 3600.0))
+    return paste, breakdown, notes
+
+
+def activity_view(items, ledger, idf, args, read_cap, buckets):
+    """Every activity from first to last, with the task and ticket it counts towards.
+
+    Tasks are resolved week by week exactly as the summary does, so each row's row_id
+    names the summary row it rolls up into. Subjects are measured per week, as the
+    summary measures them: `duration` is a subject's time rounded up to the half
+    hour, `duration_exact` the same time unrounded, both on the subject's first row
+    that week only. Summed by row_id, duration_exact equals the summary's hours.
+    """
+    # The same periods the summary uses -- each week, or the one day -- so row ids and
+    # subject groups match it exactly.
+    tasks = {t["task"]: t for t in ledger.get("tasks") or []}
+    bucket_of = {}
+    for b0, b1 in buckets:
+        lo, hi = _at(b0), _at(b1 + dt.timedelta(days=1))
+        week = [it for it in items if lo <= it["_start"] < hi]
+        for it in week:
+            bucket_of[id(it)] = b0
+        subjects = summarise_subjects(week, ledger, args, read_cap)
+        auto_map_small(subjects, ledger, tasks, idf)
+        for s in subjects:
+            if s["minor"]:
+                target = ("(left out: under {:g} min)".format(args.min_subject), "", "")
+            elif not s["mapping"]:
+                target = (UNMAPPED_TASK, "", stable_id("row_", b0.isoformat(), UNMAPPED_TASK, ""))
+            else:
+                task, ticket = target_for(s["mapping"], tasks)
+                target = (task, ticket, stable_id("row_", b0.isoformat(), task, ticket))
+            for it in s["group"]:
+                it["_target"] = target
+
+    lo, hi = _at(buckets[0][0]), _at(buckets[-1][1] + dt.timedelta(days=1))
+    shown = [it for it in items if it["_start"] < hi and (it.get("_end") or it["_start"]) >= lo]
+    groups = defaultdict(list)
+    for it in shown:
+        if it["source"] not in NOT_WORK and id(it) in bucket_of:
+            groups[(bucket_of[id(it)], it["subject"])].append(it)
+    duration, exact = {}, {}
+    for group in groups.values():
+        lead = min(group, key=lambda it: it["_start"])
+        duration[id(lead)] = round(subject_seconds(group, args.round_to * 60, read_cap) / 3600.0, 2)
+        exact[id(lead)] = subject_seconds(group, 0, read_cap)
+
+    rows = []
+    for it in shown:
+        if it["source"] in NOT_WORK:
+            task, ticket, row_id = NOT_WORK_TASK[it["source"]], "", ""
+        else:
+            task, ticket, row_id = it.get("_target") or (UNMAPPED_TASK, "", "")
+        end = it.get("_end")
+        worked = hms(it.get("_worked_s") or 0) if it["source"] == "claude" else ""
+        scheduled = hms((end - it["_start"]).total_seconds()) if it["source"] == "meeting" and end else ""
+        rows.append({
+            "date": it["_start"].strftime("%Y-%m-%d"), "weekday": it["_start"].strftime("%a"),
+            "start": it["_start"].strftime("%Y-%m-%d %H:%M"),
+            "end": end.strftime("%Y-%m-%d %H:%M") if end else "",
+            "source": it["source"], "task": task, "ticket": ticket, "title": it["title"],
+            "subject": it["subject"], "duration": duration.get(id(it), ""),
+            "duration_exact": round(exact[id(it)] / 3600.0, 4) if id(it) in exact else "",
+            "_exact_s": exact.get(id(it), 0.0),
+            "worked": worked, "scheduled": scheduled,
+            "counterparties": it.get("counterparties") or "", "detail": it.get("detail") or "",
+            "cost_usd": it.get("cost_usd", ""),
+            "event_id": stable_id("evt_", it["source"], it["start"], it["title"]),
+            "subject_id": it["subject_id"], "session_id": it.get("session_id") or "",
+            "row_id": row_id,
+            "_item": it,
+        })
+    return rows
+
+
+def reconcile(rows, breakdown):
+    """Check the detail against the summary it backs: duration_exact summed by row_id
+    must equal each summary row's hours. Returns one line for the output."""
+    want = {}
+    for b in breakdown:
+        h, m, sec = (int(x) for x in b["hours_exact"].split(":"))
+        want[b["row_id"]] = (h * 3600 + m * 60 + sec, "{} / {}".format(b["task"], b["ticket"] or "-"), b["week"])
+    got = defaultdict(float)
+    for r in rows:
+        got[r["row_id"]] += r.get("_exact_s") or 0.0
+    off = [(label, week, got.get(k, 0.0) - s) for k, (s, label, week) in want.items() if abs(got.get(k, 0.0) - s) > 1]
+    outside = sum(v for k, v in got.items() if k not in want)
+    total = sum(s for s, _, _ in want.values())
+    if off:
+        line = "does NOT reconcile with the summary: " + "; ".join(
+            "{} {} {:+.2f}h".format(week, label, d / 3600.0) for label, week, d in off)
+    else:
+        line = "reconciles with the summary: {:.2f}h in {} rows, to the second".format(total / 3600.0, len(want))
+    if outside > 1:
+        line += " ({:.2f}h in items the summary leaves out: ignored or too small)".format(outside / 3600.0)
+    return line
+
+
+def print_grid(heads, table):
+    widths = [max([len(h)] + [len(cells[i]) for cells in table]) for i, h in enumerate(heads)]
+    line = lambda cells: ("  " + "  ".join(c.ljust(w) for c, w in zip(cells, widths))).rstrip()
+    print(line(heads))
+    print("  " + "  ".join("-" * w for w in widths))
+    for cells in table:
+        print(line(cells))
+
+
+def cut(text, width):
+    return text if len(text) <= width else text[: width - 1] + "…"
+
+
+def print_tracker_table(rows, first_head="Week"):
+    """The rows as they will paste, every column. Long comments are shortened on screen
+    only; the clipboard and the CSV get the full text."""
+    heads = [first_head, "Task", "Jira", "Comments", "Ref Arch", "Func Spec", "HLD", "LLD", "Dev",
+             "Hypercare", "Prod Supp", "Leave", "M&I", "%"]
+    table = [[str(r[c]) for c in REVIEW_COLUMNS] for r in rows]
+    for cells in table:
+        cells[3] = cut(cells[3], 48)
+    print_grid(heads, table)
+
+
+def print_activity_table(rows):
+    heads = ["When", "Source", "Task", "Ticket", "Title", "Time", "Subject h"]
+    table = []
+    for r in rows:
+        when = "{} {} {}".format(r["weekday"], r["start"][8:10], r["start"][11:16])
+        if r["end"]:
+            when += "-" + (r["end"][11:16] if r["end"][:10] == r["start"][:10] else r["end"][5:16])
+        time = r["worked"] or r["scheduled"]
+        table.append([when, r["source"], cut(r["task"], 24), r["ticket"], cut(r["title"], 50),
+                      time[:-3] if time else "", str(r["duration"])])
+    print_grid(heads, table)
+
+
+def print_session_table(rows):
+    heads = ["Date", "Start", "End", "Worked", "Profile", "Ticket", "Title"]
+    print_grid(heads, [[r["date"], r["start"][11:16], r["end"][11:16], r["worked_exact"],
+                        r["profile"], r["ticket"] or "-", cut(r["title"], 60)] for r in rows])
+
+
+def copy_rows(rows, columns, header=None):
+    """Put the rows on the clipboard as tab-separated text, so each value lands in its
+    own column when pasted."""
+    clean = lambda v: str(v).replace("\t", " ").replace("\n", " ")
+    lines = ["\t".join(header)] if header else []
+    lines += ["\t".join(clean(r.get(c, "")) for c in columns) for r in rows]
+    try:
+        subprocess.run(["pbcopy"], input="\n".join(lines).encode("utf-8"), check=True)
+        return True
+    except (OSError, subprocess.CalledProcessError) as exc:
+        print("claude-audit: could not copy to the clipboard ({})".format(exc), file=sys.stderr)
+        return False
+
+
+def write_csv(path, rows, columns, header=None):
+    fh = sys.stdout if path == "-" else open(path, "w", newline="")
+    try:
+        writer = csv.writer(fh)
+        writer.writerow(header or columns)
+        for r in rows:
+            writer.writerow([r.get(c, "") for c in columns])
+    finally:
+        if fh is not sys.stdout:
+            fh.close()
+
+
+def period_text(kind, first, last, weeks=None):
+    fmt = lambda d: "{} {} {}".format(d.strftime("%a"), d.day, d.strftime("%b %Y"))
+    if kind == "day":
+        return fmt(first)
+    if kind == "week":
+        return "week of " + fmt(first)
+    if kind == "month":
+        text = first.strftime("%B %Y")
+        if weeks:
+            text += " · weeks starting " + ", ".join(str(m.day) for m, _ in weeks) + weeks[0][0].strftime(" %b")
+        return text
+    text = "{} to {}".format(fmt(first), fmt(last))
+    if weeks and (weeks[0][0] != first or weeks[-1][1] != last):
+        text += " · whole weeks {} to {}".format(fmt(weeks[0][0]), fmt(weeks[-1][1]))
+    return text
+
+
+RECONCILE_COLUMNS = ["side", "status", "ticket", "task", "summary", "jira_status", "updated",
+                     "hours", "activities", "note"]
+
+
+def _parse_updated(raw):
+    if not raw:
+        return None
+    raw = re.sub(r"([+-]\d\d)(\d\d)$", r"\1:\2", str(raw).strip())
+    try:
+        stamp = dt.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return stamp.astimezone()
+
+
+def reconcile_view(rows, ledger, idf, first, last):
+    """Activities against Jira tickets, both ways.
+
+    Activities -> tickets: what each ticket (or task, where there is none) got in the
+    period, and anything not reconciled to one. Tickets -> activities: every ticket
+    assigned to you that changed in the period, and whether any activity is booked
+    to it. A ticket with none, but with an activity that looks like it, is flagged
+    "?" -- the likely misallocation. One with nothing that looks like it is flagged
+    "x": work done in Jira itself, or not done, which the activity sources cannot see.
+    """
+    subjects = {}
+    for r in rows:
+        it = r.get("_item")
+        if it is None or it["source"] in NOT_WORK:
+            continue
+        s = subjects.setdefault(r["subject"], {"ticket": r["ticket"], "task": r["task"], "secs": 0.0,
+                                               "n": 0, "tok": set(), "jira": set(), "stamps": []})
+        s["secs"] += r.get("_exact_s") or 0.0
+        s["n"] += 1
+        s["tok"] |= it["_title_tok"]
+        s["jira"] |= it["_jira"]
+        s["stamps"] += it.get("_stamps") or [it["_start"]]
+    for s in subjects.values():
+        s["stamps"].sort()
+
+    out = []
+    by_target = defaultdict(lambda: [0.0, 0])
+    for s in subjects.values():
+        by_target[(s["ticket"], s["task"])][0] += s["secs"]
+        by_target[(s["ticket"], s["task"])][1] += s["n"]
+    for (ticket, task), (secs, n) in sorted(by_target.items(), key=lambda kv: -kv[1][0]):
+        loose = task == UNMAPPED_TASK or task.startswith("(left out")
+        out.append({"side": "activities", "status": "x" if loose else "ok", "ticket": ticket or "-",
+                     "task": task, "summary": "", "jira_status": "", "updated": "",
+                     "hours": round(secs / 3600.0, 2), "activities": n,
+                     "note": "not reconciled to a ticket -- ask Claude for the weekly review" if loose else ""})
+
+    lo, hi = _at(first), _at(last + dt.timedelta(days=1))
+    ignored = set(ledger.get("ignore_tickets") or [])
+    mine = []
+    for issue in load_jira():
+        stamp = _parse_updated(issue.get("updated"))
+        if issue.get("mine") and issue["key"] not in ignored and stamp and lo <= stamp < hi:
+            mine.append((stamp, issue))
+    mine.sort(key=lambda pair: pair[0], reverse=True)
+
+    on_ticket = defaultdict(lambda: [0.0, 0])
+    for s in subjects.values():
+        on_ticket[s["ticket"]][0] += s["secs"]
+        on_ticket[s["ticket"]][1] += s["n"]
+
+    # Each task that got activity, with the words that describe it (name, keywords,
+    # confirmed subjects): a ticket can match the task even when no single title does.
+    per_task = defaultdict(lambda: defaultdict(float))
+    for s in subjects.values():
+        per_task[s["task"]][s["ticket"]] += s["secs"]
+    registry = {t["task"]: t for t in ledger.get("tasks") or []}
+    task_vocabs = []
+    for task, per_ticket in per_task.items():
+        if task in registry:
+            top = max(per_ticket.items(), key=lambda kv: kv[1])[0]
+            task_vocabs.append((task, task_vocab(registry[task], ledger),
+                                {"ticket": top, "task": task, "secs": sum(per_ticket.values())}))
+
+    tickets = {}
+    for stamp, issue in mine:
+        key = issue["key"]
+        row = {"side": "tickets", "ticket": key, "task": "", "summary": (issue.get("summary") or "").strip(),
+               "jira_status": issue.get("status", ""), "updated": stamp.strftime("%Y-%m-%d %H:%M"),
+               "hours": "", "activities": 0, "note": ""}
+        secs, n = on_ticket[key] if key in on_ticket else (0.0, 0)
+        if n:
+            row.update(status="ok", hours=round(secs / 3600.0, 2), activities=n)
+        else:
+            want = tokens(issue.get("summary"))
+            best = None
+            near = (stamp - dt.timedelta(minutes=15), stamp + dt.timedelta(minutes=15))
+            for name, s in subjects.items():
+                sim, words = weighted_overlap(want, s["tok"], idf, base=want)
+                if key in s["jira"]:
+                    sim = 1.0
+                elif words and _active_near(s["stamps"], *near):
+                    # changed in Jira while this work was going on, on the same topic
+                    sim = max(sim, POSSIBLE + 0.05)
+                if sim >= POSSIBLE and (best is None or sim > best[0]):
+                    best = (sim, '"{}"'.format(name), s)
+            # Fallback only: a match on an actual piece of work always beats the broad
+            # vocabulary of a task, which for a big task like BI Migration matches a lot.
+            for task, vocab, top in (task_vocabs if best is None else []):
+                sim = weighted_overlap(want, vocab, idf, base=want)[0]
+                if sim >= POSSIBLE and (best is None or sim > best[0]):
+                    best = (sim, "task {}".format(task), top)
+            if best:
+                _, what, s = best
+                row.update(status="?", _on=s["ticket"], note="looks like {} ({:.1f}h), booked to {} / {}".format(
+                    what, s["secs"] / 3600.0, s["task"], s["ticket"] or "-"))
+            else:
+                row.update(status="x", note="no activity found -- work in Jira itself is not visible here")
+        tickets[key] = row
+    # A "?" ticket whose look-alike is booked to another ticket of yours that checks
+    # out -- a subtask of a ticket you closed, a sibling -- is covered there.
+    related = defaultdict(list)
+    for key, row in list(tickets.items()):
+        on = row.get("_on")
+        if row["status"] == "?" and on in tickets and tickets[on]["status"] == "ok":
+            related[on].append(key)
+            del tickets[key]
+    for key, keys in related.items():
+        tickets[key]["note"] = "also covers {} related: {}".format(len(keys), ", ".join(sorted(keys)))
+    order = {"ok": 0, "?": 1, "x": 2}
+    out += sorted(tickets.values(), key=lambda r: order[r["status"]])
+
+    notes = []
+    if not mine:
+        notes.append("no Jira tickets of yours changed in this period, or the ticket cache is out of "
+                     "date -- the weekly review refreshes it")
+    flagged = sum(1 for r in tickets.values() if r["status"] == "?")
+    if flagged:
+        notes.append("{} ticket(s) marked ? probably have their activity booked elsewhere -- the weekly "
+                     "review asks you about them".format(flagged))
+    return out, notes
+
+
+def print_reconcile(rows):
+    act = [r for r in rows if r["side"] == "activities"]
+    tix = [r for r in rows if r["side"] == "tickets"]
+    print("  Activities -> tickets\n")
+    print_grid(["", "Ticket", "Task", "Hours", "Activities", "Note"],
+               [["" if r["status"] == "ok" else r["status"], r["ticket"], cut(r["task"], 28),
+                 "{:.1f}h".format(r["hours"]), str(r["activities"]), r["note"]] for r in act])
+    if not any(r["status"] == "x" for r in act):
+        print("  every activity is reconciled to a ticket or a task")
+    print("\n  Tickets -> activities   (Jira: assigned to you, changed in the period)\n")
+    if tix:
+        print_grid(["", "Ticket", "Jira", "Summary", "Booked", "Note"],
+                   [[r["status"], r["ticket"], r["jira_status"], cut(r["summary"], 42),
+                     "{:.1f}h".format(r["hours"]) if r["hours"] != "" else "", cut(r["note"], 72)] for r in tix])
+    else:
+        print("  (none)")
+
+
+def main():
+    show_all = "--help-all" in sys.argv
+    if show_all:
+        sys.argv = ["--help" if a == "--help-all" else a for a in sys.argv]
+    adv = (lambda text: text) if show_all else (lambda text: argparse.SUPPRESS)
+    ap = argparse.ArgumentParser(prog="claude-audit", description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter,
+                                 epilog="claude-audit --help-all also lists the advanced options "
+                                        "the weekly-review skill uses.")
+    period = ap.add_argument_group("period (default: this week)")
+    period.add_argument("--day", nargs="?", const="today", metavar="DATE", help="one day (default: today)")
+    period.add_argument("--week", nargs="?", const="today", metavar="DATE",
+                        help="the Monday-Sunday week containing DATE (default: this week)")
+    period.add_argument("--month", nargs="?", const="this", metavar="YYYY-MM",
+                        help="the weeks that start in this month (default: this month)")
+    period.add_argument("--from", dest="start", metavar="DATE", help="first day of a range")
+    period.add_argument("--to", dest="end", metavar="DATE", help="last day of a range (default: today)")
+    view = ap.add_argument_group("view (default: the summary, i.e. the tracker rows)")
+    view.add_argument("--detail", action="store_true",
+                      help="every activity instead: sessions, meetings, emails and chats, one row "
+                           "each, with the task and ticket it counts towards")
+    view.add_argument("--reconcile", action="store_true",
+                      help="activities against Jira tickets, both ways: what each ticket got, and "
+                           "which of your tickets have no activity booked to them")
+    output = ap.add_argument_group("output (default: a table in the terminal)")
+    output.add_argument("--copy", action="store_true",
+                        help="also copy the table to the clipboard, ready to paste")
+    output.add_argument("--csv", nargs="?", const="", metavar="FILE",
+                        help="write a CSV instead of the table (default: a name under _audit/; "
+                             "'-' for stdout)")
+    extra = ap.add_argument_group("advanced -- used by the weekly-review skill" if show_all else None)
+    extra.add_argument("--sessions", action="store_true",
+                       help=adv("view: one row per Claude session per day, with profile, ticket, "
+                                "cost and models (the original session export)"))
+    extra.add_argument("--propose", action="store_true",
+                       help=adv("score the week's undecided correlations and task mappings "
+                                "(writes _audit/review/proposals_<monday>.json)"))
+    extra.add_argument("--apply", metavar="FILE", help=adv("merge confirmed decisions into the ledger"))
+    extra.add_argument("--ledger", metavar="PATH", help=adv("review ledger (default: _audit/review/ledger.json)"))
+    extra.add_argument("--activity", metavar="PATH", default=ACTIVITY_DIR,
+                       help=adv("activity day files, a folder or one file (default: _audit/activity/)"))
+    extra.add_argument("--schema", action="store_true", help=adv("print the activity file format"))
+    extra.add_argument("--busy-cap", type=float, default=5.0, metavar="MIN",
+                       help=adv("a mid-turn gap longer than this is a stall, not work (default: 5)"))
+    extra.add_argument("--read-cap", type=float, default=2.0, metavar="MIN",
+                       help=adv("credit for reading a reply and typing the next prompt (default: 2)"))
+    extra.add_argument("--round-to", type=float, default=30.0, metavar="MIN",
+                       help=adv("round durations up to this slot (default: 30)"))
+    extra.add_argument("--min-subject", type=float, default=10.0, metavar="MIN",
+                       help=adv("subjects shorter than this are mapped automatically, not asked "
+                                "about (default: 10)"))
+    extra.add_argument("--util-step", type=int, default=10, metavar="PCT",
+                       help=adv("utilisation step in percent (default: 10)"))
+    args = ap.parse_args()
+
+    if args.schema:
+        print(ACTIVITY_SCHEMA)
+        return
+    args.ledger = args.ledger or LEDGER_PATH
+    if args.detail and args.reconcile:
+        sys.exit("claude-audit: pick --detail or --reconcile, not both")
+    if args.apply:
+        apply_decisions(args.apply, args.ledger)
+        if not any((args.day, args.week, args.month, args.start, args.propose, args.detail, args.reconcile,
+                    args.sessions, args.copy, args.csv is not None)):
+            return
+
+    today = dt.date.today()
+    kind, first, last, label = resolve_period(args, today)
+    busy_cap, read_cap = args.busy_cap * 60, args.read_cap * 60
+    say = (lambda *a: print(*a, file=sys.stderr)) if args.csv == "-" else print
+
+    if args.propose:
+        if kind != "week":
+            sys.exit("claude-audit: --propose works on one week (--week DATE)")
+        items, ledger, idf, _ = gather(args, first, last, busy_cap, read_cap)
+        propose_week(items, ledger, first.isoformat(), first, args, read_cap, idf)
+        return
+
+    notes, breakdown = [], []
+    if args.sessions:
+        _, _, _, srows = gather(args, first, last, busy_cap, read_cap)
+        worked = sum(r["_worked_s"] for r in srows)
+        rows = [{k: v for k, v in r.items() if not k.startswith("_")} for r in srows]
+        view, columns, header, copy_header = "sessions", COLUMNS, None, COLUMNS
+        title = "Sessions · {} · {} sessions, {} worked".format(period_text(kind, first, last), len(rows), hms(worked))
+        printer, data_days = print_session_table, []
+    elif args.reconcile:
+        weeks = summary_weeks(kind, first, last)
+        span0, span1 = weeks[0][0], weeks[-1][1]
+        items, ledger, idf, _ = gather(args, span0, span1, busy_cap, read_cap)
+        acts = activity_view(items, ledger, idf, args, read_cap, weeks)
+        rows, rnotes = reconcile_view(acts, ledger, idf, span0, span1)
+        notes += rnotes
+        view, columns, header, copy_header = "reconcile", RECONCILE_COLUMNS, None, RECONCILE_COLUMNS
+        title = "Reconciliation · " + period_text(kind, first, last, weeks)
+        printer, data_days = print_reconcile, list(daterange(span0, min(span1, today)))
+    elif args.detail:
+        # The detail covers exactly the days the summary covers for the same options,
+        # so the two always describe the same work and can be reconciled.
+        weeks = summary_weeks(kind, first, last)
+        span0, span1 = weeks[0][0], weeks[-1][1]
+        items, ledger, idf, _ = gather(args, span0, span1, busy_cap, read_cap)
+        rows = activity_view(items, ledger, idf, args, read_cap, weeks)
+        _, backing, _ = summary_view(items, ledger, idf, args, read_cap, kind, weeks)
+        notes.append(reconcile(rows, backing))
+        view, columns, header, copy_header = "detail", ACTIVITY_COLUMNS, None, ACTIVITY_COLUMNS
+        title = "Detail · {} · {} activities".format(period_text(kind, first, last, weeks), len(rows))
+        printer, data_days = print_activity_table, list(daterange(span0, min(span1, today)))
+    else:
+        weeks = summary_weeks(kind, first, last)
+        span0, span1 = weeks[0][0], weeks[-1][1]
+        items, ledger, idf, _ = gather(args, span0, span1, busy_cap, read_cap)
+        rows, breakdown, notes = summary_view(items, ledger, idf, args, read_cap, kind, weeks)
+        first_head = "Day" if kind == "day" else "Week"
+        view, columns, copy_header = "summary", REVIEW_COLUMNS, None
+        header = [first_head] + REVIEW_COLUMNS[1:]
+        title = "Summary · " + period_text(kind, first, last, weeks)
+        printer = lambda r: print_tracker_table(r, first_head)
+        data_days = list(daterange(span0, min(span1, today)))
+
+    missing = missing_activity(args.activity, data_days)
+    if missing:
+        notes.insert(0, "no Teams/calendar/mail data for {} -- those days show Claude sessions only; "
+                        "ask Claude for a recap or the weekly review to gather them".format(describe_days(missing)))
+
+    written = []
+    if args.csv is not None:
+        path = args.csv or os.path.join(DEFAULT_OUT_DIR, "claude-audit_{}_{}.csv".format(label, view))
+        if path != "-":
+            os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+            written.append(path)
+        write_csv(path, rows, columns, header)
+        if view == "summary" and path != "-":
+            bpath = path[:-4] + "_breakdown.csv" if path.endswith(".csv") else path + "_breakdown.csv"
+            write_csv(bpath, breakdown, BREAKDOWN_COLUMNS)
+            written.append(bpath)
+        say(title)
+    else:
+        say(title + "\n")
+        if rows:
+            printer(rows)
+        else:
+            say("  nothing recorded in this period")
+    for note in notes:
+        say("  - " + note)
+    if args.copy and rows and copy_rows(rows, columns, copy_header):
+        hint = ("click the first empty row of the tracker (column A) and paste" if view == "summary"
+                else "paste into any sheet; the first row is the header")
+        say("\n  {} rows copied -- {}".format(len(rows), hint))
+    for path in written:
+        say(path)
+
+
+if __name__ == "__main__":
+    main()

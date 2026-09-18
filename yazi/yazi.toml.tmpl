@@ -1,0 +1,13 @@
+# Render Markdown in the preview pane via glow (piper plugin)
+[[plugin.prepend_previewers]]
+url = "*.md"
+run = 'piper -- CLICOLOR_FORCE=1 glow -w=$w -s={{HOME}}/.config/yazi/glow-style.json "$1"'
+
+# Extra opener for Markdown: `O` on a .md offers "Glow" (full-screen, q to return)
+[opener]
+glow = [{ run = 'glow -p -s={{HOME}}/.config/yazi/glow-style.json %s1', block = true, desc = "Glow (rendered)" }]
+glow_light = [{ run = 'glow -p -s={{HOME}}/.config/yazi/glow-style-light.json %s1', block = true, desc = "Glow (light, for copying)" }]
+html_email = [{ run = '{{HOME}}/.config/yazi/md2html.sh %s1', orphan = true, desc = "Open as HTML (for email)" }]
+
+[open]
+prepend_rules = [{ url = "*.md", use = ["html_email", "glow", "glow_light", "open"] }]

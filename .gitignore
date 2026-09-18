@@ -1,0 +1,7 @@
+# Personal config never lives in the repo — it belongs in <work root>/_config/
+config/config.env
+config/context.md
+config/review-rules.md
+*.bak-*
+.DS_Store
+__pycache__/

@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.1] — 2026-09-20
+
+- `--profiles` now backs up `config.env` before the answers overwrite it, so a
+  reconfigure can be undone like everything else install.sh replaces.
+- Rolling back to an older release says so instead of printing that release's
+  changelog as if it were news.
+
 ## [1.3.0] — 2026-09-20
 
 Updating in place.

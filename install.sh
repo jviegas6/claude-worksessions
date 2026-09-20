@@ -101,6 +101,8 @@ update_repo() {
   VERSION="$(<"$REPO/VERSION")"
   if [[ "$from" == "$VERSION" ]]; then
     say "already on $VERSION — re-installing it"
+  elif [[ "$(print -rl -- "$from" "$VERSION" | sort -V | tail -1)" == "$from" ]]; then
+    say "rolled back $from → $VERSION"
   else
     say "$from → $VERSION"
     [[ -n "$PY" ]] && "$PY" - "$REPO/CHANGELOG.md" "$from" <<'PY'
@@ -326,6 +328,8 @@ if (( FIRST_RUN || RECONF )) && (( ! DRY && ! YES )); then
   # current values as defaults
   CWS_CONFIG="$CONFIG" source "$REPO/shell/worksessions.zsh" >/dev/null 2>&1
   unalias -m 'claude-*' 2>/dev/null || true
+  # Answers overwrite the file, so keep the previous one
+  (( FIRST_RUN )) || backup "$CONFIG"
   (( FIRST_RUN )) && configure_basics "$CONFIG"
   configure_profiles "$CONFIG"
 fi

@@ -72,11 +72,13 @@ delete the key and re-run `install.sh`.
 
 ## context.md — standing context
 
-Imported by the work root's `CLAUDE.md` (`@_config/context.md`), so every session in
-the work root knows it without being told. Put the stable facts Claude would
+Copied into the work root's `CLAUDE.md` by `install.sh`, so every session in the work
+root knows it without being told. It is inlined rather than imported: Claude Code does
+not expand an `@import` in a parent `CLAUDE.md` for a session running in a sub-folder,
+and every session runs several folders down. Put the stable facts Claude would
 otherwise rediscover: tenants, subscription ids, workspaces, storage accounts, repo
 locations, naming quirks, hard-won rules of thumb, how you like answers. Ids and names
-only — no secrets. Edits take effect in the next session; no re-install needed.
+only — no secrets. After editing it, run `./install.sh` to copy it into `CLAUDE.md`.
 
 ## review-rules.md — weekly-review house rules
 

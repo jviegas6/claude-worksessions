@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.4.0] — 2026-09-20
+
+- The standing context is now **copied into** the work root's `CLAUDE.md` instead of
+  imported with `@_config/context.md`. Claude Code does not expand an `@import` in a
+  parent `CLAUDE.md` for a session running in a sub-folder — and every session runs
+  several folders down, so the context silently never loaded. Verified by running a
+  throwaway session from a request folder and asking for facts only the context holds.
+- Editing `_config/context.md` now needs `./install.sh` to regenerate `CLAUDE.md`.
+
 ## [1.3.2] — 2026-09-20
 
 Fixes found while installing on a live machine.

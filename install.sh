@@ -447,7 +447,9 @@ for name in context review-rules; do
   if [[ -f "$CWS_WORK_ROOT/_config/$name.md" ]]; then say "kept _config/$name.md"
   else run cp "$REPO/config/$name.example.md" "$CWS_WORK_ROOT/_config/$name.md"; say "created _config/$name.md — fill it in"; fi
 done
-render "$REPO/templates/CLAUDE.md.tmpl" "$CWS_WORK_ROOT/CLAUDE.md"
+# The standing context is inlined, not imported: an @import in a parent CLAUDE.md is
+# not expanded for sessions running in sub-folders, which is where every session runs.
+CONTEXT="$(<"$CWS_WORK_ROOT/_config/context.md")" render "$REPO/templates/CLAUDE.md.tmpl" "$CWS_WORK_ROOT/CLAUDE.md"
 
 # --- 4. Claude Code profiles ----------------------------------------------------------
 step "Claude Code profiles"

@@ -306,19 +306,34 @@ print("{:<10} {:<14} {:<16} {:<9}".format("[" + (d.get("profile") or "?") + "]",
   # you have used before, or typed fresh.
   if [[ -z "$ttype" ]]; then
     local -a types=("${(@f)$(_cws_task_types)}")
-    local guess="$(_cws_guess_type "$name")" pick="" i=1 t
-    [[ -z "$guess" && -n "${types[1]}" ]] && guess="${types[1]}"
+    local guess="$(_cws_guess_type "$name")" pick="" i=1 t tries=0
     if [[ -t 0 ]]; then
       print -r -- ""
-      print -r -- "  Task type (Enter for '$guess', a number, your own words, or - for none):"
+      # The type is what STARTED the work, not everything it touches on the way:
+      # a job error that needs investigation, a permission change and a doc update
+      # is still "job errors".
+      if [[ -n "$guess" ]]; then
+        print -r -- "  Task type — what kind of work starts this? (Enter for '$guess', a number, your own words, - for none)"
+      else
+        print -r -- "  Task type — what kind of work starts this? Nothing in the name matched, so pick one:"
+      fi
       for t in ${types[1,8]}; do printf '    %d) %s\n' $i "$t"; (( i++ )); done
-      read "pick?Task type [$guess]: " || return 1
-      case "$pick" in
-        "")  ttype="$guess" ;;
-        -)   ttype="" ;;
-        <->) if (( pick >= 1 && pick <= ${#types} )); then ttype="${types[$pick]}"; else ttype="$pick"; fi ;;
-        *)   ttype="$pick" ;;
-      esac
+      while true; do
+        read "pick?Task type${guess:+ [$guess]}: " || return 1
+        if [[ -z "$pick" && -z "$guess" ]]; then
+          (( tries++ ))
+          (( tries >= 2 )) && { ttype=""; break; }
+          print -u2 -- "  pick a number, type your own, or - for none"
+          continue
+        fi
+        case "$pick" in
+          "")  ttype="$guess" ;;
+          -)   ttype="" ;;
+          <->) if (( pick >= 1 && pick <= ${#types} )); then ttype="${types[$pick]}"; else ttype="$pick"; fi ;;
+          *)   ttype="$pick" ;;
+        esac
+        break
+      done
     else
       ttype="$guess"
     fi

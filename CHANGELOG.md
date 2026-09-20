@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.8.0] — 2026-09-21
+
+- When nothing in the session name matches a known type, `claude-new` no longer falls
+  back to your most recent type: it says so and asks you to pick from the list (or type
+  your own, or `-` for none).
+- Written down everywhere it matters — CLAUDE.md, both skills, the docs — that a task
+  type names **what triggered the session, not what it touched**: a job error that needs
+  investigation, then a permission change, then documentation stays `job errors`. Claude
+  re-types a session only when the trigger itself turns out to have been different.
+
 ## [1.7.0] — 2026-09-21
 
 The task type is now **per session**, not per request folder.

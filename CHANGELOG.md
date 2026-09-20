@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.6.0] — 2026-09-20
+
+- `claude-audit --with-type` includes the Task Type column in `--copy` as well, for a
+  tracker that has gained the column; `--no-type` leaves it out of the table, the CSV
+  and the clipboard. The default is unchanged: shown on screen and in the CSV, never
+  pasted.
+
 ## [1.5.0] — 2026-09-20
 
 Every session now records **what kind of work it is**.

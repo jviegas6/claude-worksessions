@@ -182,7 +182,8 @@ second. If it ever says "does NOT reconcile", report that to the user — it is 
 
 The terminal table and the CSV carry a **Task Type** column (the type most of the
 row's time carries); `--copy` leaves it out, because the clipboard has to match the
-tracker's own columns. `claude-audit --week YYYY-MM-DD --by-type` gives the week's
+tracker's own columns — pass `--with-type` if the tracker has gained a Type column, or
+`--no-type` to drop it everywhere. `claude-audit --week YYYY-MM-DD --by-type` gives the week's
 split by type — worth a line in what you report.
 
 Show the rows. Then state plainly anything the run flagged: unmapped hours must

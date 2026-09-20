@@ -50,6 +50,12 @@ claude-audit --schema                     # the activity-file format the skills 
 `(no type)`). The weekly summary table and CSV carry a **Task Type** column; `--copy`
 leaves it out so the clipboard still matches the tracker's own columns.
 
+| flag | Task Type in table & CSV | in `--copy` |
+|---|---|---|
+| (default) | yes | no |
+| `--with-type` | yes | yes — for a tracker that has the column |
+| `--no-type` | no | no |
+
 Reads every transcript under `~/.claude-<profile>/projects`, measures time actually
 worked (stalls capped), and merges the meetings, mail and chats the skills saved in
 `_audit/activity/`. The summary is one row per task and ticket per week; `--detail` is

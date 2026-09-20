@@ -1753,12 +1753,15 @@ def cut(text, width):
     return text if len(text) <= width else text[: width - 1] + "…"
 
 
-def print_tracker_table(rows, first_head="Week"):
+def print_tracker_table(rows, first_head="Week", with_type=True):
     """The rows as they will paste, every column. Long comments are shortened on screen
     only; the clipboard and the CSV get the full text."""
     heads = [first_head, "Task", "Jira", "Comments", "Ref Arch", "Func Spec", "HLD", "LLD", "Dev",
-             "Hypercare", "Prod Supp", "Leave", "M&I", "%", "Type"]
-    table = [[str(r.get(c, "")) for c in REVIEW_COLUMNS_EXT] for r in rows]
+             "Hypercare", "Prod Supp", "Leave", "M&I", "%"]
+    cols = REVIEW_COLUMNS
+    if with_type:
+        heads, cols = heads + ["Type"], REVIEW_COLUMNS_EXT
+    table = [[str(r.get(c, "")) for c in cols] for r in rows]
     for cells in table:
         cells[3] = cut(cells[3], 48)
     print_grid(heads, table)
@@ -2049,6 +2052,12 @@ def main():
     extra.add_argument("--sessions", action="store_true",
                        help=adv("view: one row per Claude session per day, with profile, ticket, "
                                 "cost and models (the original session export)"))
+    extra.add_argument("--with-type", dest="with_type", action="store_true",
+                       help=adv("include the Task Type column in --copy too (for a tracker "
+                                "that has one); it is already in the table and the CSV"))
+    extra.add_argument("--no-type", dest="no_type", action="store_true",
+                       help=adv("leave the Task Type column out of the summary table, "
+                                "CSV and clipboard"))
     extra.add_argument("--by-type", dest="by_type", action="store_true",
                        help=adv("view: hours grouped by the session's task type "
                                 "(permissions, job errors, ...)"))
@@ -2141,10 +2150,12 @@ def main():
         items, ledger, idf, _ = gather(args, span0, span1, busy_cap, read_cap)
         rows, breakdown, notes = summary_view(items, ledger, idf, args, read_cap, kind, weeks)
         first_head = "Day" if kind == "day" else "Week"
-        view, columns, copy_header = "summary", REVIEW_COLUMNS_EXT, None
-        header = [first_head] + REVIEW_COLUMNS_EXT[1:]
+        show_type = not args.no_type
+        cols = REVIEW_COLUMNS_EXT if show_type else REVIEW_COLUMNS
+        view, columns, copy_header = "summary", cols, None
+        header = [first_head] + cols[1:]
         title = "Summary · " + period_text(kind, first, last, weeks)
-        printer = lambda r: print_tracker_table(r, first_head)
+        printer = lambda r: print_tracker_table(r, first_head, show_type)
         data_days = list(daterange(span0, min(span1, today)))
 
     missing = missing_activity(args.activity, data_days)
@@ -2172,8 +2183,11 @@ def main():
             say("  nothing recorded in this period")
     for note in notes:
         say("  - " + note)
-    # The clipboard gets the tracker's columns only -- Task Type is not one of them
-    copy_columns = REVIEW_COLUMNS if columns is REVIEW_COLUMNS_EXT else columns
+    # The clipboard gets the tracker's own columns; --with-type adds Task Type for a
+    # tracker that has a column for it.
+    copy_columns = columns
+    if columns in (REVIEW_COLUMNS, REVIEW_COLUMNS_EXT):
+        copy_columns = REVIEW_COLUMNS_EXT if (args.with_type and not args.no_type) else REVIEW_COLUMNS
     if args.copy and rows and copy_rows(rows, copy_columns, copy_header):
         hint = ("click the first empty row of the tracker (column A) and paste" if view == "summary"
                 else "paste into any sheet; the first row is the header")

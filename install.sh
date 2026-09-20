@@ -144,6 +144,7 @@ backup() {
 # Render a {{KEY}} template with the config (and HOME) to a file, backing up a changed target
 render() {
   local src="$1" dst="$2" tmp
+  [[ -f "$src" ]] || { warn "template missing: $src — skipped $dst"; return 1; }
   tmp="$(mktemp)"
   "$PY" - "$src" "$tmp" <<'PY'
 import os, re, sys
@@ -157,6 +158,10 @@ def sub(m):
     return env[key]
 open(dst, "w").write(re.sub(r"\{\{([A-Z_]+)\}\}", sub, text))
 PY
+  # A failed render must never overwrite what is already there
+  if (( $? != 0 )) || [[ ! -s "$tmp" ]]; then
+    rm -f "$tmp"; warn "could not render $src — left $dst alone"; return 1
+  fi
   if [[ -f "$dst" ]] && cmp -s "$tmp" "$dst"; then
     say "unchanged $dst"; rm -f "$tmp"; return 0
   fi
@@ -292,6 +297,10 @@ link() {
   say "linked $dst → $src"
 }
 
+for f in shell/worksessions.zsh templates/CLAUDE.md.tmpl bin/claude-audit config/config.example.env; do
+  [[ -f "$REPO/$f" ]] || { print -u2 "install.sh: $REPO is not a claude-worksessions checkout (no $f)"; exit 1; }
+done
+
 print -r -- "claude-worksessions $VERSION"
 
 if (( UPDATE )); then
@@ -337,7 +346,7 @@ fi
 
 # Load it exactly as the shell functions will
 export CWS_CONFIG="$CONFIG"
-source "$REPO/shell/worksessions.zsh"
+source "$REPO/shell/worksessions.zsh" || { print -u2 "install.sh: could not load $REPO/shell/worksessions.zsh"; exit 1; }
 unalias -m 'claude-*' 2>/dev/null || true
 typeset -a PROFILES=(${=CWS_PROFILES})
 : ${CWS_SHARED_PROFILE:=${PROFILES[1]}}

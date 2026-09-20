@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.3.2] — 2026-09-20
+
+Fixes found while installing on a live machine.
+
+- A render that fails (missing template, unset `{{KEY}}`) no longer replaces the
+  target with an empty file — it warns and leaves the existing file alone.
+- `install.sh` refuses to run if its own folder isn't a claude-worksessions
+  checkout, and stops if the shell library can't be loaded, instead of carrying on
+  with whatever `CLAUDE_WORK_ROOT` happened to be in the environment.
+
 ## [1.3.1] — 2026-09-20
 
 - `--profiles` now backs up `config.env` before the answers overwrite it, so a

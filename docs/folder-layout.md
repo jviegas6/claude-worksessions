@@ -12,6 +12,7 @@
 │   ├── review/ledger.json         weekly-review decisions — change only via claude-audit --apply
 │   ├── no-audit.txt               session ids to keep out of the audit (one per line)
 │   ├── moved-folders.json         old → new paths of moved request folders
+│   ├── session-folders.json       session id → request folder, for sessions that ran elsewhere
 │   └── *.csv                      exports
 └── _daily/YYYY-MM-DD.md           prose recaps
 ```
@@ -25,6 +26,21 @@ The transcripts record the folder each session ran in. `claude-audit` reads prof
 ticket and the no-audit flag from `.session.json` in that folder; `claude-search` and
 `claude --resume` find a session by it. Move or rename a request folder and all three
 lose track of it — unless the move is recorded.
+
+## Sessions that ran outside a request folder
+
+Work done in a repo, in the work root or at home has no `.session.json` to carry a
+ticket or a task type. To attribute it, create a request folder for that piece of work
+(its `.session.json` holds the ticket and type, and a README can point at the repo) and
+map the sessions to it in `_audit/session-folders.json`:
+
+```json
+{"e56b0a1d-6c81-4449-812e-01d8a6a58ffb": "<work root>/2026/09/01/09-11-37_azure-dlt-pipeline-migration-scripts"}
+```
+
+`claude-audit` uses the map only when the folder a session ran in has no metadata of its
+own, so it never overrides a real request folder. Session ids come from
+`claude-audit --sessions --csv -`. Nothing is moved and the repo is untouched.
 
 ## Moving request folders safely
 

@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.9.0] — 2026-09-21
+
+- Sessions that ran outside a request folder (in a repo, the work root or at home) can
+  now be attributed to one: map session id → request folder in
+  `_audit/session-folders.json`. `claude-audit` falls back to that map when the folder a
+  session ran in has no `.session.json`, so ticket, profile and task type resolve for
+  work done in a repo — without moving anything or touching the repo.
+
 ## [1.8.1] — 2026-09-21
 
 - The "type the trigger, not the detours" wording that 1.8.0's notes promised: it only

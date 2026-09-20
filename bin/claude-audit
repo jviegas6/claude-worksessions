@@ -144,6 +144,34 @@ def session_meta(cwd):
     return _meta_cache[cwd]
 
 
+SESSION_FOLDERS_PATH = os.path.join(DEFAULT_OUT_DIR, "session-folders.json")
+_session_folders = None
+
+
+def session_folder(session_id):
+    """The request folder a session belongs to when it did not run in one -- work done
+    in a repo, in the work root or at home. Written by hand into
+    _audit/session-folders.json as {session id: request folder}."""
+    global _session_folders
+    if _session_folders is None:
+        try:
+            with open(SESSION_FOLDERS_PATH) as fh:
+                _session_folders = json.load(fh)
+        except (OSError, ValueError):
+            _session_folders = {}
+    return _session_folders.get(session_id) or ""
+
+
+def meta_for(cwd, session_id):
+    """A session's metadata: from the folder it ran in, or from the request folder it
+    was assigned to."""
+    meta = session_meta(cwd)
+    if meta["ticket"] or meta["task_type"] or meta["profile"] != "unknown":
+        return meta
+    assigned = session_folder(session_id)
+    return session_meta(assigned) if assigned else meta
+
+
 NO_AUDIT_PATH = os.path.join(DEFAULT_OUT_DIR, "no-audit.txt")
 
 
@@ -531,12 +559,12 @@ def build_row(session, busy_cap, read_cap, slot):
         "worked_h": round(round_up(worked, slot) / 3600.0, 2),
         "worked_exact": hms(worked),
         "elapsed": hms((end - start).total_seconds()),
-        "profile": session_meta(info["cwd"])["profile"],
-        "ticket": session_meta(info["cwd"])["ticket"],
+        "profile": meta_for(info["cwd"], sid)["profile"],
+        "ticket": meta_for(info["cwd"], sid)["ticket"],
         # a session's own type wins over the folder's default: one request folder can
         # hold sessions that went different ways
-        "task_type": (session_meta(info["cwd"])["session_types"].get(sid)
-                      or session_meta(info["cwd"])["task_type"]),
+        "task_type": (meta_for(info["cwd"], sid)["session_types"].get(sid)
+                      or meta_for(info["cwd"], sid)["task_type"]),
         "title": title,
         "folder": info["cwd"],
         "git_branch": info["branch"],

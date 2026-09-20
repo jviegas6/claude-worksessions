@@ -93,6 +93,23 @@ _cws_guess_type() {
   esac
 }
 
+# The id of the session running in a folder: Claude names its transcript <id>.jsonl in
+# ~/.claude-<profile>/projects/<folder path with non-alphanumerics as dashes>/.
+_cws_session_id() {
+  "$CWS_PYTHON" - "$1" "$HOME" "$CWS_PROFILES" <<'PYEOF'
+import glob, os, re, sys
+folder, home, profiles = sys.argv[1], sys.argv[2], sys.argv[3].split()
+enc = re.sub(r"[^A-Za-z0-9]", "-", os.path.abspath(folder))
+best, when = "", -1.0
+for p in profiles:
+    for f in glob.glob(os.path.join(home, ".claude-" + p, "projects", enc, "*.jsonl")):
+        m = os.path.getmtime(f)
+        if m > when:
+            best, when = os.path.basename(f)[:-6], m
+print(best)
+PYEOF
+}
+
 # claude-type [TYPE]            show or change the current session's task type
 # claude-type --backfill [--apply]   guess a type for older sessions that have none
 claude-type() {
@@ -128,18 +145,39 @@ json.dump(d, open(p, "w"), indent=2)' "$f"
   if [[ -z "$meta" ]]; then
     print -u2 -- "claude-type: no .session.json here (not inside a session folder)"; return 1
   fi
-  if (( ! $# )); then
-    "$CWS_PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1])).get("task_type") or "(none)")' "$meta"
-    return 0
-  fi
-  WS_TYPE="$*" "$CWS_PYTHON" - "$meta" <<'PYEOF'
+  # --folder changes the request folder's default instead of this session
+  local scope="session"
+  if [[ "$1" == --folder ]]; then scope="folder"; shift; fi
+  local sid=""
+  [[ "$scope" == session ]] && sid="$(_cws_session_id "${meta:h}")"
+
+  WS_SID="$sid" WS_SCOPE="$scope" WS_TYPE="${(j: :)@}" WS_SET="$#" "$CWS_PYTHON" - "$meta" <<'PYEOF'
 import json, os, sys
 p = sys.argv[1]
 d = json.load(open(p))
-old = d.get("task_type") or "(none)"
-d["task_type"] = os.environ["WS_TYPE"].strip()
+sid, scope = os.environ["WS_SID"], os.environ["WS_SCOPE"]
+per = d.setdefault("session_types", {}) if isinstance(d.get("session_types", {}), dict) else {}
+folder_type = (d.get("task_type") or "").strip()
+current = (per.get(sid) or "").strip() or folder_type
+
+if os.environ["WS_SET"] == "0":                      # just show it
+    where = "this session" if (sid and per.get(sid)) else "the request folder"
+    print("{} ({})".format(current or "(none)", where))
+    raise SystemExit(0)
+
+new = os.environ["WS_TYPE"].strip()
+if scope == "folder" or not sid:
+    d["task_type"] = new
+    where = "request folder"
+    if not sid and scope == "session":
+        print("claude-type: no session transcript found here - setting the folder default",
+              file=sys.stderr)
+else:
+    per[sid] = new
+    d["session_types"] = per
+    where = "session " + sid[:8]
 json.dump(d, open(p, "w"), indent=2)
-print("task type: {} -> {}".format(old, d["task_type"]))
+print("task type ({}): {} -> {}".format(where, current or "(none)", new))
 PYEOF
 }
 

@@ -123,7 +123,7 @@ _meta_cache = {}
 def session_meta(cwd):
     """Profile, Jira ticket and task type recorded by `claude-new` in the session folder."""
     if not cwd:
-        return {"profile": "unknown", "ticket": "", "task_type": "", "audit": True}
+        return {"profile": "unknown", "ticket": "", "task_type": "", "session_types": {}, "audit": True}
     if cwd not in _meta_cache:
         found = {}
         meta = os.path.join(cwd, ".session.json")
@@ -136,7 +136,9 @@ def session_meta(cwd):
         _meta_cache[cwd] = {"profile": found.get("profile") or "unknown",
                             "ticket": (found.get("ticket") or "").strip(),
                             # what kind of work this is: permissions, job errors, ...
+                            # the folder's default, then per-session overrides by id
                             "task_type": (found.get("task_type") or "").strip(),
+                            "session_types": found.get("session_types") or {},
                             # `claude-new -n` sessions stay out of the audit and the review.
                             "audit": found.get("audit") is not False}
     return _meta_cache[cwd]
@@ -518,6 +520,7 @@ def build_row(session, busy_cap, read_cap, slot):
     start, end = stamps[0], stamps[-1]
     worked = worked_seconds(stamps, session["turns"], busy_cap, read_cap)
     models = sorted((cost.get("modelUsage") or {}).keys())
+    sid = os.path.basename(session["path"])[:-6]
     title = info["title"] or (info["opening"][:80].replace("\n", " ") if info["opening"] else "")
 
     return {
@@ -530,7 +533,10 @@ def build_row(session, busy_cap, read_cap, slot):
         "elapsed": hms((end - start).total_seconds()),
         "profile": session_meta(info["cwd"])["profile"],
         "ticket": session_meta(info["cwd"])["ticket"],
-        "task_type": session_meta(info["cwd"])["task_type"],
+        # a session's own type wins over the folder's default: one request folder can
+        # hold sessions that went different ways
+        "task_type": (session_meta(info["cwd"])["session_types"].get(sid)
+                      or session_meta(info["cwd"])["task_type"]),
         "title": title,
         "folder": info["cwd"],
         "git_branch": info["branch"],

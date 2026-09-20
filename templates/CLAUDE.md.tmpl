@@ -24,7 +24,7 @@ Announce the folder you created so the user can find it.
 | path | holds |
 |---|---|
 | `YYYY/MM/DD/HH-mm-ss_slug/` | one request: notes, scripts, data, outputs |
-| `YYYY/MM/DD/HH-mm-ss_slug/.session.json` | name, profile, ticket, task_type, started_at, ended_at — written by `claude-new` |
+| `YYYY/MM/DD/HH-mm-ss_slug/.session.json` | name, profile, ticket, task_type (the folder's default), session_types (per-session overrides), started_at, ended_at |
 | `_audit/` | CSV exports from `claude-audit`; underscore keeps it out of `claude-new -l` |
 | `_config/` | claude-worksessions settings: `config.env`, `context.md` (the standing context below), `review-rules.md`. The standing context below is copied in from `_config/context.md` — edit it there, then run `install.sh` to regenerate this file |
 | `_audit/moved-folders.json` | old → new path map from the 2026-09-18 move off flat `YYYY-MM-DD_slug/`. `claude-audit` and `claude-search` resolve transcript `cwd`s through it — don't delete it; add to it if folders are ever moved again |
@@ -48,10 +48,12 @@ For a session with no request folder (e.g. started in the root), add its session
 the session name and from the types already in use.
 
 **If the work clearly moves to a different kind of task, change it**: run
-`claude-type "<type>"` in the session folder and say in one line that you did. Reuse an
-existing type where one fits (`claude-type` with no argument shows the current one);
-invent a new one only when nothing fits. Don't change it for a passing detour — only
-when the session's real subject has shifted.
+`claude-type "<type>"` in the session folder and say in one line that you did. That sets
+the type for **this session only** — the folder keeps its own default for the next one,
+and `claude-type --folder "<type>"` changes that default instead. Reuse an existing type
+where one fits (`claude-type` with no argument shows the current one and where it came
+from); invent a new one only when nothing fits. Don't change it for a passing detour —
+only when the session's real subject has shifted.
 
 The ticket is what lets the weekly functional review put a session on the right
 tracker row without asking. If a session sitting in a request folder has no

@@ -26,15 +26,26 @@ that profile. `ended_at` is filled in when Claude exits.
 ## claude-type
 
 ```
-claude-type                      show this session's task type
-claude-type security             change it (run from anywhere inside the session folder)
-claude-type --backfill [--apply] guess a type for older sessions that have none
+claude-type                       show the current type, and whether it is this session's or the folder's
+claude-type security              set it for THIS session (run anywhere inside the session folder)
+claude-type --folder security     set the request folder's default instead
+claude-type --backfill [--apply]  guess a folder default for older sessions that have none
 ```
 
-The type is stored in `.session.json` and feeds `claude-audit --by-type`, the daily
-recap and the weekly review. Claude changes it itself when a session's subject clearly
-shifts, and says so. `--backfill` guesses from the session name — it prints what it
-would set, and only writes with `--apply`; correct any of them with `claude-type`.
+Types live in `.session.json`: `task_type` is the folder's default, and `session_types`
+maps a session id to its own type. **A session's own type wins**, so one request folder
+can hold sessions that went different ways — resume a folder for something else and only
+that session is relabelled. The session is identified by its transcript in
+`~/.claude-<profile>/projects/`; outside a running session there is nothing to identify,
+so `claude-type` sets the folder default and says so.
+
+One caveat: a resumed session keeps one id across days, so its type covers the whole
+session, not just today's part of it.
+
+The type feeds `claude-audit --by-type`, the daily recap and the weekly review. Claude
+changes it itself when a session's subject clearly shifts, and says so. `--backfill`
+guesses from the session name — it prints what it would set, and only writes with
+`--apply`.
 
 ## claude-audit
 

@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.7.0] — 2026-09-21
+
+The task type is now **per session**, not per request folder.
+
+- `.session.json` keeps `task_type` as the folder's default and gains `session_types`,
+  mapping a session id to its own type. A session's own type wins.
+- `claude-type <type>` sets it for the running session (identified by its transcript);
+  `claude-type --folder <type>` sets the folder default. With no argument it shows the
+  current type and which of the two it came from.
+- `claude-audit` resolves each session's type the same way, so resuming a folder for a
+  different kind of work no longer mislabels it — or the folder's other sessions.
+- Known limit: a resumed session keeps one id across days, so its type covers the whole
+  session rather than a single day's part of it.
+
 ## [1.6.0] — 2026-09-20
 
 - `claude-audit --with-type` includes the Task Type column in `--copy` as well, for a

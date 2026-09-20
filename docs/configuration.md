@@ -12,6 +12,10 @@ file. Environment variables named `CWS_*` override it.
 Format: `KEY="value"` lines, `#` comments, `$HOME` expanded. Nothing else is
 interpreted — it is not executed as shell.
 
+You don't have to write it by hand: the first `install.sh` asks for everything, and
+`install.sh --profiles` re-asks the profile questions. Editing the file directly works
+just as well — re-run `install.sh` afterwards so the skills and `CLAUDE.md` catch up.
+
 ## config.env
 
 | key | default | used for |
@@ -36,6 +40,12 @@ those are rendered into the skills and the work root's `CLAUDE.md`.
 
 ## Profiles
 
+Have as many as you like. Each is either a **Claude subscription** — you sign in with
+your account, and `install.sh` offers to open it for you — or an **inference gateway**:
+an Anthropic-compatible `CWS_PROFILE_<name>_BASE_URL` plus a token, which needs no
+login at all. `install.sh --profiles` adds, renames or removes them; a profile you drop
+keeps its `~/.claude-<name>` folder until you delete it yourself.
+
 Each profile is a separate Claude Code config dir. Non-shared profiles symlink these
 items to the shared profile, so every session, skill and MCP server is visible from
 every profile and `claude-audit` sees all work in one place:
@@ -43,7 +53,7 @@ every profile and `claude-audit` sees all work in one place:
 `projects sessions session-env history.jsonl file-history shell-snapshots skills plugins mcp`
 
 Each profile keeps its own `settings.json` and login (`.claude.json`) — that is the
-point of having two: e.g. `personal` on a Claude subscription, `work` on a company
+point of having several: e.g. `personal` on a Claude subscription, `work` on a company
 gateway.
 
 `install.sh` never merges data. If a non-shared profile already has a real

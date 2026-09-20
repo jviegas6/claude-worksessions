@@ -20,8 +20,7 @@ across past sessions, and daily/weekly review skills — all driven by one confi
 ```sh
 git clone https://github.com/jviegas6/claude-worksessions.git ~/Repos/claude-worksessions
 cd ~/Repos/claude-worksessions
-./install.sh            # first run creates <work root>/_config/config.env — edit it
-./install.sh            # second run installs
+./install.sh            # asks where the work root goes, then about your profiles
 source ~/.zshrc
 ```
 
@@ -36,6 +35,11 @@ open each profile so you can sign in.
 
 Re-running is safe: unchanged things are left alone, anything replaced is backed up as
 `*.bak-<timestamp>`.
+
+The first run asks the questions instead of making you edit a file: work root, org,
+role, time zone (guessed from the Mac), example ticket key, and then your profiles —
+as many as you want, each either a **Claude subscription** (you sign in) or an
+**inference gateway** (base URL + token). `./install.sh --profiles` changes them later.
 
 Two things stay outside the package: **connectors** (Atlassian for the weekly review,
 Microsoft 365 for the recap) come with your Claude account once you sign in, and any

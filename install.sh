@@ -7,6 +7,7 @@
 #   ./install.sh --dry-run            print what would change, change nothing
 #   ./install.sh --no-brew            don't install Homebrew packages
 #   ./install.sh --no-bootstrap       don't install anything missing, just report it
+#   ./install.sh --profiles           add/remove/rename profiles, then install
 #   ./install.sh --yes                don't prompt (tokens are then skipped)
 
 emulate -L zsh
@@ -14,7 +15,7 @@ setopt pipe_fail
 
 REPO="${0:A:h}"
 VERSION="$(<"$REPO/VERSION")"
-DRY=0 BREW=1 YES=0 NOBOOT=0 CONFIG=""
+DRY=0 BREW=1 YES=0 NOBOOT=0 RECONF=0 CONFIG=""
 STAMP="$(date +%Y%m%d-%H%M%S)"
 
 while (( $# )); do
@@ -23,8 +24,9 @@ while (( $# )); do
     --dry-run) DRY=1; shift ;;
     --no-brew) BREW=0; shift ;;
     --no-bootstrap) NOBOOT=1; BREW=0; shift ;;
+    --profiles|--reconfigure) RECONF=1; shift ;;
     --yes|-y)  YES=1; shift ;;
-    -h|--help) sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) print -u2 "install.sh: unknown option $1"; exit 1 ;;
   esac
 done
@@ -33,6 +35,38 @@ say()  { print -r -- "  $*"; }
 step() { print -r -- ""; print -r -- "▸ $*"; }
 warn() { print -u2 -r -- "  ! $*"; }
 run()  { if (( DRY )); then print -r -- "    [dry-run] $*"; else "$@"; fi; }
+
+# Python for the JSON/config helpers. Re-resolved after the prerequisites step,
+# which can install one if this Mac has none.
+resolve_py() {
+  if [[ -x /usr/bin/python3 ]]; then PY=/usr/bin/python3
+  elif command -v python3 >/dev/null 2>&1; then PY="$(command -v python3)"
+  else PY=""; fi
+}
+resolve_py
+
+# Local IANA zone, and the name Outlook uses for it (a guess the user can correct)
+local_timezone() {
+  local tz="$(readlink /etc/localtime 2>/dev/null)"
+  tz="${tz#*/zoneinfo/}"
+  print -r -- "${tz:-UTC}"
+}
+windows_timezone() {
+  case "$1" in
+    Europe/London|Europe/Lisbon|Europe/Dublin) print -r -- "GMT Standard Time" ;;
+    Europe/Paris|Europe/Brussels|Europe/Madrid) print -r -- "Romance Standard Time" ;;
+    Europe/Berlin|Europe/Amsterdam|Europe/Rome|Europe/Vienna|Europe/Stockholm|Europe/Zurich) print -r -- "W. Europe Standard Time" ;;
+    Europe/Lisbon) print -r -- "GMT Standard Time" ;;
+    America/New_York|America/Toronto) print -r -- "Eastern Standard Time" ;;
+    America/Chicago) print -r -- "Central Standard Time" ;;
+    America/Denver) print -r -- "Mountain Standard Time" ;;
+    America/Los_Angeles|America/Vancouver) print -r -- "Pacific Standard Time" ;;
+    Asia/Kolkata|Asia/Calcutta) print -r -- "India Standard Time" ;;
+    Australia/Sydney|Australia/Melbourne) print -r -- "AUS Eastern Standard Time" ;;
+    UTC|Etc/UTC) print -r -- "UTC" ;;
+    *) print -r -- "" ;;
+  esac
+}
 
 # Back up a file or directory we are about to replace (not symlinks we own)
 backup() {
@@ -66,6 +100,120 @@ PY
   if (( DRY )); then print -r -- "    [dry-run] write $dst"; rm -f "$tmp"; else mv "$tmp" "$dst"; say "wrote $dst"; fi
 }
 
+# Set KEY="value" in a config.env, replacing the line if it is there
+cws_set() {
+  local key="$1" val="$2" file="$3"
+  if grep -q "^${key}=" "$file" 2>/dev/null; then
+    "$PY" - "$file" "$key" "$val" <<'PY'
+import re, sys
+path, key, val = sys.argv[1:4]
+s = open(path).read()
+s = re.sub(r"(?m)^%s=.*$" % re.escape(key), '%s="%s"' % (key, val.replace('"', '\\"')), s)
+open(path, "w").write(s)
+PY
+  else
+    print -r -- "${key}=\"${val}\"" >> "$file"
+  fi
+}
+
+# Ask about profiles and write them to config.env. Any number; each is either a
+# Claude subscription login or an Anthropic-compatible inference gateway.
+configure_profiles() {
+  local file="$1"
+  local -a names=() kinds=() descs=() urls=()
+  local name kind desc url current="${CWS_PROFILES:-}"
+  print -r -- ""
+  print -r -- "  A profile is a separate Claude Code login with its own config dir"
+  print -r -- "  (~/.claude-<name>) and command (claude-<name>). They share history,"
+  print -r -- "  projects and skills, so every session shows up in claude-audit."
+  [[ -n "$current" ]] && print -r -- "  Current: $current"
+  print -r -- ""
+  while true; do
+    if (( ${#names} )); then
+      read "name?  Another profile name (Enter to finish): "
+      [[ -z "$name" ]] && break
+    else
+      read "name?  First profile name [personal]: "
+      name="${name:-personal}"
+    fi
+    if [[ ! "$name" =~ '^[a-z0-9][a-z0-9-]*$' ]]; then
+      warn "use lowercase letters, digits and dashes"; continue
+    fi
+    if (( ${names[(Ie)$name]} )); then warn "'$name' already added"; continue; fi
+    print -r -- "    1) Claude subscription (Pro/Max/Team) — sign in with your account"
+    print -r -- "    2) Inference gateway / API — an Anthropic-compatible base URL and token"
+    read "kind?    Type for '$name' [1]: "; kind="${kind:-1}"
+    url=""
+    if [[ "$kind" == 2 ]]; then
+      while [[ -z "$url" ]]; do read "url?    Base URL (e.g. https://gateway.example.com): "; done
+      desc_default="inference gateway"
+    else
+      desc_default="Claude subscription"
+    fi
+    read "desc?    One-line description [$desc_default]: "; desc="${desc:-$desc_default}"
+    names+=("$name"); kinds+=("$kind"); descs+=("$desc"); urls+=("$url")
+  done
+
+  local def="${names[1]}" shared="${names[1]}"
+  if (( ${#names} > 1 )); then
+    read "def?  Default profile (a bare \`claude\`) [${names[1]}]: "; def="${def:-${names[1]}}"
+    (( ${names[(Ie)$def]} )) || { warn "unknown profile '$def' — using ${names[1]}"; def="${names[1]}"; }
+    print -r -- "  One profile owns the shared history, projects, skills, plugins and MCP;"
+    print -r -- "  the others link to it. Pick the one you use most (usually the default)."
+    read "shared?  Shared profile [$def]: "; shared="${shared:-$def}"
+    (( ${names[(Ie)$shared]} )) || { warn "unknown profile '$shared' — using $def"; shared="$def"; }
+  fi
+
+  # Drop settings for profiles that are no longer listed, then write the new ones
+  "$PY" - "$file" <<'PY'
+import re, sys
+path = sys.argv[1]
+s = open(path).read()
+s = re.sub(r"(?m)^CWS_PROFILE_[A-Za-z0-9_]+_(DESC|BASE_URL)=.*\n", "", s)
+open(path, "w").write(s)
+PY
+  cws_set CWS_PROFILES "${names[*]}" "$file"
+  cws_set CWS_DEFAULT_PROFILE "$def" "$file"
+  cws_set CWS_SHARED_PROFILE "$shared" "$file"
+  local i
+  for i in {1..${#names}}; do
+    cws_set "CWS_PROFILE_${names[$i]}_DESC" "${descs[$i]}" "$file"
+    [[ -n "${urls[$i]}" ]] && cws_set "CWS_PROFILE_${names[$i]}_BASE_URL" "${urls[$i]}" "$file"
+  done
+  say "profiles written to $file: ${names[*]}"
+  # Data is never deleted: say what is now unused rather than removing it
+  local old
+  for old in ${=current}; do
+    (( ${names[(Ie)$old]} )) || say "'$old' is no longer listed — ~/.claude-$old is left as it is"
+  done
+}
+
+# Ask for the rest of the settings. Defaults come from the current config.
+configure_basics() {
+  local file="$1" ans tz wtz
+  local org="${CWS_ORG:-}" role="${CWS_USER_ROLE:-data/platform engineer}"
+  read "ans?  Organisation (for the skills' wording) [${org:-none}]: "; org="${ans:-$org}"
+  read "ans?  Your role [$role]: "; role="${ans:-$role}"
+  tz="${CWS_TIMEZONE:-$(local_timezone)}"
+  read "ans?  Time zone [$tz]: "; tz="${ans:-$tz}"
+  wtz="${CWS_TIMEZONE_WINDOWS:-$(windows_timezone "$tz")}"
+  read "ans?  Same zone as Outlook names it [${wtz:-UTC}]: "; wtz="${ans:-${wtz:-UTC}}"
+  local ticket="${CWS_TICKET_EXAMPLE:-PROJ-123}"
+  read "ans?  An example ticket key, for prompts [$ticket]: "; ticket="${ans:-$ticket}"
+  local jira="${CWS_JIRA_CLOUD_ID:-}"
+  read "ans?  Atlassian cloud id for the weekly review, if any [${jira:-none}]: "; jira="${ans:-$jira}"
+  local yazi="${CWS_INSTALL_YAZI:-1}"
+  read "ans?  Install the yazi/glow/pandoc Markdown extras? [Y/n]: "
+  [[ "${${ans:-y}:l}" == y* ]] && yazi=1 || yazi=0
+  cws_set CWS_ORG "$org" "$file"
+  cws_set CWS_USER_ROLE "$role" "$file"
+  cws_set CWS_TIMEZONE "$tz" "$file"
+  cws_set CWS_TIMEZONE_WINDOWS "$wtz" "$file"
+  cws_set CWS_TICKET_EXAMPLE "$ticket" "$file"
+  cws_set CWS_JIRA_CLOUD_ID "$jira" "$file"
+  cws_set CWS_INSTALL_YAZI "$yazi" "$file"
+}
+
 # Symlink dst → src unless it already points there
 link() {
   local src="$1" dst="$2"
@@ -85,24 +233,33 @@ print -r -- "claude-worksessions $VERSION"
 step "Configuration"
 LINK="$HOME/.config/claude-worksessions/config.env"
 if [[ -z "$CONFIG" && -e "$LINK" ]]; then CONFIG="${LINK:A}"; fi
+FIRST_RUN=0
 if [[ -z "$CONFIG" ]]; then
   local root_default="$HOME/work_sessions" root
   if (( YES )); then root="$root_default"
-  else read "root?Work root (where request folders live) [$root_default]: "; root="${root:-$root_default}"; fi
+  else read "root?  Work root (where request folders live) [$root_default]: "; root="${root:-$root_default}"; fi
   root="${~root}"
   CONFIG="$root/_config/config.env"
   if [[ ! -f "$CONFIG" ]]; then
+    [[ -n "$PY" ]] || { print -u2 "install.sh: no python3 yet — run: xcode-select --install"; exit 1; }
     run mkdir -p "${CONFIG:h}"
-    if (( ! DRY )); then
-      sed "s|^CWS_WORK_ROOT=.*|CWS_WORK_ROOT=\"${root/#$HOME/\$HOME}\"|" "$REPO/config/config.example.env" > "$CONFIG"
-    fi
-    say "created $CONFIG from the example."
-    say "Edit it (org, time zone, profiles, gateway URL) and run ./install.sh again."
-    exit 0
+    if (( DRY )); then say "[dry-run] would create $CONFIG and ask about profiles"; exit 0; fi
+    sed "s|^CWS_WORK_ROOT=.*|CWS_WORK_ROOT=\"${root/#$HOME/\$HOME}\"|" "$REPO/config/config.example.env" > "$CONFIG"
+    say "created $CONFIG"
+    FIRST_RUN=1
   fi
 fi
 [[ -f "$CONFIG" ]] || { print -u2 "install.sh: config $CONFIG not found"; exit 1; }
 say "using $CONFIG"
+
+# First run, or --profiles: ask instead of making them edit the file
+if (( FIRST_RUN || RECONF )) && (( ! DRY && ! YES )); then
+  # current values as defaults
+  CWS_CONFIG="$CONFIG" source "$REPO/shell/worksessions.zsh" >/dev/null 2>&1
+  unalias -m 'claude-*' 2>/dev/null || true
+  (( FIRST_RUN )) && configure_basics "$CONFIG"
+  configure_profiles "$CONFIG"
+fi
 [[ "$CONFIG" == "${LINK:A}" ]] || link "$CONFIG" "$LINK"
 
 # Load it exactly as the shell functions will
@@ -187,11 +344,9 @@ else
 fi
 
 # Python for the JSON helpers: the system one, else Homebrew's, else install it
-PY=""
-if [[ -x /usr/bin/python3 ]]; then PY=/usr/bin/python3
-elif command -v python3 >/dev/null 2>&1; then PY="$(command -v python3)"
-elif command -v brew >/dev/null 2>&1 && (( ! DRY )); then
-  say "installing python…"; brew install python >/dev/null && PY="$(command -v python3)"
+resolve_py
+if [[ -z "$PY" ]] && command -v brew >/dev/null 2>&1 && (( ! DRY )); then
+  say "installing python…"; brew install python >/dev/null && resolve_py
 fi
 [[ -n "$PY" ]] || { print -u2 "install.sh: no python3 — install the Command Line Tools or run: brew install python"; exit 1; }
 export CWS_PYTHON="$PY"

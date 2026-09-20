@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.2.0] — 2026-09-20
+
+Setup asks instead of expecting a hand-edited config.
+
+- First run is a wizard: work root, org, role, time zone (guessed from the Mac),
+  Outlook's name for it, example ticket key, Atlassian cloud id, Markdown extras.
+- Profiles are prompted for: any number, each a Claude subscription (sign-in offered)
+  or an inference gateway (base URL + token, no login needed). It also asks which is
+  the default and which owns the shared history.
+- `install.sh --profiles` re-runs the profile questions; stale profile settings are
+  dropped from the config, and a dropped profile's `~/.claude-<name>` is left in place.
+- No more "edit the file and run it again" step.
+
 ## [1.1.0] — 2026-09-20
 
 The installer no longer assumes anything is set up first.

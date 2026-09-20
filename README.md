@@ -25,12 +25,21 @@ cd ~/Repos/claude-worksessions
 source ~/.zshrc
 ```
 
-Needs macOS, zsh, Homebrew, Python 3 (the system one is fine) and
-[Claude Code](https://docs.claude.com/claude-code). `install.sh` brew-installs
-`fzf`, and `yazi glow pandoc` when the yazi extras are on.
+Needs macOS with zsh, and nothing else: on a clean Mac the installer lists what is
+missing — Xcode Command Line Tools, Homebrew, Claude Code, `fzf`, and `yazi glow
+pandoc` for the Markdown extras — asks once, and installs the lot. It then offers to
+open each profile so you can sign in.
 
-`./install.sh --dry-run` shows what it would change. Re-running is safe: unchanged
-things are left alone, anything replaced is backed up as `*.bak-<timestamp>`.
+- `--dry-run` shows what it would change and changes nothing
+- `--no-bootstrap` installs nothing, only reports what's missing
+- `--yes` never prompts (skips the gateway token and the sign-in offer)
+
+Re-running is safe: unchanged things are left alone, anything replaced is backed up as
+`*.bak-<timestamp>`.
+
+Two things stay outside the package: **connectors** (Atlassian for the weekly review,
+Microsoft 365 for the recap) come with your Claude account once you sign in, and any
+**local MCP servers** you use are configured in Claude Code itself.
 
 ## Configure
 

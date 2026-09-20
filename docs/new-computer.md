@@ -12,9 +12,10 @@ What lives where decides what you need to carry:
 
 ## Steps
 
-1. Install Homebrew and Claude Code. Sign in to OneDrive (or whatever syncs the work
-   root) and let the work root finish syncing — **same path as before** if you can, so
-   folder paths in old transcripts still resolve.
+1. Sign in to OneDrive (or whatever syncs the work root) and let it finish syncing —
+   **same path as before** if you can, so folder paths in old transcripts still resolve.
+   Command Line Tools, Homebrew, Claude Code and the packages are installed by
+   `install.sh` in step 3; nothing to do by hand.
 2. Copy the history from the old machine:
    ```sh
    rsync -a old-mac:~/.claude-personal/projects/ ~/.claude-personal/projects/
@@ -26,7 +27,9 @@ What lives where decides what you need to carry:
    cd ~/Repos/claude-worksessions
    ./install.sh --config "<work root>/_config/config.env"
    ```
-4. Log in to each profile once: `claude-personal`, `claude-work`.
+4. Sign in when `install.sh` offers to open each profile (a gateway profile needs no
+   login — its token is enough). Your claude.ai connectors come back with the login;
+   re-add any local MCP servers you use.
 5. Check: `claude-new -l`, `claude-audit --week`, `claude-search <something you know>`.
 
 If the work root ends up at a **different path** (e.g. a different OneDrive tenant

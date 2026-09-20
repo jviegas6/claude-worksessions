@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.1.0] — 2026-09-20
+
+The installer no longer assumes anything is set up first.
+
+- Bootstraps a clean Mac: lists what's missing (Xcode Command Line Tools, Homebrew,
+  Claude Code, brew packages), asks once, installs it, and adds Homebrew to
+  `~/.zprofile`. `--no-bootstrap` reports without installing.
+- Offers to open each profile so you can sign in, and remembers it did. A profile on
+  an API gateway is skipped — its token is enough.
+- No longer needs `/usr/bin/python3`: the system Python is preferred, otherwise any
+  `python3`, otherwise Homebrew's — so Command Line Tools are not a hard requirement.
+- Docs say what stays outside the package: claude.ai connectors (they follow your
+  login) and any local MCP servers.
+
 ## [1.0.0] — 2026-09-18
 
 First packaged release of a setup that grew by hand.

@@ -6,6 +6,7 @@
 #   ./install.sh --config FILE        use this config.env
 #   ./install.sh --dry-run            print what would change, change nothing
 #   ./install.sh --no-brew            don't install Homebrew packages
+#   ./install.sh --no-bootstrap       don't install anything missing, just report it
 #   ./install.sh --yes                don't prompt (tokens are then skipped)
 
 emulate -L zsh
@@ -13,7 +14,7 @@ setopt pipe_fail
 
 REPO="${0:A:h}"
 VERSION="$(<"$REPO/VERSION")"
-DRY=0 BREW=1 YES=0 CONFIG=""
+DRY=0 BREW=1 YES=0 NOBOOT=0 CONFIG=""
 STAMP="$(date +%Y%m%d-%H%M%S)"
 
 while (( $# )); do
@@ -21,8 +22,9 @@ while (( $# )); do
     --config)  CONFIG="${2:A}"; shift 2 ;;
     --dry-run) DRY=1; shift ;;
     --no-brew) BREW=0; shift ;;
+    --no-bootstrap) NOBOOT=1; BREW=0; shift ;;
     --yes|-y)  YES=1; shift ;;
-    -h|--help) sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) print -u2 "install.sh: unknown option $1"; exit 1 ;;
   esac
 done
@@ -44,7 +46,7 @@ backup() {
 render() {
   local src="$1" dst="$2" tmp
   tmp="$(mktemp)"
-  /usr/bin/python3 - "$src" "$tmp" <<'PY'
+  "$PY" - "$src" "$tmp" <<'PY'
 import os, re, sys
 src, dst = sys.argv[1], sys.argv[2]
 text = open(src).read()
@@ -115,17 +117,87 @@ export HOME CWS_WORK_ROOT="$CLAUDE_WORK_ROOT" CWS_ORG CWS_USER_ROLE CWS_TIMEZONE
 say "work root  $CWS_WORK_ROOT"
 say "profiles   ${PROFILES[*]} (default $CWS_DEFAULT_PROFILE, shared $CWS_SHARED_PROFILE)"
 
-# --- 2. packages ---------------------------------------------------------------------
-step "Packages"
+# --- 2. prerequisites --------------------------------------------------------------------
+# Nothing here is assumed to be present: a clean Mac gets the Command Line Tools,
+# Homebrew, Claude Code and the packages, after one confirmation.
+step "Prerequisites"
+
+brew_path() { [[ -x /opt/homebrew/bin/brew ]] && print -r -- /opt/homebrew/bin/brew ||
+              { [[ -x /usr/local/bin/brew ]] && print -r -- /usr/local/bin/brew; } }
+have_clt()  { /usr/bin/xcode-select -p >/dev/null 2>&1 }
+have_brew() { command -v brew >/dev/null 2>&1 || [[ -n "$(brew_path)" ]] }
+
 typeset -a want=(fzf)
 (( CWS_INSTALL_YAZI )) && want+=(yazi glow pandoc)
-typeset -a missing=()
+typeset -a pkgs_missing=() plan=()
 local pkg
-for pkg in $want; do command -v $pkg >/dev/null || missing+=($pkg); done
-command -v claude >/dev/null || warn "Claude Code (claude) is not on PATH — install it: https://docs.claude.com/claude-code"
-if (( ! ${#missing} )); then say "all present: ${want[*]}"
-elif (( BREW )) && command -v brew >/dev/null; then run brew install $missing
-else warn "missing: ${missing[*]} (install with: brew install ${missing[*]})"; fi
+for pkg in $want; do command -v $pkg >/dev/null 2>&1 || pkgs_missing+=($pkg); done
+
+have_clt  || plan+=("Xcode Command Line Tools (git, compilers — opens Apple's installer)")
+have_brew || plan+=("Homebrew (https://brew.sh — may ask for your admin password)")
+command -v claude >/dev/null 2>&1 || plan+=("Claude Code (claude)")
+(( ${#pkgs_missing} )) && plan+=("Homebrew packages: ${pkgs_missing[*]}")
+
+if (( ! ${#plan} )); then
+  say "all present: Command Line Tools, Homebrew, Claude Code, ${want[*]}"
+else
+  print -r -- "  This Mac is missing:"
+  local it
+  for it in $plan; do print -r -- "    · $it"; done
+  local ans="y"
+  if (( DRY )); then say "[dry-run] would install the above"; ans="n"
+  elif (( ! YES && ! NOBOOT )); then read "ans?  Install them now? [Y/n]: "; ans="${ans:-y}"
+  elif (( NOBOOT )); then ans="n"; fi
+
+  if [[ "${ans:l}" == y* ]]; then
+    if ! have_clt; then
+      say "asking macOS for the Command Line Tools…"
+      /usr/bin/xcode-select --install 2>/dev/null || true
+      say "finish the dialog that just opened; waiting…"
+      local waited=0
+      while ! have_clt && (( waited < 1800 )); do sleep 10; (( waited += 10 )); done
+      have_clt && say "Command Line Tools ready" || warn "still not installed — rerun install.sh afterwards"
+    fi
+    if ! have_brew; then
+      say "installing Homebrew…"
+      NONINTERACTIVE=1 /bin/bash -c \
+        "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" || \
+        warn "Homebrew install failed — see https://brew.sh"
+    fi
+    local BREW_BIN="$(brew_path)"
+    if [[ -n "$BREW_BIN" ]]; then
+      eval "$("$BREW_BIN" shellenv)"
+      # Homebrew's own PATH line belongs in ~/.zprofile, where its installer puts it
+      if ! grep -qs 'brew shellenv' "$HOME/.zprofile"; then
+        print -r -- "eval \"\$($BREW_BIN shellenv)\"" >> "$HOME/.zprofile"
+        say "added brew shellenv to ~/.zprofile"
+      fi
+    fi
+    if ! command -v claude >/dev/null 2>&1; then
+      say "installing Claude Code…"
+      curl -fsSL https://claude.ai/install.sh | bash || warn "Claude Code install failed — see https://docs.claude.com/claude-code"
+      export PATH="$HOME/.local/bin:$PATH"
+    fi
+    if (( ${#pkgs_missing} )) && (( BREW )) && command -v brew >/dev/null 2>&1; then
+      brew install $pkgs_missing || warn "brew install failed for: ${pkgs_missing[*]}"
+    fi
+  else
+    warn "skipped — install by hand, then run ./install.sh again"
+  fi
+fi
+
+# Python for the JSON helpers: the system one, else Homebrew's, else install it
+PY=""
+if [[ -x /usr/bin/python3 ]]; then PY=/usr/bin/python3
+elif command -v python3 >/dev/null 2>&1; then PY="$(command -v python3)"
+elif command -v brew >/dev/null 2>&1 && (( ! DRY )); then
+  say "installing python…"; brew install python >/dev/null && PY="$(command -v python3)"
+fi
+[[ -n "$PY" ]] || { print -u2 "install.sh: no python3 — install the Command Line Tools or run: brew install python"; exit 1; }
+export CWS_PYTHON="$PY"
+say "python     $PY"
+command -v claude >/dev/null 2>&1 && say "claude     $(claude --version 2>/dev/null | head -1)" \
+  || warn "Claude Code is still not on PATH"
 
 # --- 3. work root ----------------------------------------------------------------------
 step "Work root"
@@ -169,7 +241,7 @@ for p in $PROFILES; do
   local url="${(P)urlvar:-}"
   if [[ -n "$url" ]]; then
     local settings="$pdir/settings.json" has_token token=""
-    has_token=$(/usr/bin/python3 -c 'import json,sys
+    has_token=$("$PY" -c 'import json,sys
 try: print(1 if json.load(open(sys.argv[1])).get("env",{}).get("ANTHROPIC_AUTH_TOKEN") else 0)
 except Exception: print(0)' "$settings")
     if (( ! has_token && ! YES && ! DRY )); then
@@ -177,7 +249,7 @@ except Exception: print(0)' "$settings")
     fi
     if (( DRY )); then say "[dry-run] set ANTHROPIC_BASE_URL in $settings"
     else
-      TOKEN="$token" URL="$url" /usr/bin/python3 - "$settings" <<'PY'
+      TOKEN="$token" URL="$url" "$PY" - "$settings" <<'PY'
 import json, os, sys
 p = sys.argv[1]
 try: d = json.load(open(p))
@@ -195,6 +267,35 @@ PY
 done
 if [[ ! -e "$HOME/.claude" ]]; then link ".claude-$CWS_SHARED_PROFILE" "$HOME/.claude"
 else say "kept ~/.claude"; fi
+
+# --- 4b. sign in -----------------------------------------------------------------------
+# Each config dir has its own login, and there is no documented way to ask Claude Code
+# whether one is signed in, so we offer to open each profile once and note that we did.
+step "Sign in"
+for p in $PROFILES; do
+  pdir="$HOME/.claude-$p"
+  local urlvar2="CWS_PROFILE_${p}_BASE_URL" marker="$pdir/.cws-signed-in"
+  if [[ -n "${(P)urlvar2:-}" ]]; then
+    say "$p: uses the gateway token — no login needed"
+    continue
+  fi
+  if [[ -f "$marker" ]]; then say "$p: signed in earlier (delete $marker to redo)"; continue; fi
+  if (( DRY )); then say "[dry-run] would offer to sign in to $p"; continue; fi
+  if (( YES )) || ! command -v claude >/dev/null 2>&1; then
+    warn "$p: not signed in yet — run: CLAUDE_CONFIG_DIR=$pdir claude"
+    continue
+  fi
+  local ans2=""
+  read "ans2?  Open Claude now to sign in to the '$p' profile? [Y/n]: "
+  if [[ "${${ans2:-y}:l}" == y* ]]; then
+    say "starting Claude — sign in if asked, then type /exit to come back"
+    CLAUDE_CONFIG_DIR="$pdir" command claude || true
+    touch "$marker"
+    say "$p: done"
+  else
+    warn "$p: skipped — run later: CLAUDE_CONFIG_DIR=$pdir claude"
+  fi
+done
 
 # --- 5. commands and skills -----------------------------------------------------------
 step "Commands"
@@ -239,7 +340,7 @@ if [[ -f "$ZSHRC" ]] && grep -qF "$BEGIN" "$ZSHRC"; then
   if [[ "$current" == "$BLOCK" ]]; then say "block up to date"
   else
     backup "$ZSHRC"
-    (( DRY )) || BLOCK="$BLOCK" /usr/bin/python3 - "$ZSHRC" "$BEGIN" "$END" <<'PY'
+    (( DRY )) || BLOCK="$BLOCK" "$PY" - "$ZSHRC" "$BEGIN" "$END" <<'PY'
 import os, re, sys
 p, b, e = sys.argv[1:4]
 s = open(p).read()

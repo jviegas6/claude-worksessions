@@ -10,7 +10,7 @@ for b in claude-audit claude-search; do
 done
 if grep -qF "# >>> claude-worksessions >>>" "$HOME/.zshrc" 2>/dev/null; then
   cp -p "$HOME/.zshrc" "$HOME/.zshrc.bak-$(date +%Y%m%d-%H%M%S)"
-  /usr/bin/python3 - "$HOME/.zshrc" <<'PY'
+  "$PY" - "$HOME/.zshrc" <<'PY'
 import re, sys
 p = sys.argv[1]; s = open(p).read()
 s = re.sub(r"\n?# >>> claude-worksessions >>>.*?# <<< claude-worksessions <<<\n?", "\n", s, flags=re.S)

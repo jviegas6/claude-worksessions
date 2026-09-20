@@ -29,6 +29,12 @@ _cws_load_config() {
 }
 _cws_load_config
 
+# Python for the small JSON helpers: the system one if it is there, else any python3
+if [[ -z "${CWS_PYTHON:-}" || ! -x "${CWS_PYTHON:-}" ]]; then
+  if [[ -x /usr/bin/python3 ]]; then export CWS_PYTHON=/usr/bin/python3
+  else export CWS_PYTHON="$(command -v python3 2>/dev/null)"; fi
+fi
+
 export CWS_CONFIG="${CWS_CONFIG:-$HOME/.config/claude-worksessions/config.env}"
 export CLAUDE_WORK_ROOT="${CWS_WORK_ROOT:-${CLAUDE_WORK_ROOT:-$HOME/work_sessions}}"
 : ${CWS_PROFILES:="personal work"}
@@ -82,7 +88,7 @@ claude-new() {
         local d
         for d in "$CLAUDE_WORK_ROOT"/[0-9][0-9][0-9][0-9]/[0-9][0-9]/[0-9][0-9]/*(/On[1,15]N); do
           local meta="$d/.session.json" info="?"
-          [[ -f $meta ]] && info=$(/usr/bin/python3 -c 'import json,sys
+          [[ -f $meta ]] && info=$("$CWS_PYTHON" -c 'import json,sys
 d = json.load(open(sys.argv[1]))
 print("{:<10} {:<14} {:<9}".format("[" + (d.get("profile") or "?") + "]", d.get("ticket") or "-",
                                   "no-audit" if d.get("audit") is False else ""))' "$meta" 2>/dev/null)
@@ -188,7 +194,7 @@ print("{:<10} {:<14} {:<9}".format("[" + (d.get("profile") or "?") + "]", d.get(
   started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   WS_NAME="$name" WS_PROFILE="$profile" WS_TICKET="$ticket" WS_SLUG="$slug" \
   WS_STARTED="$started" WS_DIR="$dir" WS_AUDIT="$audit" \
-    /usr/bin/python3 -c '
+    "$CWS_PYTHON" -c '
 import json, os, socket
 p = os.path.join(os.environ["WS_DIR"], ".session.json")
 json.dump({
@@ -211,7 +217,7 @@ json.dump({
   local rc=$?
 
   ended="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  WS_ENDED="$ended" WS_DIR="$dir" /usr/bin/python3 -c '
+  WS_ENDED="$ended" WS_DIR="$dir" "$CWS_PYTHON" -c '
 import json, os
 p = os.path.join(os.environ["WS_DIR"], ".session.json")
 try:

@@ -47,13 +47,20 @@ For a session with no request folder (e.g. started in the root), add its session
 (permissions, job errors, new features, security, ...). `claude-new` suggests one from
 the session name and from the types already in use.
 
+**The type is what started the work, not everything it touches.** A job error that
+needs investigation, then a permission change, then a documentation update is
+`job errors` throughout — the permissions and documentation work only exists because
+the job failed. Type the trigger, not the detours.
+
 **If the work clearly moves to a different kind of task, change it**: run
 `claude-type "<type>"` in the session folder and say in one line that you did. That sets
 the type for **this session only** — the folder keeps its own default for the next one,
 and `claude-type --folder "<type>"` changes that default instead. Reuse an existing type
 where one fits (`claude-type` with no argument shows the current one and where it came
-from); invent a new one only when nothing fits. Don't change it for a passing detour —
-only when the session's real subject has shifted.
+from); invent a new one only when nothing fits. Change it only when the **trigger**
+turns out to have been something else — what looked like a job error was really a
+permissions request all along — never because the work passed through another type on
+the way.
 
 The ticket is what lets the weekly functional review put a session on the right
 tracker row without asking. If a session sitting in a request folder has no

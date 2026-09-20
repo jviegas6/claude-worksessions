@@ -118,7 +118,9 @@ Produce, in this order:
 3. **Where the time went** — Claude session `worked_exact` totals grouped by
    topic **and by task type** (`claude-audit --day YYYY-MM-DD --by-type`: permissions,
    job errors, new features, ...; sessions with no type show as `(no type)`), plus
-   scheduled meeting hours. Give the two separately; they overlap
+   scheduled meeting hours. A type names what *triggered* a session, so a day of
+   `job errors` may well contain the permission changes and write-ups those errors
+   caused — say that rather than implying the day held no permissions work. Give the two separately; they overlap
    (a session can run during a meeting) so do not add them into a single "total
    hours worked" figure and present it as fact.
 4. **Threads still open** — questions asked of the user that they did not answer,

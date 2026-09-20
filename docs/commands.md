@@ -17,10 +17,13 @@ that profile. `ended_at` is filled in when Claude exits.
   you get a menu.
 - `-n` / `--no-audit` keeps the session out of `claude-audit` and the weekly review.
   `claude-search` still finds it.
-- `-T type` / `--type` sets the **task type** — what kind of work this is
+- `-T type` / `--type` sets the **task type** — what kind of work *starts* this session
   (permissions, job errors, new features, security, ...). Left out, `claude-new` guesses
-  one from the name and offers the types you have used before; Enter takes the guess, a
-  number picks from the list, anything else is a new type, `-` means none.
+  from the name and offers the types you have used before: Enter takes the guess, a
+  number picks from the list, anything else is a new type, `-` means none. When nothing
+  in the name matches there is no default — it asks you to pick.
+  The type is the **trigger**, not the detours: a job error that needs investigation, a
+  permission change and a doc update is `job errors`.
 - `-l` lists the 15 most recent sessions with profile, ticket and type.
 
 ## claude-type

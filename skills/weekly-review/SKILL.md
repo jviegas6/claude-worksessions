@@ -86,8 +86,9 @@ script's tiers are a starting point. Before asking anything:
   investigations) unless it is a specific task with its own ticket. The ledger
   records such an epic as the task's `default_ticket`, so a subject on that task
   mapped to `Other` lands on the epic anyway.
-- **The session's task type is evidence.** `claude-new` records what kind of work a
-  session is (permissions, job errors, ...); it shows in the detail CSV's `task_type`
+- **The session's task type is evidence.** `claude-new` records what *started* the
+  session (permissions, job errors, ...), not the kinds of work it passed through — a
+  job error that led to a permission change and a write-up stays `job errors`; it shows in the detail CSV's `task_type`
   and per row in `task_types` in the breakdown. Use it to tell two subjects apart and
   to write the row's comment. It never overrides a declared ticket.
 - **Declared tickets are facts.** A session started with `claude-new -t` carries its

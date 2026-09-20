@@ -17,17 +17,38 @@ that profile. `ended_at` is filled in when Claude exits.
   you get a menu.
 - `-n` / `--no-audit` keeps the session out of `claude-audit` and the weekly review.
   `claude-search` still finds it.
-- `-l` lists the 15 most recent sessions with profile and ticket.
+- `-T type` / `--type` sets the **task type** — what kind of work this is
+  (permissions, job errors, new features, security, ...). Left out, `claude-new` guesses
+  one from the name and offers the types you have used before; Enter takes the guess, a
+  number picks from the list, anything else is a new type, `-` means none.
+- `-l` lists the 15 most recent sessions with profile, ticket and type.
+
+## claude-type
+
+```
+claude-type                      show this session's task type
+claude-type security             change it (run from anywhere inside the session folder)
+claude-type --backfill [--apply] guess a type for older sessions that have none
+```
+
+The type is stored in `.session.json` and feeds `claude-audit --by-type`, the daily
+recap and the weekly review. Claude changes it itself when a session's subject clearly
+shifts, and says so. `--backfill` guesses from the session name — it prints what it
+would set, and only writes with `--apply`; correct any of them with `claude-type`.
 
 ## claude-audit
 
 ```
 claude-audit [--day [DATE] | --week [DATE] | --month [YYYY-MM] | --from DATE --to DATE]
-             [--detail | --reconcile | --sessions] [--copy] [--csv [FILE]]
+             [--detail | --reconcile | --sessions | --by-type] [--copy] [--csv [FILE]]
 claude-audit --week DATE --propose        # weekly review: what needs deciding
 claude-audit --apply decisions.json       # weekly review: record decisions in the ledger
 claude-audit --schema                     # the activity-file format the skills write
 ```
+
+`--by-type` groups the period's hours by task type (sessions without one show as
+`(no type)`). The weekly summary table and CSV carry a **Task Type** column; `--copy`
+leaves it out so the clipboard still matches the tracker's own columns.
 
 Reads every transcript under `~/.claude-<profile>/projects`, measures time actually
 worked (stalls capped), and merges the meetings, mail and chats the skills saved in

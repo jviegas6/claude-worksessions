@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.5.0] — 2026-09-20
+
+Every session now records **what kind of work it is**.
+
+- `.session.json` gains `task_type` (permissions, job errors, new features, security,
+  …). `claude-new` guesses one from the session name, offers the types already in use,
+  and takes anything you type; `-T type` skips the prompt.
+- `claude-type` shows or changes it mid-session, from anywhere inside the session
+  folder. CLAUDE.md tells Claude to change it — and say so — when the subject shifts.
+- `claude-type --backfill` guesses types for older sessions; it only writes with
+  `--apply`.
+- `claude-audit`: `task_type` column in the sessions and detail CSVs, a `Task Type`
+  column in the weekly table and CSV (never in `--copy`, which must match the
+  tracker's columns), `task_types` in the breakdown, and a new `--by-type` view with
+  hours per type.
+- The daily recap reports where the time went by type; the weekly review uses type as
+  supporting evidence and reports the week's split.
+
 ## [1.4.1] — 2026-09-20
 
 - `docs/folder-layout.md`: when request folders move, **rename** the Claude history

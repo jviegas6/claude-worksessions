@@ -44,7 +44,7 @@ claude-audit --day YYYY-MM-DD --sessions --csv -
 
 This is the most reliable source: it reads the local transcripts. Columns that
 matter are `start`, `end`, `worked_exact`, `worked_h`, `title`, `folder`,
-`profile`, `cost_usd`. Use `title` as the name of the piece of work.
+`profile`, `task_type`, `cost_usd`. Use `title` as the name of the piece of work.
 
 Read the numbers correctly: `elapsed` is wall-clock and is **not** time worked —
 a session left open overnight shows hours. Quote `worked_exact` for the real
@@ -116,7 +116,9 @@ Produce, in this order:
    as a table with time, source, and what happened. This is the core of the
    recap; it is what makes the day legible.
 3. **Where the time went** — Claude session `worked_exact` totals grouped by
-   topic, plus scheduled meeting hours. Give the two separately; they overlap
+   topic **and by task type** (`claude-audit --day YYYY-MM-DD --by-type`: permissions,
+   job errors, new features, ...; sessions with no type show as `(no type)`), plus
+   scheduled meeting hours. Give the two separately; they overlap
    (a session can run during a meeting) so do not add them into a single "total
    hours worked" figure and present it as fact.
 4. **Threads still open** — questions asked of the user that they did not answer,
@@ -202,6 +204,7 @@ Evidence that two events are one subject, strongest first:
 - **Same subject line** across emails (`Re:` chains) — always one subject.
 - **Same chat, same topic**, even across separate bursts.
 - **Same counterparties plus the same system named** in both.
+- **The same task type** on both sides is weak support, never evidence on its own.
 
 Name the subject after the work, not the meeting invite: "Cost pipeline
 (Jane Doe)" beats "Roadmap + cost pipeline". Keep names stable

@@ -121,9 +121,9 @@ _meta_cache = {}
 
 
 def session_meta(cwd):
-    """Profile and Jira ticket recorded by `claude-new` in the session folder."""
+    """Profile, Jira ticket and task type recorded by `claude-new` in the session folder."""
     if not cwd:
-        return {"profile": "unknown", "ticket": "", "audit": True}
+        return {"profile": "unknown", "ticket": "", "task_type": "", "audit": True}
     if cwd not in _meta_cache:
         found = {}
         meta = os.path.join(cwd, ".session.json")
@@ -135,6 +135,8 @@ def session_meta(cwd):
                 found = {}
         _meta_cache[cwd] = {"profile": found.get("profile") or "unknown",
                             "ticket": (found.get("ticket") or "").strip(),
+                            # what kind of work this is: permissions, job errors, ...
+                            "task_type": (found.get("task_type") or "").strip(),
                             # `claude-new -n` sessions stay out of the audit and the review.
                             "audit": found.get("audit") is not False}
     return _meta_cache[cwd]
@@ -451,7 +453,8 @@ def session_as_event(row):
         "_start": row["_start"], "_end": row["_end"],
         "_worked_s": row["_worked_s"], "_key": row["session_id"],
         "_stamps": row["_stamps"], "_folder": row["_folder"], "_text": row["_text"],
-        "_ticket": row["ticket"], "_opening": row["_opening"], "_lines": row["_lines"],
+        "_ticket": row["ticket"], "_task_type": row["task_type"],
+        "_opening": row["_opening"], "_lines": row["_lines"],
     }
 
 
@@ -527,6 +530,7 @@ def build_row(session, busy_cap, read_cap, slot):
         "elapsed": hms((end - start).total_seconds()),
         "profile": session_meta(info["cwd"])["profile"],
         "ticket": session_meta(info["cwd"])["ticket"],
+        "task_type": session_meta(info["cwd"])["task_type"],
         "title": title,
         "folder": info["cwd"],
         "git_branch": info["branch"],
@@ -550,7 +554,8 @@ def build_row(session, busy_cap, read_cap, slot):
 
 
 COLUMNS = [
-    "date", "weekday", "start", "end", "worked_h", "worked_exact", "elapsed", "profile", "ticket", "title",
+    "date", "weekday", "start", "end", "worked_h", "worked_exact", "elapsed", "profile", "ticket",
+    "task_type", "title",
     "folder", "git_branch", "turns", "cost_usd", "lines_added", "lines_removed",
     "models", "last_prompt", "session_id", "cli_version",
 ]
@@ -581,6 +586,10 @@ REVIEW_COLUMNS = [
     "HLD", "LLD", "Development", "Hypercare", "Prod Support", "Leave",
     "Meetings & Interactions", "Utilization Perception",
 ]
+# Task type rides along in the table and the CSV. It is NOT in REVIEW_COLUMNS because
+# those are the tracker's own columns and --copy must paste exactly them.
+TYPE_COLUMN = "Task Type"
+REVIEW_COLUMNS_EXT = REVIEW_COLUMNS + [TYPE_COLUMN]
 FLAG_KEYS = ["ref_arch", "func_spec", "hld", "lld", "development", "hypercare", "prod_support"]
 FLAG_HEADERS = dict(zip(FLAG_KEYS, REVIEW_COLUMNS[4:11]))
 
@@ -588,7 +597,7 @@ BREAKDOWN_COLUMNS = [
     "row_id", "week", "task", "ticket", "utilization", "hours", "hours_exact",
     "sessions", "meetings", "emails", "chats", "confirmed", "declared", "auto_mapped", "inferred",
     "standalone", "flags_from", "jira_status", "flag_evidence", "comments_from",
-    "subject_ids", "subjects",
+    "task_types", "subject_ids", "subjects",
 ]
 
 IGNORE_TASK = "(ignore)"
@@ -1151,9 +1160,14 @@ def build_review(items, ledger, bucket_key, days, week_cfg, args, read_cap, idf=
         if ticket == "Other" and (tasks.get(task) or {}).get("default_ticket"):
             ticket = tasks[task]["default_ticket"]
         row = rows.setdefault((task, ticket), {"task": task, "ticket": ticket, "seconds": 0.0,
-                                               "subjects": []})
+                                               "subjects": [], "types": {}})
         row["seconds"] += s["seconds"]
         row["subjects"].append(s)
+        # the row's task type is whichever type the most time in it carries
+        for it in s.get("group") or []:
+            t = (it.get("_task_type") or "").strip()
+            if t:
+                row["types"][t] = row["types"].get(t, 0.0) + (it.get("_worked_s") or 1.0)
 
     detected = leave_days(items, days)
     leave = week_cfg.get("leave_days")
@@ -1217,6 +1231,9 @@ def build_review(items, ledger, bucket_key, days, week_cfg, args, read_cap, idf=
             "inferred": status("inferred"), "standalone": status("standalone"),
             "flags_from": flags_from, "jira_status": jira_status.get(r["ticket"], ""),
             "flag_evidence": flag_evidence, "comments_from": comments_from,
+            "task_types": "; ".join("{} {:.1f}h".format(k, v / 3600.0)
+                                    for k, v in sorted((r.get("types") or {}).items(),
+                                                       key=lambda kv: -kv[1])),
             "subject_ids": "; ".join(s["id"] for s in r["subjects"]),
             "subjects": "; ".join(s["name"] for s in r["subjects"]),
         })
@@ -1225,8 +1242,10 @@ def build_review(items, ledger, bucket_key, days, week_cfg, args, read_cap, idf=
         row = {"Week": bucket_key, "Task": r["task"], "Jira Ticket": r["ticket"], "Comments": comments}
         for k in FLAG_KEYS:
             row[FLAG_HEADERS[k]] = flags[k]
+        mix = r.get("types") or {}
         row.update({"Leave": "", "Meetings & Interactions": meetings,
-                    "Utilization Perception": "{}%".format(r["pct"])})
+                    "Utilization Perception": "{}%".format(r["pct"]),
+                    TYPE_COLUMN: max(mix.items(), key=lambda kv: kv[1])[0] if mix else ""})
         paste.append(row)
 
     if leave_pct:
@@ -1453,7 +1472,7 @@ def apply_decisions(path, ledger_path):
 ACTIVITY_DIR = os.path.join(DEFAULT_OUT_DIR, "activity")
 
 ACTIVITY_COLUMNS = [
-    "date", "weekday", "start", "end", "source", "task", "ticket", "title", "subject",
+    "date", "weekday", "start", "end", "source", "task", "ticket", "task_type", "title", "subject",
     "duration", "duration_exact", "worked", "scheduled", "counterparties", "detail", "cost_usd",
     "event_id", "subject_id", "session_id", "row_id",
 ]
@@ -1659,6 +1678,15 @@ def activity_view(items, ledger, idf, args, read_cap, buckets):
         duration[id(lead)] = round(subject_seconds(group, args.round_to * 60, read_cap) / 3600.0, 2)
         exact[id(lead)] = subject_seconds(group, 0, read_cap)
 
+    # A subject's type comes from its sessions; its meetings and mail inherit it.
+    type_by_subject = {}
+    for it in shown:
+        t = (it.get("_task_type") or "").strip()
+        if t:
+            type_by_subject.setdefault(it.get("subject_id"), {}).setdefault(t, 0.0)
+            type_by_subject[it["subject_id"]][t] += it.get("_worked_s") or 1.0
+    best_type = {sid: max(c.items(), key=lambda kv: kv[1])[0] for sid, c in type_by_subject.items()}
+
     rows = []
     for it in shown:
         if it["source"] in NOT_WORK:
@@ -1672,7 +1700,9 @@ def activity_view(items, ledger, idf, args, read_cap, buckets):
             "date": it["_start"].strftime("%Y-%m-%d"), "weekday": it["_start"].strftime("%a"),
             "start": it["_start"].strftime("%Y-%m-%d %H:%M"),
             "end": end.strftime("%Y-%m-%d %H:%M") if end else "",
-            "source": it["source"], "task": task, "ticket": ticket, "title": it["title"],
+            "source": it["source"], "task": task, "ticket": ticket,
+            "task_type": (it.get("_task_type") or best_type.get(it.get("subject_id"), "")),
+            "title": it["title"],
             "subject": it["subject"], "duration": duration.get(id(it), ""),
             "duration_exact": round(exact[id(it)] / 3600.0, 4) if id(it) in exact else "",
             "_exact_s": exact.get(id(it), 0.0),
@@ -1727,8 +1757,8 @@ def print_tracker_table(rows, first_head="Week"):
     """The rows as they will paste, every column. Long comments are shortened on screen
     only; the clipboard and the CSV get the full text."""
     heads = [first_head, "Task", "Jira", "Comments", "Ref Arch", "Func Spec", "HLD", "LLD", "Dev",
-             "Hypercare", "Prod Supp", "Leave", "M&I", "%"]
-    table = [[str(r[c]) for c in REVIEW_COLUMNS] for r in rows]
+             "Hypercare", "Prod Supp", "Leave", "M&I", "%", "Type"]
+    table = [[str(r.get(c, "")) for c in REVIEW_COLUMNS_EXT] for r in rows]
     for cells in table:
         cells[3] = cut(cells[3], 48)
     print_grid(heads, table)
@@ -1747,10 +1777,43 @@ def print_activity_table(rows):
     print_grid(heads, table)
 
 
+BY_TYPE_COLUMNS = ["task_type", "sessions", "hours", "hours_exact", "share", "tickets", "titles"]
+
+
+def by_type_view(srows):
+    """Hours per task type, from the type recorded on each session."""
+    buckets = {}
+    for r in srows:
+        key = r["task_type"] or "(no type)"
+        b = buckets.setdefault(key, {"task_type": key, "sessions": 0, "seconds": 0.0,
+                                     "tickets": set(), "titles": []})
+        b["sessions"] += 1
+        b["seconds"] += r["_worked_s"]
+        if r["ticket"]:
+            b["tickets"].add(r["ticket"])
+        b["titles"].append(r["title"])
+    total = sum(b["seconds"] for b in buckets.values()) or 1.0
+    rows = []
+    for b in sorted(buckets.values(), key=lambda b: -b["seconds"]):
+        rows.append({"task_type": b["task_type"], "sessions": b["sessions"],
+                     "hours": round(b["seconds"] / 3600.0, 2), "hours_exact": hms(b["seconds"]),
+                     "share": "{}%".format(int(round(b["seconds"] / total * 100))),
+                     "tickets": ", ".join(sorted(b["tickets"])),
+                     "titles": "; ".join(b["titles"][:6])})
+    return rows
+
+
+def print_by_type_table(rows):
+    heads = ["Task type", "Sessions", "Worked", "Share", "Tickets", "What"]
+    print_grid(heads, [[r["task_type"], str(r["sessions"]), r["hours_exact"], r["share"],
+                        cut(r["tickets"], 28), cut(r["titles"], 52)] for r in rows])
+
+
 def print_session_table(rows):
-    heads = ["Date", "Start", "End", "Worked", "Profile", "Ticket", "Title"]
+    heads = ["Date", "Start", "End", "Worked", "Profile", "Ticket", "Type", "Title"]
     print_grid(heads, [[r["date"], r["start"][11:16], r["end"][11:16], r["worked_exact"],
-                        r["profile"], r["ticket"] or "-", cut(r["title"], 60)] for r in rows])
+                        r["profile"], r["ticket"] or "-", cut(r["task_type"] or "-", 16),
+                        cut(r["title"], 52)] for r in rows])
 
 
 def copy_rows(rows, columns, header=None):
@@ -1986,6 +2049,9 @@ def main():
     extra.add_argument("--sessions", action="store_true",
                        help=adv("view: one row per Claude session per day, with profile, ticket, "
                                 "cost and models (the original session export)"))
+    extra.add_argument("--by-type", dest="by_type", action="store_true",
+                       help=adv("view: hours grouped by the session's task type "
+                                "(permissions, job errors, ...)"))
     extra.add_argument("--propose", action="store_true",
                        help=adv("score the week's undecided correlations and task mappings "
                                 "(writes _audit/review/proposals_<monday>.json)"))
@@ -2016,7 +2082,7 @@ def main():
     if args.apply:
         apply_decisions(args.apply, args.ledger)
         if not any((args.day, args.week, args.month, args.start, args.propose, args.detail, args.reconcile,
-                    args.sessions, args.copy, args.csv is not None)):
+                    args.sessions, args.by_type, args.copy, args.csv is not None)):
             return
 
     today = dt.date.today()
@@ -2032,7 +2098,15 @@ def main():
         return
 
     notes, breakdown = [], []
-    if args.sessions:
+    if args.by_type:
+        _, _, _, srows = gather(args, first, last, busy_cap, read_cap)
+        rows = by_type_view(srows)
+        worked = sum(r["_worked_s"] for r in srows)
+        view, columns, header, copy_header = "by-type", BY_TYPE_COLUMNS, None, BY_TYPE_COLUMNS
+        title = "By task type · {} · {} sessions, {} worked".format(
+            period_text(kind, first, last), len(srows), hms(worked))
+        printer, data_days = print_by_type_table, []
+    elif args.sessions:
         _, _, _, srows = gather(args, first, last, busy_cap, read_cap)
         worked = sum(r["_worked_s"] for r in srows)
         rows = [{k: v for k, v in r.items() if not k.startswith("_")} for r in srows]
@@ -2067,8 +2141,8 @@ def main():
         items, ledger, idf, _ = gather(args, span0, span1, busy_cap, read_cap)
         rows, breakdown, notes = summary_view(items, ledger, idf, args, read_cap, kind, weeks)
         first_head = "Day" if kind == "day" else "Week"
-        view, columns, copy_header = "summary", REVIEW_COLUMNS, None
-        header = [first_head] + REVIEW_COLUMNS[1:]
+        view, columns, copy_header = "summary", REVIEW_COLUMNS_EXT, None
+        header = [first_head] + REVIEW_COLUMNS_EXT[1:]
         title = "Summary · " + period_text(kind, first, last, weeks)
         printer = lambda r: print_tracker_table(r, first_head)
         data_days = list(daterange(span0, min(span1, today)))
@@ -2098,7 +2172,9 @@ def main():
             say("  nothing recorded in this period")
     for note in notes:
         say("  - " + note)
-    if args.copy and rows and copy_rows(rows, columns, copy_header):
+    # The clipboard gets the tracker's columns only -- Task Type is not one of them
+    copy_columns = REVIEW_COLUMNS if columns is REVIEW_COLUMNS_EXT else columns
+    if args.copy and rows and copy_rows(rows, copy_columns, copy_header):
         hint = ("click the first empty row of the tracker (column A) and paste" if view == "summary"
                 else "paste into any sheet; the first row is the header")
         say("\n  {} rows copied -- {}".format(len(rows), hint))

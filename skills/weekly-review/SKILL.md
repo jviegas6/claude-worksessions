@@ -86,6 +86,10 @@ script's tiers are a starting point. Before asking anything:
   investigations) unless it is a specific task with its own ticket. The ledger
   records such an epic as the task's `default_ticket`, so a subject on that task
   mapped to `Other` lands on the epic anyway.
+- **The session's task type is evidence.** `claude-new` records what kind of work a
+  session is (permissions, job errors, ...); it shows in the detail CSV's `task_type`
+  and per row in `task_types` in the breakdown. Use it to tell two subjects apart and
+  to write the row's comment. It never overrides a declared ticket.
 - **Declared tickets are facts.** A session started with `claude-new -t` carries its
   ticket; if the ledger already knows which task owns it, the subject is mapped and
   you do not ask. If the ticket is new, ask only which task it belongs to.
@@ -175,6 +179,11 @@ one block per week that starts in it.
 `--detail` covers exactly the days the summary covers and ends with a reconciliation
 line: `duration_exact` summed by `row_id` equals each summary row's hours to the
 second. If it ever says "does NOT reconcile", report that to the user — it is a bug.
+
+The terminal table and the CSV carry a **Task Type** column (the type most of the
+row's time carries); `--copy` leaves it out, because the clipboard has to match the
+tracker's own columns. `claude-audit --week YYYY-MM-DD --by-type` gives the week's
+split by type — worth a line in what you report.
 
 Show the rows. Then state plainly anything the run flagged: unmapped hours must
 be **zero** before the rows are pasted, and minor subjects left out.

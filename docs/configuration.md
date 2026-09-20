@@ -32,6 +32,7 @@ just as well — re-run `install.sh` afterwards so the skills and `CLAUDE.md` ca
 | `CWS_SHARED_PROFILE` | first profile | the profile that owns history, projects, skills, plugins, MCP |
 | `CWS_PROFILE_<name>_DESC` | — | the line shown in `claude-new`'s profile menu |
 | `CWS_PROFILE_<name>_BASE_URL` | — | route that profile through an API gateway (see below) |
+| `CWS_TASK_TYPES` | permissions, job errors, … | seed list of task types; the ones you have used are suggested first |
 | `CWS_INSTALL_YAZI` | `1` | install yazi, glow, pandoc and the Markdown extras |
 
 Changing a value: edit the file, open a new terminal. Re-run `install.sh` when you

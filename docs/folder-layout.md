@@ -29,13 +29,18 @@ lose track of it — unless the move is recorded.
 
 Record every move in `_audit/moved-folders.json` as `{"old absolute path": "new absolute
 path"}`. `claude-audit` and `claude-search` translate transcript paths through it
-(sub-folders too). For `claude --resume` to find the session from the new folder, also
-link Claude's per-folder history dir — its name is the path with every non-alphanumeric
-character turned into `-`:
+(sub-folders too). For `claude --resume` to find the session from the new folder, also rename Claude's
+per-folder history dir — its name is the path with every non-alphanumeric character
+turned into `-`. **Rename it; do not make the new name a symlink.** Tools that write
+beside a session's transcripts (large MCP results are saved to
+`<project dir>/<session id>/tool-results/`) refuse to write into a symlinked project
+dir, so the *current* path must be the real directory:
 
 ```sh
 cd ~/.claude-personal/projects
-ln -s "$(echo "$OLD" | sed 's/[^A-Za-z0-9]/-/g')" "$(echo "$NEW" | sed 's/[^A-Za-z0-9]/-/g')"
+enc() { echo "$1" | sed 's/[^A-Za-z0-9]/-/g'; }
+mv "./$(enc "$OLD")" "./$(enc "$NEW")"     # current path = real directory
+ln -s "$(enc "$NEW")" "./$(enc "$OLD")"    # old name still resolves, harmless
 ```
 
 Update the `path` in the folder's `.session.json` as well. Never edit the transcripts —

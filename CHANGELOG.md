@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.4.1] — 2026-09-20
+
+- `docs/folder-layout.md`: when request folders move, **rename** the Claude history
+  directory to the new path and leave the old name as the symlink — not the other way
+  round. A symlinked project directory makes tools that write beside the transcripts
+  fail: large MCP results are saved to `<project dir>/<session id>/tool-results/`, and
+  that write is refused when the project dir is a link.
+
 ## [1.4.0] — 2026-09-20
 
 - The standing context is now **copied into** the work root's `CLAUDE.md` instead of

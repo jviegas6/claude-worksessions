@@ -29,6 +29,7 @@ missing — Xcode Command Line Tools, Homebrew, Claude Code, `fzf`, and `yazi gl
 pandoc` for the Markdown extras — asks once, and installs the lot. It then offers to
 open each profile so you can sign in.
 
+- `--update` moves the checkout to the newest release and re-installs (`--update vX.Y.Z` for a specific one, `--edge` to follow main)
 - `--dry-run` shows what it would change and changes nothing
 - `--no-bootstrap` installs nothing, only reports what's missing
 - `--yes` never prompts (skips the gateway token and the sign-in offer)

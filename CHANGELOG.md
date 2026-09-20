@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.3.0] — 2026-09-20
+
+Updating in place.
+
+- `install.sh --update` fetches, moves the checkout to the newest release and
+  re-installs, so the skills and `CLAUDE.md` are re-rendered rather than drifting.
+  `--update vX.Y.Z` pins or rolls back; `--edge` follows main.
+- It stops rather than discarding anything if the checkout has local changes, and
+  prints the changelog entries between the old and new version.
+- A normal run notes when a newer release exists, fetching at most once a day.
+
 ## [1.2.0] — 2026-09-20
 
 Setup asks instead of expecting a hand-edited config.

@@ -8,6 +8,8 @@
 #   ./install.sh --no-brew            don't install Homebrew packages
 #   ./install.sh --no-bootstrap       don't install anything missing, just report it
 #   ./install.sh --profiles           add/remove/rename profiles, then install
+#   ./install.sh --update [vX.Y.Z]    move the checkout to the newest (or named) release
+#   ./install.sh --edge               move the checkout to main, then install
 #   ./install.sh --yes                don't prompt (tokens are then skipped)
 
 emulate -L zsh
@@ -15,7 +17,7 @@ setopt pipe_fail
 
 REPO="${0:A:h}"
 VERSION="$(<"$REPO/VERSION")"
-DRY=0 BREW=1 YES=0 NOBOOT=0 RECONF=0 CONFIG=""
+DRY=0 BREW=1 YES=0 NOBOOT=0 RECONF=0 UPDATE=0 EDGE=0 TARGET="" CONFIG=""
 STAMP="$(date +%Y%m%d-%H%M%S)"
 
 while (( $# )); do
@@ -25,8 +27,11 @@ while (( $# )); do
     --no-brew) BREW=0; shift ;;
     --no-bootstrap) NOBOOT=1; BREW=0; shift ;;
     --profiles|--reconfigure) RECONF=1; shift ;;
+    --update)  UPDATE=1; shift
+               if [[ "$1" == v* ]]; then TARGET="$1"; shift; fi ;;
+    --edge)    UPDATE=1; EDGE=1; shift ;;
     --yes|-y)  YES=1; shift ;;
-    -h|--help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) print -u2 "install.sh: unknown option $1"; exit 1 ;;
   esac
 done
@@ -66,6 +71,64 @@ windows_timezone() {
     UTC|Etc/UTC) print -r -- "UTC" ;;
     *) print -r -- "" ;;
   esac
+}
+
+# --- updating the checkout ---------------------------------------------------------
+newest_tag() { git -C "$REPO" tag -l 'v*' 2>/dev/null | sort -V | tail -1 }
+
+# Move the checkout to a newer release (or to main with --edge). Config, work folders,
+# profiles and history are never touched — only the checkout and what is rendered from it.
+update_repo() {
+  local target="$1" from="$VERSION" to=""
+  command -v git >/dev/null 2>&1 || { warn "git is not installed — update by hand"; return 1; }
+  git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1 || { warn "$REPO is not a git checkout — update by hand"; return 1; }
+  say "fetching…"
+  git -C "$REPO" fetch --tags --quiet 2>/dev/null || warn "fetch failed — using the tags already here"
+  if [[ -n "$(git -C "$REPO" status --porcelain)" ]]; then
+    warn "the checkout has local changes — commit or stash them first:"
+    git -C "$REPO" status --short | sed 's/^/      /'
+    return 1
+  fi
+  if [[ -n "$target" ]]; then to="$target"
+  elif (( EDGE )); then to="main"
+  else to="$(newest_tag)"; fi
+  [[ -n "$to" ]] || { warn "no releases found"; return 1; }
+  if [[ "$to" == "main" ]]; then
+    git -C "$REPO" checkout -q main && git -C "$REPO" pull -q --ff-only || { warn "could not move to main"; return 1; }
+  else
+    git -C "$REPO" checkout -q "$to" || { warn "could not check out $to"; return 1; }
+  fi
+  VERSION="$(<"$REPO/VERSION")"
+  if [[ "$from" == "$VERSION" ]]; then
+    say "already on $VERSION — re-installing it"
+  else
+    say "$from → $VERSION"
+    [[ -n "$PY" ]] && "$PY" - "$REPO/CHANGELOG.md" "$from" <<'PY'
+import re, sys
+path, frm = sys.argv[1], sys.argv[2]
+out, seen = [], False
+for block in re.split(r"(?m)^## ", open(path).read())[1:]:
+    ver = block.split("]")[0].lstrip("[")
+    if ver == frm:
+        break
+    out.append("## " + block.rstrip())
+print("\n".join("    " + l for l in "\n\n".join(out).splitlines()) if out else "")
+PY
+  fi
+  return 0
+}
+
+# One line when a newer release exists; fetches at most once a day
+version_notice() {
+  git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1 || return 0
+  local head="$REPO/.git/FETCH_HEAD"
+  if [[ ! -f "$head" || -n "$(find "$head" -mtime +1 2>/dev/null)" ]]; then
+    git -C "$REPO" fetch --tags --quiet 2>/dev/null || return 0
+  fi
+  local newest="$(newest_tag)"
+  [[ -n "$newest" && "$newest" != "v$VERSION" ]] && \
+    say "v$VERSION installed · $newest available — ./install.sh --update"
+  return 0
 }
 
 # Back up a file or directory we are about to replace (not symlinks we own)
@@ -228,6 +291,12 @@ link() {
 }
 
 print -r -- "claude-worksessions $VERSION"
+
+if (( UPDATE )); then
+  step "Update"
+  if (( DRY )); then say "[dry-run] would fetch and move the checkout"
+  else update_repo "$TARGET" || exit 1; fi
+fi
 
 # --- 1. config -----------------------------------------------------------------------
 step "Configuration"
@@ -518,6 +587,7 @@ if [[ -n "$legacy" ]]; then
 fi
 
 step "Done"
+(( UPDATE )) || version_notice
 say "Open a new terminal (or: source ~/.zshrc), then try:  claude-new -l   ·   ws   ·   claude-audit"
 (( DRY )) && say "(dry run — nothing was changed)"
 exit 0

@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.9.2] — 2026-09-21
 
 - Test suite (`tests/`, pytest) and a `tests` GitHub Actions workflow on every pull
   request. It fails if line coverage of `bin/` drops below 95%.

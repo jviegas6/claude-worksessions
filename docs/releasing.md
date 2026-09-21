@@ -4,13 +4,23 @@ Versions follow [semver](https://semver.org): **major** when an upgrade needs yo
 something (config key renamed, folder layout changed), **minor** for new features,
 **patch** for fixes.
 
-1. Update `VERSION` and add a section to `CHANGELOG.md`.
-2. Commit, tag, push, release:
+Nothing is pushed to `main` directly — every change, releases included, goes through a
+pull request, and the `tests` workflow must pass (it fails if coverage of `bin/` drops
+below 95%).
+
+1. On a branch, update `VERSION` and add a section to `CHANGELOG.md` alongside the change.
+2. Run the tests, push the branch and open a pull request:
    ```sh
+   .venv/bin/pytest                 # python3 -m venv .venv && .venv/bin/pip install pytest pytest-cov
+   git push -u origin HEAD
+   gh pr create --fill
+   ```
+3. Once it is merged, tag the merge commit and release it:
+   ```sh
+   git switch main && git pull
    v=$(cat VERSION)
-   git commit -am "Release v$v"
    git tag -a "v$v" -m "v$v"
-   git push origin main "v$v"
+   git push origin "v$v"
    gh release create "v$v" --title "v$v" --notes-file <(awk "/^## \\[$v\\]/{f=1;next} /^## \\[/{f=0} f" CHANGELOG.md)
    ```
 

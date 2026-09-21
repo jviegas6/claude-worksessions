@@ -1,0 +1,14 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--cov --cov-report=term-missing"
+
+[tool.coverage.run]
+# bin/ scripts have no .py suffix, so they are measured once the tests import them.
+include = ["bin/*"]
+branch = false
+
+[tool.coverage.report]
+fail_under = 95
+show_missing = true
+skip_covered = true
+exclude_also = ['if __name__ == "__main__":']

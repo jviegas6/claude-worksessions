@@ -15,14 +15,9 @@ below 95%).
    git push -u origin HEAD
    gh pr create --fill
    ```
-3. Once it is merged, tag the merge commit and release it:
-   ```sh
-   git switch main && git pull
-   v=$(cat VERSION)
-   git tag -a "v$v" -m "v$v"
-   git push origin "v$v"
-   gh release create "v$v" --title "v$v" --notes-file <(awk "/^## \\[$v\\]/{f=1;next} /^## \\[/{f=0} f" CHANGELOG.md)
-   ```
+3. Merge it. The `release` workflow sees `VERSION` change on `main`, tags the merge commit
+   `vX.Y.Z` and publishes the GitHub release with that version's changelog section.
+   Nothing to tag by hand; it fails loudly if the changelog has no section for the version.
 
 Upgrading an installed copy:
 

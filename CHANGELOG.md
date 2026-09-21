@@ -5,6 +5,8 @@
 - Test suite (`tests/`, pytest) and a `tests` GitHub Actions workflow on every pull
   request. It fails if line coverage of `bin/` drops below 95%.
 - Changes, releases included, now go through pull requests; `docs/releasing.md` updated.
+- Merging a PR that bumps `VERSION` tags `vX.Y.Z` and publishes the release automatically
+  (`release` workflow).
 
 ## [1.9.1] — 2026-09-21
 

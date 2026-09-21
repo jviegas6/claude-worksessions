@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.9.1] — 2026-09-21
+
+- `claude-new`'s task-type menu showed only the first 8 types, so once 8 were in use the
+  unused seeds from `CWS_TASK_TYPES` (e.g. `documentation`, `tickets`) never appeared.
+  It now lists every type: used ones first, newest first, then the unused seeds.
+
 ## [1.9.0] — 2026-09-21
 
 - Sessions that ran outside a request folder (in a repo, the work root or at home) can

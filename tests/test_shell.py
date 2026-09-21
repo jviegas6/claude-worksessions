@@ -12,7 +12,7 @@ from conftest import REPO
 pytestmark = pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh not installed")
 
 
-def zsh(script, root, types="permissions, job errors, documentation, tickets"):
+def zsh(script, root, types="permissions, job errors, documentation, support"):
     env = dict(os.environ, CLAUDE_WORK_ROOT=str(root), CWS_TASK_TYPES=types,
                CWS_CONFIG=os.devnull, ZDOTDIR=str(root))
     src = 'source "{}/shell/worksessions.zsh"\n'.format(REPO)
@@ -32,7 +32,7 @@ def test_task_types_lists_used_then_unused_seeds(tmp_path):
     out = zsh("_cws_task_types", tmp_path).split()
     # newest folder first, then seeds not already used; nothing dropped
     assert out[:9] == ["permissions", "h", "g", "f", "e", "d", "c", "b", "a"]
-    assert out[9:] == ["job", "errors", "documentation", "tickets"]
+    assert out[9:] == ["job", "errors", "documentation", "support"]
 
 
 def test_menu_shows_every_type_past_eight(tmp_path):
@@ -43,7 +43,7 @@ def test_menu_shows_every_type_past_eight(tmp_path):
               'for t in $types; do printf "%d) %s\\n" $i "$t"; (( i++ )); done', tmp_path)
     lines = out.splitlines()
     assert len(lines) == 12
-    assert lines[-1] == "12) tickets"
+    assert lines[-1] == "12) support"
 
 
 def test_claude_new_menu_is_not_capped():

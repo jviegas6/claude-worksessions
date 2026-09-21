@@ -317,7 +317,7 @@ print("{:<10} {:<14} {:<16} {:<9}".format("[" + (d.get("profile") or "?") + "]",
       else
         print -r -- "  Task type — what kind of work starts this? Nothing in the name matched, so pick one:"
       fi
-      for t in ${types[1,8]}; do printf '    %d) %s\n' $i "$t"; (( i++ )); done
+      for t in $types; do printf '    %d) %s\n' $i "$t"; (( i++ )); done
       while true; do
         read "pick?Task type${guess:+ [$guess]}: " || return 1
         if [[ -z "$pick" && -z "$guess" ]]; then

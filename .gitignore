@@ -5,3 +5,8 @@ config/review-rules.md
 *.bak-*
 .DS_Store
 __pycache__/
+.venv/
+.coverage
+coverage.xml
+htmlcov/
+.pytest_cache/

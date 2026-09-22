@@ -291,6 +291,19 @@
           "type": "boolean",
           "default": false,
           "description": "Also list sessions that were opened and closed without a prompt."
+        },
+        "claudeWorksessions.openIn": {
+          "type": "string",
+          "enum": [
+            "chat",
+            "terminal"
+          ],
+          "default": "chat",
+          "enumDescriptions": [
+            "Claude Code for VS Code's chat tabs. A session opens in a window on its request folder: this one if it is, else that folder's window.",
+            "Terminal tabs in this window, each running the claude CLI in its own folder and profile."
+          ],
+          "markdownDescription": "Where sessions open. **chat** uses the official Claude Code extension (one window per request); **terminal** keeps every request in this window as terminal tabs. Falls back to terminal when the Claude Code extension isn't there."
         }
       }
     }

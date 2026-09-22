@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.7.0] — 2026-09-22
+
+- **VS Code: sessions open in Claude Code's own chat.** New setting
+  `claudeWorksessions.openIn`, default `chat`: a session opens as a Claude Code for VS Code
+  chat tab in a window on its request folder — this window if it is, otherwise that
+  folder's window, brought forward or opened. New request and Run skill open the new
+  request's window straight into a chat. `terminal` keeps the terminal tabs in one window,
+  and is used anyway when the Claude Code extension isn't there.
+- `claude-new -c` works with `--prompt`: the chat in the new window starts with the text in
+  its input box.
+
 ## [2.6.0] — 2026-09-22
 
 - **VS Code: the terminal commands and your skills in the Command Palette** (*Work

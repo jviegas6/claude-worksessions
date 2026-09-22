@@ -32,7 +32,8 @@ that profile. `ended_at` is filled in when Claude exits.
   session's profile through [`claude-vscode`](#claude-vscode). `ended_at` stays empty,
   since nothing waits for VS Code to close.
 - `--prompt TEXT` starts Claude with `TEXT` as its first prompt — `--prompt /weekly-review`
-  opens the new request straight into that skill. Not with `-c`.
+  opens the new request straight into that skill. With `-c` the new VS Code window opens a
+  Claude chat with the text waiting in its input box (needs the Work sessions sidebar).
 - `-l` lists the 15 most recent sessions with profile, ticket and type.
 - `-L` / `--profiles` lists the configured profiles: which is the default and which is
   shared, the description, the gateway URL if any, and a warning if `~/.claude-<name>`
@@ -150,17 +151,29 @@ the one it was assigned to in `_audit/session-folders.json`.
 is on your PATH (in VS Code: *Shell Command: Install 'code' command in PATH*), at the
 same version as the rest; `--update` updates it. Reload open windows after installing.
 
-It adds a sidebar (the history icon) listing your requests and their Claude sessions.
-Open a window on the work root and use it instead of `claude-new -c`'s one window per
-request: every session opens as a **terminal tab in the editor area**, running in its
-own folder with its own profile, so requests on different tickets and profiles sit side
-by side.
+It adds a sidebar (the history icon) listing your requests and their Claude sessions,
+and opens them one of two ways — setting `claudeWorksessions.openIn`:
+
+- **`chat`** (default): in **Claude Code for VS Code's own chat tabs**. Those always run in
+  the window's folder, so a session opens in a window on its request folder: this one if
+  it is, otherwise that folder's window, brought forward or opened (and given the right
+  profile by `claude-vscode`). The Work sessions sidebar there opens the chat — it finds a
+  small note in `~/.cache/claude-worksessions/handoff/`. **New request** and **Run skill**
+  run `claude-new -c` in a terminal for its questions, and the new window opens straight
+  into a chat (with `/<skill>` waiting in the input box).
+- **`terminal`**: every session as a **terminal tab in the editor area** of this window,
+  running the `claude` CLI in its own folder with its own profile, so requests on
+  different tickets and profiles sit side by side in one window.
+
+Chat mode needs the Claude Code extension; without it the sidebar uses terminal tabs and
+says so. It calls that extension's `claude-vscode.editor.open` command, which isn't a
+documented API — if an update renames it, the same fallback applies.
 
 | in the sidebar | does |
 |---|---|
 | **+** (top) | new request: a tab running `claude-new`, with its usual prompts |
 | list icon (top) | group by **day**, by **ticket**, or a flat list of **recent** sessions; remembered |
-| a session | open it in a tab (`claude-resume -p <profile> --resume <id>`), or go to its tab if open |
+| a session | open it: its chat (chat mode) or a tab running `claude-resume -p <profile> --resume <id>` |
 | **+** on a request | a new session in that request's folder, with its profile |
 | folder on a request | reveal it in the Explorer (right-click: in Finder, a new window, set task type) |
 
@@ -195,7 +208,8 @@ Tabs are editor terminals, not the Claude extension's chat tabs: those always ru
 the window's first folder, so they can't hold sessions from different requests. Diffs
 still open in VS Code, since Claude in VS Code's terminal connects to it (`/ide` if not).
 
-Settings: `claudeWorksessions.sessionsCommand` (default `~/.local/bin/claude-sessions`),
+Settings: `claudeWorksessions.openIn` (`chat` or `terminal`),
+`claudeWorksessions.sessionsCommand` (default `~/.local/bin/claude-sessions`),
 `claudeWorksessions.showEmptySessions` (sessions closed without a prompt; off).
 
 ## ws, y

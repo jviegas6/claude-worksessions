@@ -47,6 +47,62 @@ const loadData = () => run(sessionsCommand(), ["-a", "--json"]).then(JSON.parse)
 
 const shq = s => "'" + String(s).replace(/'/g, "'\\''") + "'";
 
+// --- the official Claude Code extension -------------------------------------------------
+// Its chat tabs run in the window's first folder, so a session opens in a window on its own
+// folder: this one if it matches, otherwise that folder's window (opened or brought forward)
+// after leaving it a handoff note, which the Work sessions extension there picks up.
+const CHAT_OPEN = "claude-vscode.editor.open";   // (sessionId?, prompt?) — prompt goes in the input box
+let chatAvailable = false;
+
+const handoffDir = () => process.env.CWS_HANDOFF_DIR ||
+  path.join(process.env.XDG_CACHE_HOME || path.join(os.homedir(), ".cache"), "claude-worksessions", "handoff");
+
+const real = p => { try { return fs.realpathSync(p); } catch { return p; } };
+
+function windowFolder() {
+  const f = vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders[0];
+  return f ? real(f.uri.fsPath) : null;
+}
+
+function useChat() {
+  return chatAvailable && vscode.workspace.getConfiguration("claudeWorksessions").get("openIn", "chat") === "chat";
+}
+
+// The `code` CLI brings forward the window that already has a folder open, else opens one.
+function codeCli() {
+  if (process.env.CWS_CODE_CLI) return process.env.CWS_CODE_CLI;
+  const bundled = path.join(vscode.env.appRoot || "", "bin", "code");
+  return fs.existsSync(bundled) ? bundled : "code";
+}
+
+function openChat(folder, session, prompt) {
+  if (windowFolder() === real(folder)) {
+    return vscode.commands.executeCommand(CHAT_OPEN, session || undefined, prompt || undefined);
+  }
+  fs.mkdirSync(handoffDir(), { recursive: true });
+  fs.writeFileSync(path.join(handoffDir(), crypto.randomUUID() + ".json"),
+                   JSON.stringify({ folder, session: session || null, prompt: prompt || null, at: Date.now() / 1000 }));
+  cp.execFile(codeCli(), [folder], () => {});
+}
+
+// Notes for this window: open their chats. Whoever deletes a note first owns it, so two
+// windows on the same folder don't both act. Notes older than a day are cleared.
+async function takeHandoffs() {
+  const mine = windowFolder();
+  let names = [];
+  try { names = fs.readdirSync(handoffDir()).filter(n => n.endsWith(".json")); } catch { return; }
+  const now = Date.now() / 1000;
+  for (const n of names) {
+    const p = path.join(handoffDir(), n);
+    let note;
+    try { note = JSON.parse(fs.readFileSync(p, "utf8")); } catch { continue; }
+    if (now - (note.at || 0) > 86400) { try { fs.unlinkSync(p); } catch {} continue; }
+    if (!mine || real(note.folder) !== mine || now - note.at > 600 || !chatAvailable) continue;
+    try { fs.unlinkSync(p); } catch { continue; }
+    await vscode.commands.executeCommand(CHAT_OPEN, note.session || undefined, note.prompt || undefined);
+  }
+}
+
 class Sidebar {
   constructor(context) {
     this.context = context;
@@ -169,6 +225,7 @@ class Sidebar {
   }
 
   open(session, request = this.requestOf(session.id)) {
+    if (useChat()) return openChat(session.cwd, session.id);
     const open = this.tabs.get(session.id);
     if (open && vscode.window.terminals.includes(open)) return open.show();
     const profile = request && request.profile ? `-p ${shq(request.profile)} ` : "";
@@ -190,10 +247,14 @@ class Sidebar {
   }
 
   newRequest(args = "", name = "new request") {
+    if (useChat()) {   // claude-new asks its questions here, then opens the request's window
+      return this.terminal(name, this.data.work_root, "claude-new -c" + (args ? " " + args : "") + " && exit", "add");
+    }
     this.startPending("new", this.data.work_root, name, "claude-new" + (args ? " " + args : ""));
   }
 
   addSession(request) {
+    if (useChat()) return openChat(request.path);
     const env = request.profile ? `CLAUDE_CONFIG_DIR="$HOME/.claude-${request.profile}" ` : "";
     this.startPending("request", request.path, M.tabName(request, request.name), env + "claude");
   }
@@ -373,7 +434,9 @@ async function searchSessions(bar, query, ai = false) {
   if (!pick) return;
   const s = bar.find(pick.row.session_id);
   if (s) return bar.open(s);
-  bar.terminal(pick.label, bar.data.work_root, pick.row.resume);   // not in the list (e.g. outside the root)
+  // not in the list (e.g. outside the work root)
+  if (useChat() && pick.row.folder) return openChat(pick.row.folder, pick.row.session_id);
+  bar.terminal(pick.label, bar.data.work_root, pick.row.resume);
 }
 
 const PERIODS = [
@@ -486,7 +549,8 @@ async function resumeById(bar) {
   bar.terminal(id.trim().slice(0, 8), bar.data.work_root, `claude-resume --resume ${shq(id.trim())}`);
 }
 
-function activate(context) {
+async function activate(context) {
+  chatAvailable = (await vscode.commands.getCommands(true)).includes(CHAT_OPEN);
   const bar = new Sidebar(context);
   bar.restore();
   const view = vscode.window.createTreeView("claudeWorksessions.sessions", { treeDataProvider: bar });
@@ -494,7 +558,10 @@ function activate(context) {
   bar.onChange = () => {
     view.description = M.GROUPING_LABELS[bar.grouping];
     view.message = bar.error ? `claude-sessions failed: ${bar.error}`
-      : (bar.filter && !bar.counts().shown ? `No session matches "${bar.filter}" — press Enter in the box to search their contents.` : undefined);
+      : bar.filter && !bar.counts().shown ? `No session matches "${bar.filter}" — press Enter in the box to search their contents.`
+      : !chatAvailable && vscode.workspace.getConfiguration("claudeWorksessions").get("openIn", "chat") === "chat"
+        ? "Claude Code for VS Code isn't installed or has changed — sessions open in terminal tabs."
+        : undefined;
     vscode.commands.executeCommand("setContext", "claudeWorksessions.filtering", !!bar.filter);
     box.update();
   };
@@ -552,6 +619,15 @@ function activate(context) {
     context.subscriptions.push(w);
   }
   context.subscriptions.push({ dispose: () => clearTimeout(timer) });
+
+  // Handoff notes from other windows and from `claude-new -c`
+  try { fs.mkdirSync(handoffDir(), { recursive: true }); } catch {}
+  const notes = vscode.workspace.createFileSystemWatcher(
+    new vscode.RelativePattern(vscode.Uri.file(handoffDir()), "*.json"));
+  notes.onDidCreate(() => takeHandoffs());
+  context.subscriptions.push(notes);
+  takeHandoffs();
+
   bar.refresh();
 }
 

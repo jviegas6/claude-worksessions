@@ -7,7 +7,12 @@ const os = require("os");
 const path = require("path");
 const Module = require("module");
 
-function fakeVscode(settings) {
+// Never touch the real handoff folder or start a real VS Code from the tests.
+process.env.CWS_HANDOFF_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "cws-handoff-"));
+process.env.CWS_CODE_CLI = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "cws-code-")), "code");
+fs.writeFileSync(process.env.CWS_CODE_CLI, `#!/bin/sh\necho "$*" >> "${process.env.CWS_CODE_CLI}.log"\n`, { mode: 0o755 });
+
+function fakeVscode(settings, { chat = false, folder } = {}) {
   const commands = new Map(), executed = [], terminals = [], listeners = {}, messages = [], answers = [], views = {};
   // Quick picks and input boxes take the next scripted answer: a function of the items, or a value.
   const answer = items => { const a = answers.shift(); return typeof a === "function" ? a(items) : a; };
@@ -28,11 +33,13 @@ function fakeVscode(settings) {
     ProgressLocation: { Notification: 15 },
     RelativePattern: class { constructor(base, pattern) { this.base = base; this.pattern = pattern; } },
     Uri: { file: p => ({ fsPath: p }) },
-    env: { clipboard: { writeText: async t => executed.push(["clipboard", t]) } },
+    env: { clipboard: { writeText: async t => executed.push(["clipboard", t]) }, appRoot: "/nonexistent" },
     workspace: {
+      workspaceFolders: folder ? [{ uri: { fsPath: folder } }] : undefined,
       getConfiguration: () => ({ get: (k, d) => (k in settings ? settings[k] : d) }),
       onDidChangeConfiguration: on("config"),
-      createFileSystemWatcher: () => ({ onDidChange() {}, onDidCreate() {}, onDidDelete() {}, dispose() {} }),
+      createFileSystemWatcher: pattern => ({ onDidChange() {}, onDidDelete() {}, dispose() {},
+        onDidCreate(f) { (listeners["watch:" + pattern.pattern] ||= []).push(f); } }),
     },
     window: {
       terminals, activeTerminal: undefined,
@@ -65,8 +72,9 @@ function fakeVscode(settings) {
     },
     commands: {
       registerCommand: (name, fn) => { commands.set(name, fn); return { dispose() {} }; },
-      executeCommand: async (name, arg) => {
-        executed.push([name, arg]);
+      getCommands: async () => [...commands.keys(), ...(chat ? ["claude-vscode.editor.open"] : [])],
+      executeCommand: async (name, arg, ...more) => {
+        executed.push(name === "claude-vscode.editor.open" ? [name, arg, ...more] : [name, arg]);
         if (name === "workbench.action.terminal.renameWithArg") vscode.window.activeTerminal.name = arg.name;
       },
     },
@@ -122,10 +130,10 @@ test("activates, renders every grouping and opens sessions in tabs", async () =>
       first_prompt: "in the root", last_prompt: null, request: null },
   ] };
   const { bin, json } = stubSessions(dir, data);
-  const fake = fakeVscode({ sessionsCommand: bin });
+  const fake = fakeVscode({ sessionsCommand: bin, openIn: "terminal" });
   const ext = load(fake);
   const ctx = context();
-  ext.activate(ctx);
+  await ext.activate(ctx);
   await settle(ctx);
   const view = ctx.subscriptions[0];
   const p = view.provider;
@@ -205,7 +213,7 @@ test("tabs are relinked by name after a reload, and a failing claude-sessions sh
   fake.terminals.push({ name: "BTPA-1 · old" });
   const ctx = context();
   await ctx.workspaceState.update("tabs", { "BTPA-1 · old": "s9" });
-  load(fake).activate(ctx);
+  await load(fake).activate(ctx);
   await settle(ctx);
   const view = ctx.subscriptions[0];
   assert.strictEqual(view.message, "claude-sessions failed: boom");
@@ -250,9 +258,9 @@ async function world(t) {
   process.env.HOME = home; process.env.CWS_CONFIG = path.join(dir, "config.env");
   t.after(() => { for (const [k, v] of Object.entries(saved)) (v === undefined ? delete process.env[k] : process.env[k] = v); });
 
-  const fake = fakeVscode({ sessionsCommand: path.join(bin, "claude-sessions") });
+  const fake = fakeVscode({ sessionsCommand: path.join(bin, "claude-sessions"), openIn: "terminal" });
   const ctx = context();
-  load(fake).activate(ctx);
+  await load(fake).activate(ctx);
   await settle(ctx);
   const run = (name, ...a) => fake.commands.get("claudeWorksessions." + name)(...a);
   return { dir, root, A, data, fake, ctx, run, bar: ctx.subscriptions[0].provider, view: ctx.subscriptions[0] };
@@ -442,4 +450,110 @@ test("run skill with no skills installed says so", async t => {
   fs.rmSync(path.join(process.env.HOME, ".claude-personal/skills"), { recursive: true });
   await w.run("runSkill");
   assert.match(w.fake.messages.at(-1)[1], /No skills found/);
+});
+
+// --- chat mode: the official Claude Code extension --------------------------------------
+const HAND = () => process.env.CWS_HANDOFF_DIR;
+const notes = () => fs.readdirSync(HAND()).map(n => JSON.parse(fs.readFileSync(path.join(HAND(), n), "utf8")));
+const codeLog = () => { try { return fs.readFileSync(process.env.CWS_CODE_CLI + ".log", "utf8"); } catch { return ""; } };
+const chatCalls = fake => fake.executed.filter(e => e[0] === "claude-vscode.editor.open");
+const clearHand = () => { for (const n of fs.readdirSync(HAND())) fs.unlinkSync(path.join(HAND(), n)); };
+
+async function chatWorld(t, { folder, openIn } = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cws-chat-"));
+  const root = path.join(dir, "ws");
+  const A = { path: path.join(root, "2026/09/22/10-00-00_a"), name: "demo", ticket: "BTPA-1", task_type: "", profile: "work" };
+  const B = { path: path.join(root, "2026/09/22/11-00-00_b"), name: "other", ticket: "", task_type: "", profile: "" };
+  for (const r of [A, B]) fs.mkdirSync(r.path, { recursive: true });
+  const now = Date.now() / 1000;
+  const data = { work_root: root, sessions: [
+    { id: "sa", mtime: now - 60, cwd: A.path, in_work_root: true, title: "In A", first_prompt: "x", last_prompt: "y", request: A },
+    { id: "sb", mtime: now - 90, cwd: B.path, in_work_root: true, title: "In B", first_prompt: "x", last_prompt: "y", request: B },
+  ] };
+  const { bin } = stubSessions(dir, data);
+  fs.writeFileSync(path.join(path.dirname(bin), "claude-search"),
+    '#!/bin/sh\nprintf "rank,session_id,title,folder,resume\\n1,zz,Elsewhere,/repo,x\\n"\n', { mode: 0o755 });
+  const fake = fakeVscode({ sessionsCommand: bin, ...(openIn ? { openIn } : {}) },
+                          { chat: true, folder: folder === undefined ? A.path : folder });
+  const ctx = context();
+  await load(fake).activate(ctx);
+  await settle(ctx);
+  const run = (name, ...a) => fake.commands.get("claudeWorksessions." + name)(...a);
+  const el = id => allItems(ctx.subscriptions[0].provider).find(([c]) => c.session?.id === id)[0];
+  const reqEl = r => ({ kind: "request", request: r });
+  return { A, B, root, fake, ctx, run, el, reqEl };
+}
+
+test("chat: sessions in this window's folder open in the official chat, others hand off to their window", async t => {
+  clearHand();
+  const w = await chatWorld(t);
+  await w.run("open", w.el("sa"));
+  assert.deepStrictEqual(chatCalls(w.fake), [["claude-vscode.editor.open", "sa", undefined]]);
+  assert.strictEqual(w.fake.terminals.length, 0);
+
+  const before = codeLog();
+  await w.run("open", w.el("sb"));
+  assert.deepStrictEqual(notes().map(n => [n.folder, n.session, n.prompt]), [[w.B.path, "sb", null]]);
+  await new Promise(r => setTimeout(r, 200));
+  assert.strictEqual(codeLog().slice(before.length).trim(), w.B.path);        // `code <folder>`
+  assert.strictEqual(chatCalls(w.fake).length, 1);                           // not opened here
+
+  clearHand();
+  await w.run("addSession", w.reqEl(w.A));                                   // this window: a new chat
+  assert.deepStrictEqual(chatCalls(w.fake).at(-1), ["claude-vscode.editor.open", undefined, undefined]);
+  await w.run("addSession", w.reqEl(w.B));                                   // elsewhere: a note
+  assert.deepStrictEqual(notes().map(n => [n.folder, n.session]), [[w.B.path, null]]);
+
+  // new request and skills: claude-new -c in a terminal, which closes itself when done
+  await w.run("newRequest");
+  assert.deepStrictEqual(w.fake.terminals.at(-1).sent, ["claude-new -c && exit"]);
+  clearHand();
+  w.fake.answers.push("zz-query", items => items[0]);
+  await w.run("search");                                                     // a hit outside the list
+  assert.deepStrictEqual(notes().map(n => [n.folder, n.session]), [["/repo", "zz"]]);
+});
+
+test("chat: the window takes notes addressed to its folder, once, and clears stale ones", async t => {
+  clearHand();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cws-notes-"));
+  const mine = path.join(dir, "mine"), other = path.join(dir, "other");
+  fs.mkdirSync(mine); fs.mkdirSync(other);
+  const now = Date.now() / 1000;
+  const put = (name, note) => fs.writeFileSync(path.join(HAND(), name + ".json"),
+                                               typeof note === "string" ? note : JSON.stringify(note));
+  put("fresh", { folder: mine, session: "s1", prompt: null, at: now - 5 });
+  put("prompt", { folder: mine, session: null, prompt: "/weekly-review", at: now - 5 });
+  put("elsewhere", { folder: other, session: "s2", prompt: null, at: now - 5 });
+  put("late", { folder: mine, session: "s3", prompt: null, at: now - 700 });
+  put("ancient", { folder: other, session: "s4", prompt: null, at: now - 90000 });
+  put("broken", "{nope");
+  const w = await chatWorld(t, { folder: mine });
+  const got = chatCalls(w.fake).map(c => c.slice(1));
+  assert.strictEqual(got.length, 2);
+  assert.ok(got.some(c => c[0] === undefined && c[1] === "/weekly-review"));
+  assert.ok(got.some(c => c[0] === "s1" && c[1] === undefined));
+  assert.deepStrictEqual(fs.readdirSync(HAND()).sort(), ["broken.json", "elsewhere.json", "late.json"]);
+
+  // a note arriving later is picked up through the watcher
+  put("later", { folder: mine, session: "s5", prompt: null, at: Date.now() / 1000 });
+  for (const f of w.fake.listeners["watch:*.json"]) await f();
+  assert.deepStrictEqual(chatCalls(w.fake).at(-1), ["claude-vscode.editor.open", "s5", undefined]);
+  assert.ok(!fs.existsSync(path.join(HAND(), "later.json")));
+});
+
+test("chat: openIn terminal, or the Claude Code extension missing, keeps terminal tabs", async t => {
+  clearHand();
+  const w = await chatWorld(t, { openIn: "terminal" });
+  await w.run("open", w.el("sb"));
+  assert.deepStrictEqual(w.fake.terminals.at(-1).sent, ["claude-resume --resume 'sb'"]);
+  assert.strictEqual(chatCalls(w.fake).length, 0);
+
+  // chat asked for but not available: terminal tabs, and the panel says why
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cws-nochat-"));
+  const { bin } = stubSessions(dir, { work_root: dir, sessions: [] });
+  const fake = fakeVscode({ sessionsCommand: bin }, { chat: false, folder: dir });
+  const ctx = context();
+  await load(fake).activate(ctx);
+  await settle(ctx);
+  assert.match(ctx.subscriptions[0].message || "", /isn't installed|terminal tabs/);
 });

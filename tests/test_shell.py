@@ -476,11 +476,24 @@ def test_claude_new_prompt_starts_claude_with_it(tmp_path):
     assert (tmp_path / "args").read_text() == "0 \n"     # no prompt: claude gets no arguments
 
 
-@pytest.mark.parametrize("args,err", [
-    ("--prompt", "--prompt needs the text"),
-    ("-c --prompt /x -p personal -t Other -T tooling demo", "can't be used with -c"),
-])
-def test_claude_new_prompt_errors(tmp_path, args, err):
+def test_claude_new_prompt_needs_text(tmp_path):
+    r = run_new(tmp_path, "--prompt")
+    assert r.returncode == 1 and "--prompt needs the text" in r.stderr
+
+
+@pytest.mark.parametrize("args,prompt", [("", None), ("--prompt '/weekly-review'", "/weekly-review")])
+def test_code_flag_leaves_a_handoff_for_the_sidebar(tmp_path, args, prompt):
     (tmp_path / ".claude-personal").mkdir()
-    r = run_new(tmp_path, args)
-    assert r.returncode == 1 and err in r.stderr
+    stub = tmp_path / "bin"
+    stub.mkdir()
+    (stub / "code").write_text("#!/bin/sh\nexit 0\n")
+    (stub / "code").chmod(0o755)
+    hand = tmp_path / "handoff"
+    r = run_new(tmp_path, "-c -p personal -t Other -T tooling {} demo".format(args),
+                PATH=str(stub) + os.pathsep + os.environ["PATH"], CWS_HANDOFF_DIR=str(hand))
+    assert r.returncode == 0, r.stderr
+    (note,) = hand.iterdir()
+    d = json.loads(note.read_text())
+    folder = next(tmp_path.glob("[0-9]*/*/*/*/.session.json")).parent
+    assert (d["folder"], d["session"], d["prompt"]) == (str(folder), None, prompt)
+    assert d["at"] > 0

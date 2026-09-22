@@ -223,6 +223,20 @@ _claude_new_ticket() {
   print -r -- "$t"
 }
 
+# A note for the VS Code sidebar in the window that opens `folder`: open a Claude chat there,
+# resuming `session` if given, with `prompt` in the input box. Read and removed by the sidebar.
+_cws_handoff() {
+  local d="${CWS_HANDOFF_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/claude-worksessions/handoff}"
+  mkdir -p "$d" 2>/dev/null || return 0
+  WS_FOLDER="$1" WS_SESSION="$2" WS_PROMPT="$3" "$CWS_PYTHON" - "$d" <<'PYEOF' 2>/dev/null
+import json, os, sys, time, uuid
+p = os.path.join(sys.argv[1], uuid.uuid4().hex + ".json")
+json.dump({"folder": os.environ["WS_FOLDER"], "session": os.environ["WS_SESSION"] or None,
+           "prompt": os.environ["WS_PROMPT"] or None, "at": time.time()}, open(p, "w"))
+PYEOF
+  return 0
+}
+
 claude-new() {
   emulate -L zsh
   setopt local_options no_nomatch
@@ -276,6 +290,7 @@ print("{:<10} {:<14} {:<16} {:<9}".format("[" + (d.get("profile") or "?") + "]",
         print -r -- '    -c / --code opens the folder in VS Code instead; the Claude extension there'
         print -r -- '    picks up the profile through claude-vscode'
         print -r -- '    --prompt TEXT starts Claude with TEXT as the first prompt, e.g. --prompt /weekly-review'
+        print -r -- '    (with -c it waits in the VS Code chat input box)'
         print -r -- "    TICKET is mandatory: PREFIX-123 (e.g. $CWS_TICKET_EXAMPLE), or Other"
         print -r -- '    -T / --type is the kind of work (permissions, job errors, ...); asked if omitted'
         print -r -- '    -n / --no-audit keeps the session out of claude-audit and the weekly review'
@@ -347,10 +362,6 @@ print("{:<10} {:<14} {:<16} {:<9}".format("[" + (d.get("profile") or "?") + "]",
   cfg="$HOME/.claude-$profile"
   if [[ ! -d "$cfg" ]]; then
     print -u2 -- "claude-new: config dir $cfg does not exist"
-    return 1
-  fi
-  if (( vscode )) && [[ -n "$prompt" ]]; then
-    print -u2 -- "claude-new: --prompt can't be used with -c (VS Code starts Claude itself)"
     return 1
   fi
   if (( vscode )) && ! command -v code >/dev/null 2>&1; then
@@ -449,8 +460,11 @@ json.dump({
   cd "$dir" || return 1
 
   # VS Code: the extension starts Claude itself, through claude-vscode, which reads the
-  # profile from .session.json. Nothing waits for it, so ended_at stays empty.
+  # profile from .session.json. Nothing waits for it, so ended_at stays empty. The handoff
+  # note tells the Work sessions sidebar in the new window to open a chat there, with
+  # --prompt's text in its input box.
   if (( vscode )); then
+    _cws_handoff "$dir" "" "$prompt"
     code -n "$dir"
     return
   fi

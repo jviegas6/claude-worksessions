@@ -1,0 +1,43 @@
+{
+  "name": "cws-sessions-prototype",
+  "displayName": "PROTOTYPE — Work sessions",
+  "description": "THROWAWAY prototype: sidebar of claude-worksessions requests and sessions, each opened as a terminal tab.",
+  "version": "0.0.1",
+  "publisher": "cws-prototype",
+  "engines": { "vscode": "^1.90.0" },
+  "main": "extension.js",
+  "activationEvents": ["onStartupFinished"],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [{ "id": "cwsProto", "title": "Work sessions (prototype)", "icon": "$(history)" }]
+    },
+    "views": {
+      "cwsProto": [{ "id": "cwsProto.tree", "name": "Sessions" }]
+    },
+    "commands": [
+      { "command": "cwsProto.refresh",    "title": "Refresh",                  "icon": "$(refresh)" },
+      { "command": "cwsProto.grouping",   "title": "Change grouping",          "icon": "$(list-tree)" },
+      { "command": "cwsProto.newSession", "title": "New request (claude-new)", "icon": "$(add)" },
+      { "command": "cwsProto.open",       "title": "Open session in a tab",    "icon": "$(terminal)" },
+      { "command": "cwsProto.addSession", "title": "New session in this request", "icon": "$(add)" },
+      { "command": "cwsProto.reveal",     "title": "Reveal folder in Explorer", "icon": "$(folder-opened)" }
+    ],
+    "menus": {
+      "view/title": [
+        { "command": "cwsProto.newSession", "when": "view == cwsProto.tree", "group": "navigation@1" },
+        { "command": "cwsProto.grouping",   "when": "view == cwsProto.tree", "group": "navigation@2" },
+        { "command": "cwsProto.refresh",    "when": "view == cwsProto.tree", "group": "navigation@3" }
+      ],
+      "view/item/context": [
+        { "command": "cwsProto.addSession", "when": "view == cwsProto.tree && viewItem == request", "group": "inline@1" },
+        { "command": "cwsProto.reveal",     "when": "view == cwsProto.tree && viewItem == request", "group": "inline@2" },
+        { "command": "cwsProto.open",       "when": "view == cwsProto.tree && viewItem =~ /^session/", "group": "inline@1" }
+      ],
+      "commandPalette": [
+        { "command": "cwsProto.open", "when": "false" },
+        { "command": "cwsProto.addSession", "when": "false" },
+        { "command": "cwsProto.reveal", "when": "false" }
+      ]
+    }
+  }
+}

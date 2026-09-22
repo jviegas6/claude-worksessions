@@ -29,7 +29,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get install -y zsh
+      # The runner ships Homebrew; most Linux machines don't, so test the apt path
+      - run: sudo rm -rf /home/linuxbrew && sudo apt-get install -y zsh
       - name: Config
         run: |
           mkdir -p "$HOME/ws/_config"
@@ -37,9 +38,14 @@ jobs:
       - name: Install
         run: zsh ./install.sh --yes --config "$HOME/ws/_config/config.env"
       - name: Commands load
+        shell: zsh -il {0}
         run: |
-          zsh -ic 'claude-new -L && claude-resume -h && claude-audit --help >/dev/null && claude-search --help >/dev/null'
-          command -v fzf pandoc
+          set -e
+          claude-new -L
+          claude-resume -h
+          claude-audit --help >/dev/null
+          claude-search --help >/dev/null
+          whence -p fzf pandoc claude
           grep -q ">>> claude-worksessions >>>" "$HOME/.zshrc"
           test -f "$HOME/ws/CLAUDE.md"
       - name: Re-run is a no-op

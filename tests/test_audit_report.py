@@ -482,6 +482,7 @@ def test_summary_csv_to_stdout_sends_messages_to_stderr(mod, world, capsys):
 
 def test_summary_copy_uses_tracker_columns(mod, world, monkeypatch, capsys):
     pasted = []
+    monkeypatch.setattr(mod, "clipboard_command", lambda: (["pbcopy"], "utf-8"))
     monkeypatch.setattr(mod.subprocess, "run", lambda cmd, input=None, check=None: pasted.append(input.decode()))
     run(mod, "--week", WEEK, "--copy")
     out = capsys.readouterr().out
@@ -618,6 +619,7 @@ def test_detail_csv_has_row_ids_and_types(mod, world, capsys):
 
 
 def test_detail_copy_hint(mod, world, monkeypatch, capsys):
+    monkeypatch.setattr(mod, "clipboard_command", lambda: (["pbcopy"], "utf-8"))
     monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: None)
     run(mod, "--week", WEEK, "--detail", "--copy")
     assert "paste into any sheet; the first row is the header" in capsys.readouterr().out

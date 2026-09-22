@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import shutil
 import subprocess
 
@@ -173,3 +174,20 @@ def test_install_rejects_dashed_profile_names(tmp_path, profiles, ok):
     else:
         assert r.returncode == 1
         assert "profile 'my-work' in CWS_PROFILES is not valid" in r.stderr
+
+
+def test_install_prints_no_stray_assignments(tmp_path):
+    # zsh prints `name=value` when `local` re-declares a set variable; none may leak out.
+    conf = tmp_path / "ws" / "_config" / "config.env"
+    conf.parent.mkdir(parents=True)
+    conf.write_text('CWS_WORK_ROOT="{}/ws"\nCWS_PROFILES="personal work"\n'.format(tmp_path))
+    link = tmp_path / ".config" / "claude-worksessions" / "config.env"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(conf)
+    env = {k: v for k, v in os.environ.items() if not k.startswith("CWS_")}
+    env.update(HOME=str(tmp_path), ZDOTDIR=str(tmp_path))
+    r = subprocess.run(["zsh", os.path.join(REPO, "install.sh"), "--dry-run", "--yes"], env=env,
+                       capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    stray = [ln for ln in (r.stdout + r.stderr).splitlines()
+             if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", ln)]
+    assert stray == []

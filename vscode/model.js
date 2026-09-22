@@ -2,6 +2,7 @@
 // Input is `claude-sessions -a --json`: { work_root, sessions: [{ id, mtime, cwd, in_work_root,
 // title, first_prompt, last_prompt, request: { path, name, ticket, task_type, profile } | null }] }
 
+const fs = require("fs");
 const path = require("path");
 
 const GROUPINGS = ["day", "ticket", "recent"];
@@ -12,11 +13,22 @@ const GROUPING_LABELS = {
 };
 const ROOT_KEY = "(work root)";
 
-// Sessions worth listing: in the work root or assigned to a request, and not empty
-// (opened and closed without a prompt).
-function visible(data, { showEmpty = false } = {}) {
+// Does a session match the search box? Every word must appear somewhere in its title,
+// prompts, id, or its request's name, ticket, task type, profile or folder.
+function matches(s, filter) {
+  const words = (filter || "").toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return true;
+  const r = s.request || {};
+  const hay = [s.title, s.first_prompt, s.last_prompt, s.id, r.name, r.ticket, r.task_type,
+               r.profile, r.path].filter(Boolean).join("\n").toLowerCase();
+  return words.every(w => hay.includes(w));
+}
+
+// Sessions worth listing: in the work root or assigned to a request, not empty (opened
+// and closed without a prompt), and matching the search box.
+function visible(data, { showEmpty = false, filter = "" } = {}) {
   return data.sessions.filter(s => (s.in_work_root || s.request) &&
-    (showEmpty || s.title || s.first_prompt || s.last_prompt));
+    (showEmpty || s.title || s.first_prompt || s.last_prompt) && matches(s, filter));
 }
 
 // Requests, newest activity first, each with its sessions newest first. Sessions with no
@@ -118,5 +130,75 @@ function matchPending(pending, data, taken) {
   return out;
 }
 
-module.exports = { GROUPINGS, GROUPING_LABELS, ROOT_KEY, visible, requests, dayOf, tree,
-                   sessionLabel, tabName, ago, matchPending };
+// RFC 4180 CSV (claude-search --csv -) → array of objects keyed by the header row.
+function parseCsv(text) {
+  const rows = [];
+  let row = [], field = "", quoted = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (quoted) {
+      if (c === '"' && text[i + 1] === '"') { field += '"'; i++; }
+      else if (c === '"') quoted = false;
+      else field += c;
+    } else if (c === '"') quoted = true;
+    else if (c === ",") { row.push(field); field = ""; }
+    else if (c === "\n" || c === "\r") {
+      if (c === "\r" && text[i + 1] === "\n") i++;
+      row.push(field); rows.push(row); row = []; field = "";
+    } else field += c;
+  }
+  if (field || row.length) { row.push(field); rows.push(row); }
+  const [head, ...body] = rows.filter(r => r.length > 1 || r[0]);
+  return head ? body.map(r => Object.fromEntries(head.map((h, i) => [h, r[i] ?? ""]))) : [];
+}
+
+// Task types to offer: those in use (most recent first), then the configured seeds.
+function taskTypes(data, seeds = "") {
+  const out = [];
+  const add = t => { t = (t || "").trim(); if (t && !out.includes(t)) out.push(t); };
+  for (const r of requests(data, { showEmpty: true })) add(r.task_type);
+  for (const t of seeds.split(",")) add(t);
+  return out;
+}
+
+// Set a task type in a request's .session.json, as claude-type does: for one session
+// (session_types[id]) or, with no id, the folder's default. Returns [old, new].
+function setTaskType(folder, sessionId, type) {
+  const p = path.join(folder, ".session.json");
+  const d = JSON.parse(fs.readFileSync(p, "utf8"));
+  const per = d.session_types && typeof d.session_types === "object" ? d.session_types : {};
+  const old = (sessionId && per[sessionId]) || d.task_type || "";
+  if (sessionId) { per[sessionId] = type; d.session_types = per; } else d.task_type = type;
+  fs.writeFileSync(p, JSON.stringify(d, null, 2));
+  return [old, type];
+}
+
+// Skills in the given skills dirs: [{ name, description }] from each SKILL.md's frontmatter.
+function readSkills(dirs) {
+  const out = new Map();
+  for (const dir of dirs) {
+    let names = [];
+    try { names = fs.readdirSync(dir); } catch { continue; }
+    for (const n of names.sort()) {
+      let text;
+      try { text = fs.readFileSync(path.join(dir, n, "SKILL.md"), "utf8"); } catch { continue; }
+      const fm = (text.match(/^---\n([\s\S]*?)\n---/) || [])[1] || "";
+      const get = k => ((fm.match(new RegExp("^" + k + ":\\s*(.*)$", "m")) || [])[1] || "")
+        .trim().replace(/^["']|["']$/g, "");
+      const name = get("name") || n;
+      if (!out.has(name)) out.set(name, { name, description: get("description") });
+    }
+  }
+  return [...out.values()];
+}
+
+// claude-audit arguments for a period and view.
+function auditArgs(period, detail, date) {
+  const args = { today: ["--day"], week: ["--week"], lastweek: ["--week", date], month: ["--month"],
+                 day: ["--day", date], weekof: ["--week", date] }[period] || [];
+  return detail ? [...args, "--detail"] : args;
+}
+
+module.exports = { GROUPINGS, GROUPING_LABELS, ROOT_KEY, matches, visible, requests, dayOf, tree,
+                   sessionLabel, tabName, ago, matchPending, parseCsv, taskTypes, setTaskType,
+                   readSkills, auditArgs };

@@ -8,7 +8,9 @@ const path = require("path");
 const Module = require("module");
 
 function fakeVscode(settings) {
-  const commands = new Map(), executed = [], terminals = [], listeners = {};
+  const commands = new Map(), executed = [], terminals = [], listeners = {}, messages = [], answers = [], views = {};
+  // Quick picks and input boxes take the next scripted answer: a function of the items, or a value.
+  const answer = items => { const a = answers.shift(); return typeof a === "function" ? a(items) : a; };
   const on = name => fn => { (listeners[name] ||= []).push(fn); return { dispose() {} }; };
   class EventEmitter { constructor() { this.fns = []; this.event = f => this.fns.push(f); } fire() { this.fns.forEach(f => f()); } }
   class MarkdownString {
@@ -23,6 +25,7 @@ function fakeVscode(settings) {
     ThemeIcon: class { constructor(id, color) { this.id = id; this.color = color; } },
     ThemeColor: class { constructor(id) { this.id = id; } },
     TerminalLocation: { Panel: 1, Editor: 2 },
+    ProgressLocation: { Notification: 15 },
     RelativePattern: class { constructor(base, pattern) { this.base = base; this.pattern = pattern; } },
     Uri: { file: p => ({ fsPath: p }) },
     env: { clipboard: { writeText: async t => executed.push(["clipboard", t]) } },
@@ -39,7 +42,24 @@ function fakeVscode(settings) {
         terminals.push(t);
         return t;
       },
-      showQuickPick: async items => items.find(i => i.g === "ticket"),
+      showQuickPick: async items => answer(items),
+      showInputBox: async opts => { const v = answer(); return opts && opts.validateInput && v && opts.validateInput(v) ? undefined : v; },
+      createQuickPick: () => {
+        const qp = { items: [], value: "", selectedItems: [], accept: null, hide: null,
+          onDidAccept(f) { this.accept = f; }, onDidHide(f) { this.hide = f; }, dispose() {},
+          show() {
+            const a = answer(this.items);
+            if (a === undefined) return this.hide();
+            if (typeof a === "string") this.value = a; else this.selectedItems = [a];
+            this.accept();
+          } };
+        return qp;
+      },
+      withProgress: (opts, fn) => fn(),
+      showInformationMessage: async m => messages.push(["info", m]),
+      showWarningMessage: async m => messages.push(["warn", m]),
+      showErrorMessage: async m => messages.push(["error", m]),
+      registerWebviewViewProvider: (id, provider) => { views[id] = provider; return { dispose() {} }; },
       onDidCloseTerminal: on("close"),
       onDidChangeActiveTerminal: on("active"),
     },
@@ -51,7 +71,7 @@ function fakeVscode(settings) {
       },
     },
   };
-  return { vscode, commands, executed, terminals, listeners };
+  return { vscode, commands, executed, terminals, listeners, messages, answers, views };
 }
 
 function load(fake) {
@@ -139,6 +159,7 @@ test("activates, renders every grouping and opens sessions in tabs", async () =>
   assert.strictEqual(fake.terminals[1].name, "in the root");
 
   // grouping switch: remembered, recent shows the request next to each session
+  fake.answers.push(items => items.find(i => i.g === "ticket"));
   await fake.commands.get("claudeWorksessions.grouping")();
   assert.strictEqual(ctx.globalState.get("grouping"), "ticket");
   assert.strictEqual(view.description, "By ticket");
@@ -172,7 +193,7 @@ test("activates, renders every grouping and opens sessions in tabs", async () =>
   await fake.commands.get("claudeWorksessions.copyId")({ session: { id: "s1" } });
   await fake.commands.get("claudeWorksessions.reveal")(reqEl);
   await fake.commands.get("claudeWorksessions.revealInOS")(reqEl);
-  assert.deepStrictEqual(fake.executed.filter(e => e[0] !== "workbench.action.terminal.renameWithArg").map(e => e[0]),
+  assert.deepStrictEqual(fake.executed.filter(e => !["workbench.action.terminal.renameWithArg", "setContext"].includes(e[0])).map(e => e[0]),
                          ["clipboard", "revealInExplorer", "revealFileInOS"]);
 });
 
@@ -190,4 +211,235 @@ test("tabs are relinked by name after a reload, and a failing claude-sessions sh
   assert.strictEqual(view.message, "claude-sessions failed: boom");
   assert.strictEqual(view.provider.isOpen("s9"), true);
   assert.deepStrictEqual(view.provider.getChildren(undefined), []);
+});
+
+// A work root with one request, stub claude-sessions / claude-search, a config and skills.
+async function world(t) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cws-cmd-"));
+  const root = path.join(dir, "ws"), bin = path.join(dir, "bin");
+  const A = { path: path.join(root, "2026/09/22/10-00-00_a"), name: "demo", ticket: "BTPA-1",
+              task_type: "security", profile: "work" };
+  fs.mkdirSync(A.path, { recursive: true });
+  fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(A.path, ".session.json"), JSON.stringify({ name: "demo", task_type: "security" }));
+  const now = Date.now() / 1000;
+  const data = { work_root: root, sessions: [
+    { id: "s1", mtime: now - 60, cwd: A.path, in_work_root: true, title: "Fix the firewall",
+      first_prompt: "first", last_prompt: "open port 443", request: A },
+    { id: "s0", mtime: now - 7200, cwd: root, in_work_root: true, title: "Root chat",
+      first_prompt: "hi", last_prompt: null, request: null },
+  ] };
+  fs.writeFileSync(path.join(dir, "data.json"), JSON.stringify(data));
+  fs.writeFileSync(path.join(bin, "claude-sessions"), `#!/bin/sh\ncat "${dir}/data.json"\n`, { mode: 0o755 });
+  fs.writeFileSync(path.join(dir, "search.csv"),
+    'rank,level,score,session_id,start,end,worked,task,ticket,title,folder,why,snippet,resume\n' +
+    `1,strong,9,s1,2026-09-22T10:00,,,,BTPA-1,Fix the firewall,${A.path},"title: firewall","you: ""open port"""` +
+    `,cd x && claude-resume -p work --resume s1\n` +
+    `2,likely,3,zz-outside,2026-09-01T10:00,,,,,Elsewhere,/repo,why,snip,cd /repo && claude-resume --resume zz-outside\n`);
+  fs.writeFileSync(path.join(bin, "claude-search"),
+    `#!/bin/sh\necho "$*" >> "${dir}/search.log"\ncase "$*" in *nothing*) exit 0;; *broken*) echo bad >&2; exit 1;; esac\ncat "${dir}/search.csv"\n`,
+    { mode: 0o755 });
+  // config and skills under a throwaway HOME
+  const home = path.join(dir, "home");
+  fs.mkdirSync(path.join(home, ".claude-personal/skills/weekly-review"), { recursive: true });
+  fs.writeFileSync(path.join(home, ".claude-personal/skills/weekly-review/SKILL.md"),
+                   "---\nname: weekly-review\ndescription: Fill in the tracker\n---\n");
+  fs.writeFileSync(path.join(dir, "config.env"),
+                   'CWS_PROFILES="personal work"\nCWS_TASK_TYPES="permissions, tooling"\n');
+  const saved = { HOME: process.env.HOME, CWS_CONFIG: process.env.CWS_CONFIG };
+  process.env.HOME = home; process.env.CWS_CONFIG = path.join(dir, "config.env");
+  t.after(() => { for (const [k, v] of Object.entries(saved)) (v === undefined ? delete process.env[k] : process.env[k] = v); });
+
+  const fake = fakeVscode({ sessionsCommand: path.join(bin, "claude-sessions") });
+  const ctx = context();
+  load(fake).activate(ctx);
+  await settle(ctx);
+  const run = (name, ...a) => fake.commands.get("claudeWorksessions." + name)(...a);
+  return { dir, root, A, data, fake, ctx, run, bar: ctx.subscriptions[0].provider, view: ctx.subscriptions[0] };
+}
+
+function fakeWebview() {
+  const posted = [];
+  let handler;
+  return { posted, send: m => handler(m),
+           view: { webview: { options: {}, html: "", postMessage: m => posted.push(m),
+                              onDidReceiveMessage: f => { handler = f; } } } };
+}
+
+test("the search box filters the tree, counts matches and searches contents on Enter", async t => {
+  const w = await world(t);
+  const box = w.fake.views["claudeWorksessions.search"];
+  const web = fakeWebview();
+  box.resolveWebviewView(web.view);
+  assert.match(web.view.webview.html, /type="search"/);
+  assert.match(web.view.webview.html, /Content-Security-Policy/);
+
+  web.send({ type: "filter", value: "443" });
+  assert.strictEqual(w.bar.filter, "443");
+  const items = allItems(w.bar);
+  assert.deepStrictEqual(items.map(([, it]) => it.label), ["2026-09-22", "demo", "Fix the firewall"]);
+  assert.ok(items.every(([c, it]) => c.kind === "session" || it.collapsibleState === 2));   // all expanded
+  assert.ok(items[0][1].id.includes("|443|"));
+  assert.deepStrictEqual(web.posted.at(-1), { type: "hint", text: "1 of 2 sessions · Enter to search contents" });
+  assert.ok(w.fake.executed.some(e => e[0] === "setContext" && e[1] === "claudeWorksessions.filtering"));
+
+  web.send({ type: "filter", value: "zzz" });
+  assert.match(w.view.message, /No session matches "zzz"/);
+
+  // Enter: claude-search, then pick the first hit → opens its tab
+  w.fake.answers.push(items => items[0]);
+  web.send({ type: "search", value: "firewall" });
+  await new Promise(r => setTimeout(r, 300));
+  assert.match(fs.readFileSync(path.join(w.dir, "search.log"), "utf8"), /^firewall --csv - --no-pick --limit 25$/m);
+  assert.deepStrictEqual(w.fake.terminals.at(-1).sent, ["claude-resume -p 'work' --resume 's1'"]);
+
+  // clear: the box is told, the tree shows everything again
+  await w.run("clearFilter");
+  assert.deepStrictEqual(web.posted.filter(m => m.type === "set").at(-1), { type: "set", value: "" });
+  assert.strictEqual(w.bar.filter, "");
+  assert.strictEqual(w.view.message, undefined);
+  await w.run("focusSearch");
+  assert.deepStrictEqual(web.posted.at(-1), { type: "focus" });
+});
+
+test("search commands: AI flag, hits outside the list, no hits, failure", async t => {
+  const w = await world(t);
+  w.fake.answers.push("fire wall", items => items[1]);
+  await w.run("searchAi");
+  assert.match(fs.readFileSync(path.join(w.dir, "search.log"), "utf8"), /^fire wall --csv - --no-pick --limit 25 --ai$/m);
+  const t1 = w.fake.terminals.at(-1);
+  assert.strictEqual(t1.name, "Elsewhere");
+  assert.deepStrictEqual(t1.sent, ["cd /repo && claude-resume --resume zz-outside"]);
+  w.fake.answers.push("nothing");
+  await w.run("search");
+  assert.deepStrictEqual(w.fake.messages.at(-1), ["info", 'No sessions match "nothing".']);
+  w.fake.answers.push("broken");
+  await w.run("search");
+  assert.deepStrictEqual(w.fake.messages.at(-1), ["error", "claude-search failed: bad"]);
+  w.fake.answers.push(undefined);
+  await w.run("search");                                   // cancelled: nothing happens
+  w.fake.answers.push("firewall", undefined);
+  await w.run("search");                                   // no pick: nothing opens
+  assert.strictEqual(w.fake.terminals.length, 1);
+});
+
+test("audit runs claude-audit for the chosen period and view", async t => {
+  const w = await world(t);
+  w.fake.answers.push(items => items.find(i => i.period === "week"), items => items[0]);
+  await w.run("audit");
+  assert.deepStrictEqual(w.fake.terminals.at(-1).sent, ["claude-audit --week"]);
+  assert.strictEqual(w.fake.terminals.at(-1).name, "audit · This week");
+  assert.strictEqual(w.fake.terminals.at(-1).cwd, w.root);
+  w.fake.answers.push(items => items.find(i => i.period === "day"), "2026-09-01", items => items[1]);
+  await w.run("audit");
+  assert.deepStrictEqual(w.fake.terminals.at(-1).sent, ["claude-audit --day '2026-09-01' --detail"]);
+  w.fake.answers.push(items => items.find(i => i.period === "lastweek"), items => items[0]);
+  await w.run("audit");
+  assert.match(w.fake.terminals.at(-1).sent[0], /^claude-audit --week '\d{4}-\d{2}-\d{2}'$/);
+  const n = w.fake.terminals.length;
+  w.fake.answers.push(undefined);
+  await w.run("audit");
+  w.fake.answers.push(items => items.find(i => i.period === "day"), "not a date");
+  await w.run("audit");
+  w.fake.answers.push(items => items[0], undefined);
+  await w.run("audit");
+  assert.strictEqual(w.fake.terminals.length, n);
+});
+
+test("set task type on a session, a request, the focused tab, or a picked session", async t => {
+  const w = await world(t);
+  const meta = () => JSON.parse(fs.readFileSync(path.join(w.A.path, ".session.json"), "utf8"));
+  const sEl = allItems(w.bar).find(([c]) => c.session?.id === "s1")[0];
+  const rEl = allItems(w.bar).find(([c]) => c.kind === "request" && !c.request.root)[0];
+
+  w.fake.answers.push(items => {
+    assert.deepStrictEqual(items.map(i => i.label), ["security", "permissions", "tooling"]);
+    assert.strictEqual(items[0].description, "current");
+    return items[1];
+  });
+  await w.run("setType", sEl);
+  assert.deepStrictEqual(meta().session_types, { s1: "permissions" });
+  assert.match(w.fake.messages.at(-1)[1], /\(session s1\): security → permissions/);
+
+  w.fake.answers.push("incident");                          // typed, not in the list
+  await w.run("setType", rEl);
+  assert.strictEqual(meta().task_type, "incident");
+
+  await w.run("open", sEl);                                 // focused tab → its session, no picker
+  w.fake.answers.push(items => items[0]);
+  await w.run("setType");
+  assert.strictEqual(Object.keys(meta().session_types).length, 1);
+
+  w.fake.vscode.window.activeTerminal = undefined;          // nothing focused → pick a session
+  w.fake.answers.push(items => items.find(i => i.session.id === "s0"));
+  await w.run("setType");
+  assert.match(w.fake.messages.at(-1)[1], /no request folder/);
+
+  w.fake.answers.push(items => items.find(i => i.session.id === "s1"), undefined);
+  await w.run("setType");                                   // cancelled
+  fs.unlinkSync(path.join(w.A.path, ".session.json"));
+  await w.run("setType", rEl);
+  assert.match(w.fake.messages.at(-1)[1], /No .session.json in 10-00-00_a/);
+  w.fake.answers.push(undefined);
+  await w.run("setType");                                   // no session picked
+});
+
+test("recent sessions, go to request, skills, resume by id, new window", async t => {
+  const w = await world(t);
+  w.fake.answers.push(items => {
+    assert.deepStrictEqual(items.map(i => i.label), ["Fix the firewall", "Root chat"]);
+    assert.match(items[0].description, /^BTPA-1 · demo · 1m$/);
+    assert.strictEqual(items[0].detail, "last: open port 443");
+    assert.strictEqual(items[1].description.split(" · ")[0], "work root");
+    return items[0];
+  });
+  await w.run("recentSessions");
+  assert.deepStrictEqual(w.fake.terminals.at(-1).sent, ["claude-resume -p 'work' --resume 's1'"]);
+  w.fake.answers.push(undefined);
+  await w.run("recentSessions");
+
+  for (const [how, check] of [
+    ["window", () => assert.deepStrictEqual(w.fake.executed.at(-1), ["vscode.openFolder", { fsPath: w.A.path }])],
+    ["explorer", () => assert.deepStrictEqual(w.fake.executed.at(-1), ["revealInExplorer", { fsPath: w.A.path }])],
+    ["session", () => assert.deepStrictEqual(w.fake.terminals.at(-1).sent, ['CLAUDE_CONFIG_DIR="$HOME/.claude-work" claude'])],
+  ]) {
+    w.fake.answers.push(items => { assert.deepStrictEqual(items.map(i => i.label), ["demo"]); return items[0]; },
+                        items => items.find(i => i.how === how));
+    await w.run("goToRequest");
+    check();
+  }
+  w.fake.answers.push(undefined);
+  await w.run("goToRequest");
+  w.fake.answers.push(items => items[0], undefined);
+  await w.run("goToRequest");
+
+  w.fake.answers.push(items => { assert.deepStrictEqual(items.map(i => i.label), ["/weekly-review"]); return items[0]; });
+  await w.run("runSkill");
+  const sk = w.fake.terminals.at(-1);
+  assert.deepStrictEqual(sk.sent, ["claude-new --prompt '/weekly-review' 'weekly review'"]);
+  assert.strictEqual(sk.name, "new request · /weekly-review");
+  assert.strictEqual(w.bar.pending.at(-1).kind, "new");
+  w.fake.answers.push(undefined);
+  await w.run("runSkill");
+
+  w.fake.answers.push("s0");
+  await w.run("resumeById");
+  assert.deepStrictEqual(w.fake.terminals.at(-1).sent, ["claude-resume --resume 's0'"]);
+  w.fake.answers.push("abcdef12-0000");
+  await w.run("resumeById");
+  assert.deepStrictEqual(w.fake.terminals.at(-1).sent, ["claude-resume --resume 'abcdef12-0000'"]);
+  const n = w.fake.terminals.length;
+  w.fake.answers.push("not an id!");
+  await w.run("resumeById");
+  assert.strictEqual(w.fake.terminals.length, n);
+
+  await w.run("openInWindow", { request: w.A });
+  assert.deepStrictEqual(w.fake.executed.at(-1), ["vscode.openFolder", { fsPath: w.A.path }]);
+});
+
+test("run skill with no skills installed says so", async t => {
+  const w = await world(t);
+  fs.rmSync(path.join(process.env.HOME, ".claude-personal/skills"), { recursive: true });
+  await w.run("runSkill");
+  assert.match(w.fake.messages.at(-1)[1], /No skills found/);
 });

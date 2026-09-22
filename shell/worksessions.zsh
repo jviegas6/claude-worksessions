@@ -227,7 +227,7 @@ claude-new() {
   emulate -L zsh
   setopt local_options no_nomatch
 
-  local profile="" name="" ticket="" canon="" dir slug cfg started ended audit=1 ask_audit=1 ttype="" vscode=0
+  local profile="" name="" ticket="" canon="" dir slug cfg started ended audit=1 ask_audit=1 ttype="" vscode=0 prompt=""
   local -a profiles=(${=CWS_PROFILES})
 
   while [[ "$1" == -* ]]; do
@@ -247,6 +247,9 @@ claude-new() {
       -n|--no-audit) audit=0;          shift ;;
       -a|--audit)    ask_audit=0;      shift ;;
       -c|--code)     vscode=1;         shift ;;
+      --prompt)
+        if [[ -z "$2" ]]; then print -u2 -- "claude-new: --prompt needs the text to start Claude with"; return 1; fi
+        prompt="$2"; shift 2 ;;
       -T|--type)     ttype="$2";       shift 2 ;;
       -t|--ticket)
         if [[ -z "$2" ]]; then
@@ -268,10 +271,11 @@ print("{:<10} {:<14} {:<16} {:<9}".format("[" + (d.get("profile") or "?") + "]",
         done
         return 0 ;;
       -h|--help)
-        print -r -- 'claude-new [-p PROFILE] [-n|-a] [-c] [-t TICKET] [-T TYPE] [name]'
+        print -r -- 'claude-new [-p PROFILE] [-n|-a] [-c] [-t TICKET] [-T TYPE] [--prompt TEXT] [name]'
         print -r -- '    create a YYYY/MM/DD/HH-mm-ss_slug folder and start Claude in it'
         print -r -- '    -c / --code opens the folder in VS Code instead; the Claude extension there'
         print -r -- '    picks up the profile through claude-vscode'
+        print -r -- '    --prompt TEXT starts Claude with TEXT as the first prompt, e.g. --prompt /weekly-review'
         print -r -- "    TICKET is mandatory: PREFIX-123 (e.g. $CWS_TICKET_EXAMPLE), or Other"
         print -r -- '    -T / --type is the kind of work (permissions, job errors, ...); asked if omitted'
         print -r -- '    -n / --no-audit keeps the session out of claude-audit and the weekly review'
@@ -343,6 +347,10 @@ print("{:<10} {:<14} {:<16} {:<9}".format("[" + (d.get("profile") or "?") + "]",
   cfg="$HOME/.claude-$profile"
   if [[ ! -d "$cfg" ]]; then
     print -u2 -- "claude-new: config dir $cfg does not exist"
+    return 1
+  fi
+  if (( vscode )) && [[ -n "$prompt" ]]; then
+    print -u2 -- "claude-new: --prompt can't be used with -c (VS Code starts Claude itself)"
     return 1
   fi
   if (( vscode )) && ! command -v code >/dev/null 2>&1; then
@@ -447,7 +455,7 @@ json.dump({
     return
   fi
 
-  CLAUDE_CONFIG_DIR="$cfg" command claude
+  CLAUDE_CONFIG_DIR="$cfg" command claude ${prompt:+"$prompt"}
   local rc=$?
 
   ended="$(date -u +%Y-%m-%dT%H:%M:%SZ)"

@@ -3,7 +3,7 @@
 ## claude-new
 
 ```
-claude-new [-p PROFILE] [-n|-a] [-c] [-t TICKET] [-T TYPE] [name]
+claude-new [-p PROFILE] [-n|-a] [-c] [-t TICKET] [-T TYPE] [--prompt TEXT] [name]
 claude-new -l
 claude-new -L
 ```
@@ -31,6 +31,8 @@ that profile. `ended_at` is filled in when Claude exits.
   Claude in the terminal. Start Claude from the extension there; it runs with the
   session's profile through [`claude-vscode`](#claude-vscode). `ended_at` stays empty,
   since nothing waits for VS Code to close.
+- `--prompt TEXT` starts Claude with `TEXT` as its first prompt — `--prompt /weekly-review`
+  opens the new request straight into that skill. Not with `-c`.
 - `-l` lists the 15 most recent sessions with profile, ticket and type.
 - `-L` / `--profiles` lists the configured profiles: which is the default and which is
   shared, the description, the gateway URL if any, and a warning if `~/.claude-<name>`
@@ -160,7 +162,28 @@ by side.
 | list icon (top) | group by **day**, by **ticket**, or a flat list of **recent** sessions; remembered |
 | a session | open it in a tab (`claude-resume -p <profile> --resume <id>`), or go to its tab if open |
 | **+** on a request | a new session in that request's folder, with its profile |
-| folder on a request | reveal it in the Explorer (right-click: in Finder) |
+| folder on a request | reveal it in the Explorer (right-click: in Finder, a new window, set task type) |
+
+**Search box.** Above the tree: typing filters it to the sessions whose title, prompts,
+request name, ticket, task type, profile or folder contain every word, and opens every
+group so the matches show; `Esc` or the clear button in the title bar resets it. **Enter**
+runs `claude-search` on the text, which also looks inside the conversations, and lists
+the hits to pick from. Drag the divider to resize the box; VS Code remembers it.
+
+**Commands.** In the Command Palette under *Work sessions* (and in the `…` menu of the
+panel), the terminal commands and your skills:
+
+| command | does |
+|---|---|
+| New request | `claude-new` in a tab |
+| Recent sessions… | `claude-sessions` as a pick list; picking opens the session |
+| Search sessions… / with Claude… | `claude-search` (`--ai`), hits in a pick list |
+| Audit… | `claude-audit` for today, this or last week, this month, a day or a week; summary or detail |
+| Set task type… | `claude-type`: on a session (right-click, the focused tab, or pick one) or on a request (its default) |
+| Go to request… | `ws`: open a request in a new window, reveal it, or start a session in it |
+| Run skill… | any skill in `~/.claude-*/skills`: a new request (`claude-new --prompt /<skill>`), so it gets its ticket, type and folder |
+| Resume session by id… | `claude-resume --resume ID` in a tab |
+| Focus the search box · Clear search | |
 
 Sessions are named by Claude's auto-title, else their first prompt; hovering shows the
 title, first and latest prompt, ticket, type, profile and age. Open sessions have a

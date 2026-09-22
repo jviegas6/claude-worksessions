@@ -5,51 +5,278 @@
   "version": "0.0.0",
   "publisher": "jviegas6",
   "license": "MIT",
-  "repository": { "type": "git", "url": "https://github.com/jviegas6/claude-worksessions" },
-  "engines": { "vscode": "^1.93.0" },
-  "categories": ["Other"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jviegas6/claude-worksessions"
+  },
+  "engines": {
+    "vscode": "^1.93.0"
+  },
+  "categories": [
+    "Other"
+  ],
   "main": "extension.js",
-  "activationEvents": ["onStartupFinished"],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "contributes": {
     "viewsContainers": {
       "activitybar": [
-        { "id": "claudeWorksessions", "title": "Work sessions", "icon": "$(history)" }
+        {
+          "id": "claudeWorksessions",
+          "title": "Work sessions",
+          "icon": "$(history)"
+        }
       ]
     },
     "views": {
       "claudeWorksessions": [
-        { "id": "claudeWorksessions.sessions", "name": "Sessions" }
+        {
+          "type": "webview",
+          "id": "claudeWorksessions.search",
+          "name": "Search",
+          "initialSize": 1
+        },
+        {
+          "id": "claudeWorksessions.sessions",
+          "name": "Sessions",
+          "initialSize": 12
+        }
       ]
     },
     "commands": [
-      { "command": "claudeWorksessions.newRequest", "title": "New request (claude-new)", "category": "Work sessions", "icon": "$(add)" },
-      { "command": "claudeWorksessions.grouping",   "title": "Change grouping",          "category": "Work sessions", "icon": "$(list-tree)" },
-      { "command": "claudeWorksessions.refresh",    "title": "Refresh",                  "category": "Work sessions", "icon": "$(refresh)" },
-      { "command": "claudeWorksessions.open",       "title": "Open in a tab",            "icon": "$(terminal)" },
-      { "command": "claudeWorksessions.addSession", "title": "New session in this request", "icon": "$(add)" },
-      { "command": "claudeWorksessions.reveal",     "title": "Reveal in Explorer",       "icon": "$(folder-opened)" },
-      { "command": "claudeWorksessions.revealInOS", "title": "Reveal in Finder / file manager" },
-      { "command": "claudeWorksessions.copyId",     "title": "Copy session id" }
+      {
+        "command": "claudeWorksessions.newRequest",
+        "title": "New request (claude-new)",
+        "category": "Work sessions",
+        "icon": "$(add)"
+      },
+      {
+        "command": "claudeWorksessions.recentSessions",
+        "title": "Recent sessions\u2026 (claude-sessions)",
+        "category": "Work sessions",
+        "icon": "$(history)"
+      },
+      {
+        "command": "claudeWorksessions.search",
+        "title": "Search sessions\u2026 (claude-search)",
+        "category": "Work sessions",
+        "icon": "$(search)"
+      },
+      {
+        "command": "claudeWorksessions.searchAi",
+        "title": "Search sessions with Claude\u2026 (claude-search --ai)",
+        "category": "Work sessions",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "claudeWorksessions.audit",
+        "title": "Audit\u2026 (claude-audit)",
+        "category": "Work sessions",
+        "icon": "$(graph)"
+      },
+      {
+        "command": "claudeWorksessions.setType",
+        "title": "Set task type\u2026 (claude-type)",
+        "category": "Work sessions",
+        "icon": "$(tag)"
+      },
+      {
+        "command": "claudeWorksessions.goToRequest",
+        "title": "Go to request\u2026 (ws)",
+        "category": "Work sessions",
+        "icon": "$(folder)"
+      },
+      {
+        "command": "claudeWorksessions.runSkill",
+        "title": "Run skill\u2026",
+        "category": "Work sessions",
+        "icon": "$(wand)"
+      },
+      {
+        "command": "claudeWorksessions.resumeById",
+        "title": "Resume session by id\u2026 (claude-resume)",
+        "category": "Work sessions",
+        "icon": "$(debug-restart)"
+      },
+      {
+        "command": "claudeWorksessions.focusSearch",
+        "title": "Focus the search box",
+        "category": "Work sessions",
+        "icon": "$(search)"
+      },
+      {
+        "command": "claudeWorksessions.clearFilter",
+        "title": "Clear search",
+        "category": "Work sessions",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "claudeWorksessions.grouping",
+        "title": "Change grouping",
+        "category": "Work sessions",
+        "icon": "$(list-tree)"
+      },
+      {
+        "command": "claudeWorksessions.refresh",
+        "title": "Refresh",
+        "category": "Work sessions",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "claudeWorksessions.open",
+        "title": "Open in a tab",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "claudeWorksessions.addSession",
+        "title": "New session in this request",
+        "icon": "$(add)"
+      },
+      {
+        "command": "claudeWorksessions.reveal",
+        "title": "Reveal in Explorer",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "claudeWorksessions.revealInOS",
+        "title": "Reveal in Finder / file manager"
+      },
+      {
+        "command": "claudeWorksessions.openInWindow",
+        "title": "Open in a new window",
+        "icon": "$(empty-window)"
+      },
+      {
+        "command": "claudeWorksessions.copyId",
+        "title": "Copy session id"
+      }
     ],
     "menus": {
       "view/title": [
-        { "command": "claudeWorksessions.newRequest", "when": "view == claudeWorksessions.sessions", "group": "navigation@1" },
-        { "command": "claudeWorksessions.grouping",   "when": "view == claudeWorksessions.sessions", "group": "navigation@2" },
-        { "command": "claudeWorksessions.refresh",    "when": "view == claudeWorksessions.sessions", "group": "navigation@3" }
+        {
+          "command": "claudeWorksessions.newRequest",
+          "when": "view == claudeWorksessions.sessions",
+          "group": "navigation@1"
+        },
+        {
+          "command": "claudeWorksessions.clearFilter",
+          "when": "view == claudeWorksessions.sessions && claudeWorksessions.filtering",
+          "group": "navigation@2"
+        },
+        {
+          "command": "claudeWorksessions.grouping",
+          "when": "view == claudeWorksessions.sessions",
+          "group": "navigation@3"
+        },
+        {
+          "command": "claudeWorksessions.refresh",
+          "when": "view == claudeWorksessions.sessions",
+          "group": "navigation@4"
+        },
+        {
+          "command": "claudeWorksessions.runSkill",
+          "when": "view == claudeWorksessions.sessions",
+          "group": "1_run@1"
+        },
+        {
+          "command": "claudeWorksessions.search",
+          "when": "view == claudeWorksessions.sessions",
+          "group": "1_run@2"
+        },
+        {
+          "command": "claudeWorksessions.audit",
+          "when": "view == claudeWorksessions.sessions",
+          "group": "1_run@3"
+        },
+        {
+          "command": "claudeWorksessions.recentSessions",
+          "when": "view == claudeWorksessions.sessions",
+          "group": "1_run@4"
+        }
       ],
       "view/item/context": [
-        { "command": "claudeWorksessions.addSession", "when": "view == claudeWorksessions.sessions && viewItem == request", "group": "inline@1" },
-        { "command": "claudeWorksessions.reveal",     "when": "view == claudeWorksessions.sessions && viewItem == request", "group": "inline@2" },
-        { "command": "claudeWorksessions.revealInOS", "when": "view == claudeWorksessions.sessions && viewItem == request", "group": "1@1" },
-        { "command": "claudeWorksessions.open",       "when": "view == claudeWorksessions.sessions && viewItem == session", "group": "inline@1" },
-        { "command": "claudeWorksessions.copyId",     "when": "view == claudeWorksessions.sessions && viewItem == session", "group": "1@1" }
+        {
+          "command": "claudeWorksessions.addSession",
+          "when": "view == claudeWorksessions.sessions && viewItem == request",
+          "group": "inline@1"
+        },
+        {
+          "command": "claudeWorksessions.reveal",
+          "when": "view == claudeWorksessions.sessions && viewItem == request",
+          "group": "inline@2"
+        },
+        {
+          "command": "claudeWorksessions.addSession",
+          "when": "view == claudeWorksessions.sessions && viewItem == request",
+          "group": "1_open@1"
+        },
+        {
+          "command": "claudeWorksessions.openInWindow",
+          "when": "view == claudeWorksessions.sessions && viewItem == request",
+          "group": "1_open@2"
+        },
+        {
+          "command": "claudeWorksessions.reveal",
+          "when": "view == claudeWorksessions.sessions && viewItem == request",
+          "group": "2_reveal@1"
+        },
+        {
+          "command": "claudeWorksessions.revealInOS",
+          "when": "view == claudeWorksessions.sessions && viewItem == request",
+          "group": "2_reveal@2"
+        },
+        {
+          "command": "claudeWorksessions.setType",
+          "when": "view == claudeWorksessions.sessions && viewItem == request",
+          "group": "3_edit@1"
+        },
+        {
+          "command": "claudeWorksessions.open",
+          "when": "view == claudeWorksessions.sessions && viewItem == session",
+          "group": "inline@1"
+        },
+        {
+          "command": "claudeWorksessions.open",
+          "when": "view == claudeWorksessions.sessions && viewItem == session",
+          "group": "1_open@1"
+        },
+        {
+          "command": "claudeWorksessions.setType",
+          "when": "view == claudeWorksessions.sessions && viewItem == session",
+          "group": "3_edit@1"
+        },
+        {
+          "command": "claudeWorksessions.copyId",
+          "when": "view == claudeWorksessions.sessions && viewItem == session",
+          "group": "3_edit@2"
+        }
       ],
       "commandPalette": [
-        { "command": "claudeWorksessions.open",       "when": "false" },
-        { "command": "claudeWorksessions.addSession", "when": "false" },
-        { "command": "claudeWorksessions.reveal",     "when": "false" },
-        { "command": "claudeWorksessions.revealInOS", "when": "false" },
-        { "command": "claudeWorksessions.copyId",     "when": "false" }
+        {
+          "command": "claudeWorksessions.open",
+          "when": "false"
+        },
+        {
+          "command": "claudeWorksessions.addSession",
+          "when": "false"
+        },
+        {
+          "command": "claudeWorksessions.reveal",
+          "when": "false"
+        },
+        {
+          "command": "claudeWorksessions.revealInOS",
+          "when": "false"
+        },
+        {
+          "command": "claudeWorksessions.openInWindow",
+          "when": "false"
+        },
+        {
+          "command": "claudeWorksessions.copyId",
+          "when": "false"
+        }
       ]
     },
     "configuration": {

@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.1.0] — 2026-09-22
+
+- Runs on **Linux** and on **Windows through WSL**, as well as macOS.
+  - `install.sh` detects the system. On Linux/WSL it installs packages with `apt`,
+    `dnf`, `pacman` or `zypper` (or Homebrew, if present), one at a time, and says
+    where to get `yazi` / `glow` when the distribution doesn't carry them. It warns
+    when the login shell isn't zsh, and says to use zsh when run under bash.
+  - On WSL the work root defaults to the Windows OneDrive folder, and the Outlook
+    time-zone name is read from Windows.
+  - `claude-audit --copy` uses `clip.exe` on WSL (as UTF-16, so accents survive), and
+    `wl-copy`, `xclip` or `xsel` on Linux.
+  - `ws -o` and the yazi *Open as HTML* opener use Explorer on WSL and `xdg-open` on Linux.
+  - Scripts start with `#!/usr/bin/env zsh`, since zsh isn't always at `/bin/zsh`.
+- CI runs the tests on Ubuntu and macOS, and does a real install on a clean Ubuntu.
+
 ## [2.0.1] — 2026-09-22
 
 - `install.sh` printed stray `p=work` and `f=config/config.example.env` lines: two

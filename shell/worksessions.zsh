@@ -452,15 +452,31 @@ y() {
   rm -f -- "$tmp"
 }
 
+# Open a file or folder with the desktop's default app: Finder / Explorer / xdg-open.
+# CWS_OS (mac, linux, wsl) overrides the detection, for tests.
+_cws_open() {
+  local os="$CWS_OS"
+  if [[ -z "$os" ]]; then
+    if [[ "$(uname -s)" == Darwin ]]; then os=mac
+    elif grep -qsi microsoft /proc/version; then os=wsl
+    else os=linux; fi
+  fi
+  case $os in
+    mac) open "$1" ;;
+    wsl) (cd /mnt/c 2>/dev/null; explorer.exe "$(wslpath -w "$1")"); return 0 ;;  # explorer.exe exits 1 on success
+    *)   xdg-open "$1" >/dev/null 2>&1 &! ;;
+  esac
+}
+
 # ws: fuzzy-pick a request folder (newest first) and cd into it
-#   ws -o  also open in Finder · ws -c  also open in VS Code · ws -y  also browse with yazi
+#   ws -o  also open in Finder / Explorer · ws -c  also open in VS Code · ws -y  also browse with yazi
 ws() {
   local root="$CLAUDE_WORK_ROOT" d
   d=$(cd "$root" && print -rl -- [0-9][0-9][0-9][0-9]/[0-9][0-9]/[0-9][0-9]/*(/On) | fzf --height=60% --reverse \
         --preview "ls -la $root/{}") || return
   cd "$root/$d" || return
   case $1 in
-    -o) open . ;;
+    -o) _cws_open . ;;
     -c) code . ;;
     -y) y ;;
   esac

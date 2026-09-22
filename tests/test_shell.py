@@ -191,3 +191,88 @@ def test_install_prints_no_stray_assignments(tmp_path):
     stray = [ln for ln in (r.stdout + r.stderr).splitlines()
              if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", ln)]
     assert stray == []
+
+
+def dry_install(tmp_path, os_name, path=None, shell="/bin/zsh"):
+    """install.sh --dry-run --yes as if on `os_name`, against a throwaway home."""
+    conf = tmp_path / "ws" / "_config" / "config.env"
+    conf.parent.mkdir(parents=True, exist_ok=True)
+    conf.write_text('CWS_WORK_ROOT="{}/ws"\nCWS_PROFILES="personal work"\n'.format(tmp_path))
+    link = tmp_path / ".config" / "claude-worksessions" / "config.env"
+    link.parent.mkdir(parents=True, exist_ok=True)
+    if not link.exists():
+        link.symlink_to(conf)
+    env = {k: v for k, v in os.environ.items() if not k.startswith("CWS_")}
+    env.update(HOME=str(tmp_path), ZDOTDIR=str(tmp_path), CWS_OS=os_name, SHELL=shell)
+    if path:
+        env["PATH"] = path
+    return subprocess.run(["zsh", os.path.join(REPO, "install.sh"), "--dry-run", "--yes"], env=env,
+                          capture_output=True, text=True, stdin=subprocess.DEVNULL)
+
+
+HAS_BREW = any(os.access(p, os.X_OK) for p in (
+    "/opt/homebrew/bin/brew", "/usr/local/bin/brew", "/home/linuxbrew/.linuxbrew/bin/brew"))
+
+
+def stub_tools(tmp_path, *names):
+    d = tmp_path / "stubs"
+    d.mkdir(exist_ok=True)
+    for n in names:
+        (d / n).write_text("#!/bin/sh\nexit 0\n")
+        (d / n).chmod(0o755)
+    return d
+
+
+@pytest.mark.parametrize("os_name", ["linux", "wsl"])
+def test_install_on_linux_plans_the_package_manager(tmp_path, os_name):
+    # apt-get is found, fzf is not: the plan names apt, never Homebrew or the Mac tools
+    d = stub_tools(tmp_path, "apt-get")
+    r = dry_install(tmp_path, os_name, path=str(d) + os.pathsep + "/usr/bin:/bin")
+    assert "Prerequisites ({})".format(os_name) in r.stdout
+    assert "Command Line Tools" not in r.stdout
+    if HAS_BREW:   # Linux with Homebrew uses it, as on a Mac
+        assert "Homebrew packages:" in r.stdout and "apt-get" not in r.stdout
+    else:
+        assert "apt-get packages:" in r.stdout and "fzf" in r.stdout
+        assert "Homebrew" not in r.stdout
+
+
+def test_install_on_linux_without_a_package_manager(tmp_path):
+    if HAS_BREW or any(shutil.which(pm, path="/usr/bin:/bin") for pm in ("apt-get", "dnf", "pacman", "zypper")):
+        pytest.skip("this machine has a package manager")
+    r = dry_install(tmp_path, "linux", path="/usr/bin:/bin")
+    assert "no known package manager" in r.stdout
+
+
+def test_install_warns_when_login_shell_is_not_zsh(tmp_path):
+    r = dry_install(tmp_path, "linux", shell="/bin/bash")
+    assert "your login shell is /bin/bash" in r.stderr and "chsh -s" in r.stderr
+    r = dry_install(tmp_path, "linux", shell="/usr/bin/zsh")
+    assert "your login shell" not in r.stderr
+
+
+def test_install_under_bash_says_it_needs_zsh():
+    bash = shutil.which("bash")
+    r = subprocess.run([bash, os.path.join(REPO, "install.sh")], capture_output=True, text=True)
+    assert r.returncode == 1
+    assert "install.sh needs zsh" in r.stderr
+
+
+@pytest.mark.parametrize("os_name,tool,expected", [
+    ("mac", "open", "open ."),
+    ("wsl", "explorer.exe", "explorer.exe WINPATH"),
+    ("linux", "xdg-open", "xdg-open ."),
+])
+def test_cws_open_uses_the_desktop_opener(tmp_path, os_name, tool, expected):
+    d = tmp_path / "stubs"
+    d.mkdir()
+    (d / tool).write_text('#!/bin/sh\necho "$(basename "$0") $*" >> "{}/opened"\n'.format(tmp_path))
+    (d / tool).chmod(0o755)
+    (d / "wslpath").write_text("#!/bin/sh\necho WINPATH\n")
+    (d / "wslpath").chmod(0o755)
+    env = dict(os.environ, CWS_CONFIG=os.devnull, ZDOTDIR=str(tmp_path), CWS_OS=os_name,
+               PATH=str(d) + os.pathsep + os.environ["PATH"])
+    src = 'source "{}/shell/worksessions.zsh"\n_cws_open .; sleep 0.3'.format(REPO)
+    r = subprocess.run(["zsh", "-fc", src], env=env, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert (tmp_path / "opened").read_text().strip() == expected

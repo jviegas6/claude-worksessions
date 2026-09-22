@@ -7,13 +7,46 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: sudo apt-get install -y zsh
+      - if: runner.os == 'Linux'
+        run: sudo apt-get install -y zsh
       - run: pip install pytest pytest-cov
       # fail_under = 95 in pyproject.toml makes this fail when coverage drops below 95%
       - run: pytest
+
+  # A real install on a clean Ubuntu: packages from apt, Claude Code, the zsh block,
+  # then the commands must load in a new interactive zsh.
+  install-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The runner ships Homebrew; most Linux machines don't, so test the apt path
+      - run: sudo rm -rf /home/linuxbrew && sudo apt-get install -y zsh
+      - name: Config
+        run: |
+          mkdir -p "$HOME/ws/_config"
+          printf 'CWS_WORK_ROOT="%s"\nCWS_PROFILES="personal work"\nCWS_INSTALL_YAZI="1"\n' "$HOME/ws" > "$HOME/ws/_config/config.env"
+      - name: Install
+        run: zsh ./install.sh --yes --config "$HOME/ws/_config/config.env"
+      - name: Commands load
+        shell: zsh -il {0}
+        run: |
+          set -e
+          claude-new -L
+          claude-resume -h
+          claude-audit --help >/dev/null
+          claude-search --help >/dev/null
+          whence -p fzf pandoc claude
+          grep -q ">>> claude-worksessions >>>" "$HOME/.zshrc"
+          test -f "$HOME/ws/CLAUDE.md"
+      - name: Re-run is a no-op
+        run: zsh ./install.sh --yes --config "$HOME/ws/_config/config.env" | tee rerun.log && grep -q "block up to date" rerun.log

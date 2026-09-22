@@ -1,17 +1,18 @@
-#!/bin/zsh
-# claude-worksessions installer. Safe to re-run: every step checks before it acts,
-# and anything it replaces is backed up first.
+#!/usr/bin/env zsh
+# claude-worksessions installer for macOS, Linux and Windows (WSL). Safe to re-run: every
+# step checks before it acts, and anything it replaces is backed up first.
 #
 #   ./install.sh                      install / update using your config
 #   ./install.sh --config FILE        use this config.env
 #   ./install.sh --dry-run            print what would change, change nothing
-#   ./install.sh --no-brew            don't install Homebrew packages
+#   ./install.sh --no-brew            don't install packages (Homebrew, apt, dnf, ...)
 #   ./install.sh --no-bootstrap       don't install anything missing, just report it
 #   ./install.sh --profiles           add/remove/rename profiles, then install
 #   ./install.sh --update [vX.Y.Z]    move the checkout to the newest (or named) release
 #   ./install.sh --edge               move the checkout to main, then install
 #   ./install.sh --yes                don't prompt (tokens are then skipped)
 
+[ -n "$ZSH_VERSION" ] || { echo "install.sh needs zsh: install it (e.g. sudo apt install zsh), then run: zsh ./install.sh" >&2; exit 1; }
 emulate -L zsh
 setopt pipe_fail
 
@@ -31,7 +32,7 @@ while (( $# )); do
                if [[ "$1" == v* ]]; then TARGET="$1"; shift; fi ;;
     --edge)    UPDATE=1; EDGE=1; shift ;;
     --yes|-y)  YES=1; shift ;;
-    -h|--help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) print -u2 "install.sh: unknown option $1"; exit 1 ;;
   esac
 done
@@ -42,13 +43,37 @@ warn() { print -u2 -r -- "  ! $*"; }
 run()  { if (( DRY )); then print -r -- "    [dry-run] $*"; else "$@"; fi; }
 
 # Python for the JSON/config helpers. Re-resolved after the prerequisites step,
-# which can install one if this Mac has none.
+# which can install one if this machine has none.
 resolve_py() {
   if [[ -x /usr/bin/python3 ]]; then PY=/usr/bin/python3
   elif command -v python3 >/dev/null 2>&1; then PY="$(command -v python3)"
   else PY=""; fi
 }
 resolve_py
+
+# mac, linux or wsl (Windows Subsystem for Linux). CWS_OS overrides, for tests.
+detect_os() {
+  if [[ -n "$CWS_OS" ]]; then print -r -- "$CWS_OS"; return; fi
+  case "$(uname -s)" in
+    Darwin) print -r -- mac ;;
+    Linux)  grep -qsi microsoft /proc/version && print -r -- wsl || print -r -- linux ;;
+    *)      print -r -- linux ;;
+  esac
+}
+OS="$(detect_os)"
+
+# Where the work root goes by default: on WSL the Windows OneDrive folder if there is one
+# (work first, then personal), so it syncs like it does on a Mac.
+default_work_root() {
+  if [[ "$OS" == wsl ]] && command -v cmd.exe >/dev/null 2>&1 && command -v wslpath >/dev/null 2>&1; then
+    local var od
+    for var in OneDriveCommercial OneDrive; do
+      od="$(cd /mnt/c 2>/dev/null; cmd.exe /d /c "echo %$var%" 2>/dev/null | tr -d '\r')"
+      if [[ -n "$od" && "$od" != *%* ]]; then print -r -- "$(wslpath -u "$od")/work_sessions"; return; fi
+    done
+  fi
+  print -r -- "$HOME/work_sessions"
+}
 
 # Local IANA zone, and the name Outlook uses for it (a guess the user can correct)
 local_timezone() {
@@ -71,6 +96,11 @@ windows_timezone() {
     UTC|Etc/UTC) print -r -- "UTC" ;;
     *) print -r -- "" ;;
   esac
+}
+# On WSL, Windows knows its own zone name better than the table above.
+[[ "$OS" == wsl ]] && command -v powershell.exe >/dev/null 2>&1 && windows_timezone() {
+  local id="$(cd /mnt/c 2>/dev/null; powershell.exe -NoProfile -Command '(Get-TimeZone).Id' 2>/dev/null | tr -d '\r')"
+  print -r -- "$id"
 }
 
 # --- updating the checkout ---------------------------------------------------------
@@ -319,13 +349,13 @@ LINK="$HOME/.config/claude-worksessions/config.env"
 if [[ -z "$CONFIG" && -e "$LINK" ]]; then CONFIG="${LINK:A}"; fi
 FIRST_RUN=0
 if [[ -z "$CONFIG" ]]; then
-  local root_default="$HOME/work_sessions" root
+  local root_default="$(default_work_root)" root
   if (( YES )); then root="$root_default"
   else read "root?  Work root (where request folders live) [$root_default]: "; root="${root:-$root_default}"; fi
   root="${~root}"
   CONFIG="$root/_config/config.env"
   if [[ ! -f "$CONFIG" ]]; then
-    [[ -n "$PY" ]] || { print -u2 "install.sh: no python3 yet — run: xcode-select --install"; exit 1; }
+    [[ -n "$PY" ]] || { print -u2 "install.sh: no python3 yet — run: xcode-select --install (Mac) or install python3 with your package manager"; exit 1; }
     run mkdir -p "${CONFIG:h}"
     if (( DRY )); then say "[dry-run] would create $CONFIG and ask about profiles"; exit 0; fi
     sed "s|^CWS_WORK_ROOT=.*|CWS_WORK_ROOT=\"${root/#$HOME/\$HOME}\"|" "$REPO/config/config.example.env" > "$CONFIG"
@@ -366,30 +396,70 @@ say "work root  $CWS_WORK_ROOT"
 say "profiles   ${PROFILES[*]} (default $CWS_DEFAULT_PROFILE, shared $CWS_SHARED_PROFILE)"
 
 # --- 2. prerequisites --------------------------------------------------------------------
-# Nothing here is assumed to be present: a clean Mac gets the Command Line Tools,
-# Homebrew, Claude Code and the packages, after one confirmation.
-step "Prerequisites"
+# Nothing here is assumed to be present. A clean Mac gets the Command Line Tools,
+# Homebrew, Claude Code and the packages; Linux and WSL get them from the system package
+# manager (apt, dnf, pacman or zypper), or from Homebrew when it is installed. All after
+# one confirmation.
+step "Prerequisites ($OS)"
 
 brew_path() { [[ -x /opt/homebrew/bin/brew ]] && print -r -- /opt/homebrew/bin/brew ||
-              { [[ -x /usr/local/bin/brew ]] && print -r -- /usr/local/bin/brew; } }
-have_clt()  { /usr/bin/xcode-select -p >/dev/null 2>&1 }
+              { [[ -x /usr/local/bin/brew ]] && print -r -- /usr/local/bin/brew; } ||
+              { [[ -x /home/linuxbrew/.linuxbrew/bin/brew ]] && print -r -- /home/linuxbrew/.linuxbrew/bin/brew; } }
+have_clt()  { [[ "$OS" != mac ]] || /usr/bin/xcode-select -p >/dev/null 2>&1 }
 have_brew() { command -v brew >/dev/null 2>&1 || [[ -n "$(brew_path)" ]] }
+linux_pm()  { local pm; for pm in apt-get dnf pacman zypper; do command -v $pm >/dev/null 2>&1 && { print -r -- $pm; return; }; done }
+
+# Where to get what the package manager may not have
+typeset -A MANUAL=(
+  yazi "https://yazi-rs.github.io/docs/installation"
+  glow "https://github.com/charmbracelet/glow#installation"
+)
+
+# Install packages one at a time with the system package manager, so one it doesn't
+# carry (yazi, glow on apt) doesn't stop the rest. Sets `failed`.
+linux_install() {
+  local pm="$1" pkg name; shift
+  local -a sudo=()
+  (( EUID )) && sudo=(sudo)
+  [[ "$pm" == apt-get ]] && { $sudo apt-get update -qq >/dev/null || true }
+  for pkg; do
+    name="$pkg"
+    [[ "$pkg" == python3 && "$pm" == pacman ]] && name=python
+    case "$pm" in
+      apt-get) $sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$name" >/dev/null 2>&1 ;;
+      dnf)     $sudo dnf install -y -q "$name" >/dev/null 2>&1 ;;
+      pacman)  $sudo pacman -S --noconfirm --needed "$name" >/dev/null 2>&1 ;;
+      zypper)  $sudo zypper -n -q install "$name" >/dev/null 2>&1 ;;
+    esac && say "installed $pkg" || failed+=("$pkg")
+  done
+}
 
 typeset -a want=(fzf)
 (( CWS_INSTALL_YAZI )) && want+=(yazi glow pandoc)
-typeset -a pkgs_missing=() plan=()
+[[ "$OS" != mac ]] && want=(curl $want)
+typeset -a pkgs_missing=() plan=() failed=()
 local pkg
 for pkg in $want; do command -v $pkg >/dev/null 2>&1 || pkgs_missing+=($pkg); done
+PM=""
+[[ "$OS" != mac ]] && PM="$(linux_pm)"
+# Linux with Homebrew: use it, as on a Mac. Otherwise the system package manager.
+USE_BREW=0
+[[ "$OS" == mac ]] || have_brew && USE_BREW=1
 
 have_clt  || plan+=("Xcode Command Line Tools (git, compilers — opens Apple's installer)")
-have_brew || plan+=("Homebrew (https://brew.sh — may ask for your admin password)")
+[[ "$OS" == mac ]] && ! have_brew && plan+=("Homebrew (https://brew.sh — may ask for your admin password)")
 command -v claude >/dev/null 2>&1 || plan+=("Claude Code (claude)")
-(( ${#pkgs_missing} )) && plan+=("Homebrew packages: ${pkgs_missing[*]}")
+if (( ${#pkgs_missing} )); then
+  if (( USE_BREW )); then plan+=("Homebrew packages: ${pkgs_missing[*]}")
+  elif [[ -n "$PM" ]]; then plan+=("$PM packages: ${pkgs_missing[*]} (may ask for your sudo password)")
+  else plan+=("packages: ${pkgs_missing[*]} (no known package manager — install by hand)"); fi
+fi
 
 if (( ! ${#plan} )); then
-  say "all present: Command Line Tools, Homebrew, Claude Code, ${want[*]}"
+  if [[ "$OS" == mac ]]; then say "all present: Command Line Tools, Homebrew, Claude Code, ${want[*]}"
+  else say "all present: Claude Code, ${want[*]}"; fi
 else
-  print -r -- "  This Mac is missing:"
+  print -r -- "  This machine is missing:"
   local it
   for it in $plan; do print -r -- "    · $it"; done
   local ans="y"
@@ -406,7 +476,7 @@ else
       while ! have_clt && (( waited < 1800 )); do sleep 10; (( waited += 10 )); done
       have_clt && say "Command Line Tools ready" || warn "still not installed — rerun install.sh afterwards"
     fi
-    if ! have_brew; then
+    if [[ "$OS" == mac ]] && ! have_brew; then
       say "installing Homebrew…"
       NONINTERACTIVE=1 /bin/bash -c \
         "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" || \
@@ -421,13 +491,27 @@ else
         say "added brew shellenv to ~/.zprofile"
       fi
     fi
+    # curl first: the Claude Code installer needs it
+    if (( ! USE_BREW && BREW )) && [[ -n "$PM" ]] && (( ${pkgs_missing[(Ie)curl]} )); then
+      linux_install "$PM" curl
+    fi
     if ! command -v claude >/dev/null 2>&1; then
       say "installing Claude Code…"
       curl -fsSL https://claude.ai/install.sh | bash || warn "Claude Code install failed — see https://docs.claude.com/claude-code"
       export PATH="$HOME/.local/bin:$PATH"
     fi
-    if (( ${#pkgs_missing} )) && (( BREW )) && command -v brew >/dev/null 2>&1; then
-      brew install $pkgs_missing || warn "brew install failed for: ${pkgs_missing[*]}"
+    pkgs_missing=(${pkgs_missing:#curl})
+    if (( ${#pkgs_missing} )) && (( BREW )); then
+      if (( USE_BREW )) && command -v brew >/dev/null 2>&1; then
+        brew install $pkgs_missing || warn "brew install failed for: ${pkgs_missing[*]}"
+      elif [[ -n "$PM" ]]; then
+        linux_install "$PM" $pkgs_missing
+      else
+        failed+=($pkgs_missing)
+      fi
+      for pkg in $failed; do
+        warn "could not install $pkg${MANUAL[$pkg]:+ — see ${MANUAL[$pkg]}}"
+      done
     fi
   else
     warn "skipped — install by hand, then run ./install.sh again"
@@ -436,10 +520,14 @@ fi
 
 # Python for the JSON helpers: the system one, else Homebrew's, else install it
 resolve_py
-if [[ -z "$PY" ]] && command -v brew >/dev/null 2>&1 && (( ! DRY )); then
-  say "installing python…"; brew install python >/dev/null && resolve_py
+if [[ -z "$PY" ]] && (( ! DRY )); then
+  if (( USE_BREW )) && command -v brew >/dev/null 2>&1; then
+    say "installing python…"; brew install python >/dev/null && resolve_py
+  elif [[ -n "$PM" ]]; then
+    linux_install "$PM" python3; resolve_py
+  fi
 fi
-[[ -n "$PY" ]] || { print -u2 "install.sh: no python3 — install the Command Line Tools or run: brew install python"; exit 1; }
+[[ -n "$PY" ]] || { print -u2 "install.sh: no python3 — install it (Command Line Tools, brew install python, or your package manager)"; exit 1; }
 export CWS_PYTHON="$PY"
 say "python     $PY"
 command -v claude >/dev/null 2>&1 && say "claude     $(claude --version 2>/dev/null | head -1)" \
@@ -612,6 +700,10 @@ fi
 
 step "Done"
 (( UPDATE )) || version_notice
+# Linux usually starts bash; the commands live in ~/.zshrc, so zsh must be the login shell
+if [[ "${SHELL:t}" != zsh ]]; then
+  warn "your login shell is ${SHELL:-unknown} — make it zsh so the commands load: chsh -s $(command -v zsh)"
+fi
 say "Open a new terminal (or: source ~/.zshrc), then try:  claude-new -l   ·   ws   ·   claude-audit"
 (( DRY )) && say "(dry run — nothing was changed)"
 exit 0

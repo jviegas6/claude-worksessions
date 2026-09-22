@@ -1,6 +1,6 @@
 # claude-worksessions
 
-A Claude Code work setup for macOS: every request in its own dated folder, several
+A Claude Code work setup for macOS, Linux and Windows (WSL): every request in its own dated folder, several
 Claude profiles sharing one history, a time audit built from the transcripts, search
 across past sessions, and daily/weekly review skills — all driven by one config file.
 
@@ -24,10 +24,22 @@ cd ~/Repos/claude-worksessions
 source ~/.zshrc
 ```
 
-Needs macOS with zsh, and nothing else: on a clean Mac the installer lists what is
-missing — Xcode Command Line Tools, Homebrew, Claude Code, `fzf`, and `yazi glow
-pandoc` for the Markdown extras — asks once, and installs the lot. It then offers to
-open each profile so you can sign in.
+On a clean **Mac** the installer lists what is missing — Xcode Command Line Tools,
+Homebrew, Claude Code, `fzf`, and `yazi glow pandoc` for the Markdown extras — asks
+once, and installs the lot. It then offers to open each profile so you can sign in.
+
+On **Linux**, install zsh and git first (`sudo apt install zsh git`, or your
+distribution's equivalent), then run `zsh ./install.sh`. Packages come from `apt`,
+`dnf`, `pacman` or `zypper` (or Homebrew, if you have it). `yazi` and `glow` aren't in
+every distribution's repositories; when one can't be installed the installer says
+where to get it. If your login shell isn't zsh, it tells you to run `chsh -s $(which zsh)`.
+
+On **Windows**, use WSL: `wsl --install -d Ubuntu`, then follow the Linux steps
+inside Ubuntu. The work root defaults to your Windows OneDrive folder
+(`/mnt/c/Users/<you>/OneDrive - <org>/work_sessions`), so it syncs as it does on a
+Mac. Keep the checkout and your Claude profiles in the Linux home (`~`), not under
+`/mnt/c` — file access across the two is slow. `--copy` uses the Windows clipboard,
+and HTML / `ws -o` open in Windows.
 
 - `--update` moves the checkout to the newest release and re-installs (`--update vX.Y.Z` for a specific one, `--edge` to follow main)
 - `--dry-run` shows what it would change and changes nothing
@@ -38,7 +50,7 @@ Re-running is safe: unchanged things are left alone, anything replaced is backed
 `*.bak-<timestamp>`.
 
 The first run asks the questions instead of making you edit a file: work root, org,
-role, time zone (guessed from the Mac), example ticket key, and then your profiles —
+role, time zone (guessed from the system), example ticket key, and then your profiles —
 as many as you want, each either a **Claude subscription** (you sign in) or an
 **inference gateway** (base URL + token). `./install.sh --profiles` changes them later.
 

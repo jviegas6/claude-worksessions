@@ -284,6 +284,7 @@ def test_reconcile_line(mod):
 
 def test_copy_rows_success_and_failure(mod, monkeypatch, capsys):
     seen = {}
+    monkeypatch.setattr(mod, "clipboard_command", lambda: (["pbcopy"], "utf-8"))
 
     def fake_run(cmd, input=None, check=None):
         seen["cmd"], seen["input"] = cmd, input.decode()
@@ -301,6 +302,51 @@ def test_copy_rows_success_and_failure(mod, monkeypatch, capsys):
         raise subprocess.CalledProcessError(1, "pbcopy")
     monkeypatch.setattr(mod.subprocess, "run", failing)
     assert mod.copy_rows([{"a": 1}], ["a"]) is False
+
+
+def test_copy_rows_encodes_for_clip_exe(mod, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(mod, "clipboard_command", lambda: (["clip.exe"], "utf-16"))
+    monkeypatch.setattr(mod.subprocess, "run", lambda cmd, input=None, check=None: seen.update(b=input))
+    assert mod.copy_rows([{"a": "Conceição"}], ["a"])
+    assert seen["b"][:2] in (b"\xff\xfe", b"\xfe\xff")   # BOM, so clip.exe reads it as UTF-16
+    assert seen["b"].decode("utf-16") == "Conceição"
+
+
+def test_copy_rows_without_a_clipboard_tool(mod, monkeypatch, capsys):
+    monkeypatch.setattr(mod, "clipboard_command", lambda: (None, None))
+    assert mod.copy_rows([{"a": 1}], ["a"]) is False
+    assert "no clipboard tool found" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("platform,wsl,tools,expected", [
+    ("darwin", False, set(), (["pbcopy"], "utf-8")),
+    ("linux", True, {"clip.exe", "xclip"}, (["clip.exe"], "utf-16")),
+    ("linux", True, {"wl-copy"}, (["wl-copy"], "utf-8")),          # WSL without interop
+    ("linux", False, {"wl-copy", "xclip"}, (["wl-copy"], "utf-8")),
+    ("linux", False, {"xclip"}, (["xclip", "-selection", "clipboard"], "utf-8")),
+    ("linux", False, {"xsel"}, (["xsel", "--clipboard", "--input"], "utf-8")),
+    ("linux", False, set(), (None, None)),
+])
+def test_clipboard_command_per_platform(mod, monkeypatch, platform, wsl, tools, expected):
+    monkeypatch.setattr(mod.sys, "platform", platform)
+    monkeypatch.setattr(mod, "is_wsl", lambda: wsl)
+    monkeypatch.setattr(mod.shutil, "which", lambda name: "/bin/" + name if name in tools else None)
+    assert mod.clipboard_command() == expected
+
+
+def test_is_wsl_reads_proc_version(mod, monkeypatch, tmp_path):
+    import builtins
+    real_open = builtins.open
+    for text, expected in (("Linux version 5.15.153.1-microsoft-standard-WSL2", True),
+                           ("Linux version 6.8.0-45-generic", False)):
+        f = tmp_path / "version"
+        f.write_text(text)
+        monkeypatch.setattr(builtins, "open",
+                            lambda p, *a, **k: real_open(f if p == "/proc/version" else p, *a, **k))
+        assert mod.is_wsl() is expected
+    monkeypatch.setattr(builtins, "open", lambda p, *a, **k: (_ for _ in ()).throw(OSError()))
+    assert mod.is_wsl() is False
 
 
 def test_write_csv_to_stdout(mod, capsys):

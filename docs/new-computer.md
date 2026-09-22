@@ -15,7 +15,8 @@ What lives where decides what you need to carry:
 1. Sign in to OneDrive (or whatever syncs the work root) and let it finish syncing —
    **same path as before** if you can, so folder paths in old transcripts still resolve.
    Command Line Tools, Homebrew, Claude Code and the packages are installed by
-   `install.sh` in step 3; nothing to do by hand.
+   `install.sh` in step 3; nothing to do by hand. On Linux or WSL install `zsh` and
+   `git` first (see the README).
 2. Copy the history from the old machine:
    ```sh
    rsync -a old-mac:~/.claude-personal/projects/ ~/.claude-personal/projects/
@@ -31,6 +32,9 @@ What lives where decides what you need to carry:
    login — its token is enough). Your claude.ai connectors come back with the login;
    re-add any local MCP servers you use.
 5. Check: `claude-new -l`, `claude-audit --week`, `claude-search <something you know>`.
+
+Moving between a Mac and Linux/WSL always changes the path (`~/Library/CloudStorage/…`
+becomes `/mnt/c/Users/…/OneDrive - …`), so the next paragraph applies.
 
 If the work root ends up at a **different path** (e.g. a different OneDrive tenant
 name), set `CWS_WORK_ROOT` in `config.env` and record old → new in

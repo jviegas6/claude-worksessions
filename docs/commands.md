@@ -107,7 +107,7 @@ to resume one (`--no-pick` just lists). `--ai` asks Claude to judge relevance.
 |---|---|
 | `ws` | fuzzy-pick a request folder (newest first), cd into it |
 | `ws -y` | … and browse it in yazi |
-| `ws -o` | … and open it in Finder |
+| `ws -o` | … and open it in Finder (Explorer on WSL, the file manager on Linux) |
 | `ws -c` | … and open it in VS Code |
 | `y` | yazi; quitting leaves the shell where you were in yazi |
 
@@ -119,7 +119,7 @@ to resume one (`--no-pick` just lists). `--ai` asks Claude to judge relevance.
 | `Enter` | open as HTML in the browser — select all, copy, paste into Outlook with real tables |
 | `O` → Glow | full-screen rendered view, `q` returns |
 | `O` → Glow (light) | same, light theme, for iTerm2 *Copy with Styles* |
-| `O` → open | the macOS default app |
+| `O` → open | the system's default app |
 
 HTML styling is `~/.config/yazi/md-email.css`; the converter is
 `~/.config/yazi/md2html.sh FILE.md`, usable on its own.

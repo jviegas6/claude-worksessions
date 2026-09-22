@@ -1,4 +1,4 @@
-#!/bin/zsh
+#!/usr/bin/env zsh
 # Remove what install.sh added to this machine. Your work root, _config, the
 # Claude profile dirs and their history are NOT touched.
 emulate -L zsh

@@ -36,7 +36,7 @@ Folders beginning with `_` are infrastructure, not requests.
 `claude-new -t TICKET "topic"` (from claude-worksessions, `shell/worksessions.zsh`, sourced
 from `~/.zshrc`) creates the `YYYY/MM/DD/HH-mm-ss_slug` folder, records the profile and the **Jira
 ticket** (mandatory: `PREFIX-123` such as `{{CWS_TICKET_EXAMPLE}}`, or `Other`), cd's in, and launches Claude.
-`-w` / `-p` skip the profile prompt; a leading `{{CWS_TICKET_EXAMPLE}}` is taken as the ticket;
+`-p PROFILE` skips the profile prompt (`claude-new -L` lists them); a leading `{{CWS_TICKET_EXAMPLE}}` is taken as the ticket;
 `claude-new -l` lists recent sessions with their ticket.
 `-n` / `--no-audit` writes `"audit": false` to `.session.json`; `claude-audit` (and so the
 weekly review and daily recap) then skips that session. `claude-search` still finds it.

@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.0.1] — 2026-09-22
+
+- `install.sh` printed stray `p=work` and `f=config/config.example.env` lines: two
+  top-level loop variables were re-declared by a later `local`, which makes zsh print
+  them. The loops now use their own names.
+
 ## [2.0.0] — 2026-09-22
 
 - **Breaking:** `claude-new`'s `-w` / `--work`, `-p` / `--personal` and `-P` are gone.

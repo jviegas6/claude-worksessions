@@ -299,8 +299,10 @@ link() {
   say "linked $dst → $src"
 }
 
-for f in shell/worksessions.zsh templates/CLAUDE.md.tmpl bin/claude-audit config/config.example.env; do
-  [[ -f "$REPO/$f" ]] || { print -u2 "install.sh: $REPO is not a claude-worksessions checkout (no $f)"; exit 1; }
+# Loop variables here are top-level, so they must not reuse a name a later `local` declares:
+# zsh prints `name=value` when `local` re-declares a variable that is already set.
+for req in shell/worksessions.zsh templates/CLAUDE.md.tmpl bin/claude-audit config/config.example.env; do
+  [[ -f "$REPO/$req" ]] || { print -u2 "install.sh: $REPO is not a claude-worksessions checkout (no $req)"; exit 1; }
 done
 
 print -r -- "claude-worksessions $VERSION"
@@ -351,9 +353,9 @@ export CWS_CONFIG="$CONFIG"
 source "$REPO/shell/worksessions.zsh" || { print -u2 "install.sh: could not load $REPO/shell/worksessions.zsh"; exit 1; }
 unalias -m 'claude-*' 2>/dev/null || true
 typeset -a PROFILES=(${=CWS_PROFILES})
-for p in $PROFILES; do
-  [[ "$p" =~ '^[a-z0-9][a-z0-9_]*$' ]] && continue
-  print -u2 -r -- "install.sh: profile '$p' in CWS_PROFILES is not valid -- use lowercase letters, digits and underscores (no dashes); run install.sh --profiles or edit $CONFIG"
+for pname in $PROFILES; do
+  [[ "$pname" =~ '^[a-z0-9][a-z0-9_]*$' ]] && continue
+  print -u2 -r -- "install.sh: profile '$pname' in CWS_PROFILES is not valid -- use lowercase letters, digits and underscores (no dashes); run install.sh --profiles or edit $CONFIG"
   exit 1
 done
 : ${CWS_SHARED_PROFILE:=${PROFILES[1]}}

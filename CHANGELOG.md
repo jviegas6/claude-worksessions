@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.6.0] — 2026-09-22
+
+- **VS Code: the terminal commands and your skills in the Command Palette** (*Work
+  sessions: …*): recent sessions, search (plain and `--ai`), audit, set task type, go to
+  request, resume by id, and **Run skill…**, which starts any skill in `~/.claude-*/skills`
+  as a new request. Right-click a session or request for the ones that apply to it.
+- **VS Code: a search box above the sessions.** Typing filters the tree; Enter searches
+  inside the conversations with `claude-search`.
+- `claude-new --prompt TEXT` starts Claude with a first prompt (`--prompt /weekly-review`).
+
 ## [2.5.0] — 2026-09-22
 
 - `claude-new` asks whether the session counts in the weekly review and daily recap

@@ -460,3 +460,27 @@ def test_claude_new_without_a_terminal_counts_the_session(tmp_path):
                 PATH=str(stub) + os.pathsep + os.environ["PATH"])
     assert r.returncode == 0, r.stderr
     assert json.loads(next(tmp_path.glob("[0-9]*/*/*/*/.session.json")).read_text())["audit"] is True
+
+
+def test_claude_new_prompt_starts_claude_with_it(tmp_path):
+    (tmp_path / ".claude-personal").mkdir()
+    stub = tmp_path / "bin"
+    stub.mkdir()
+    (stub / "claude").write_text('#!/bin/sh\necho "$# $*" > "$HOME/args"\n')
+    (stub / "claude").chmod(0o755)
+    path = str(stub) + os.pathsep + os.environ["PATH"]
+    r = run_new(tmp_path, "-p personal -t Other -T tooling --prompt '/weekly-review now' demo", PATH=path)
+    assert r.returncode == 0, r.stderr
+    assert (tmp_path / "args").read_text() == "1 /weekly-review now\n"
+    r = run_new(tmp_path, "-p personal -t Other -T tooling demo2", PATH=path)
+    assert (tmp_path / "args").read_text() == "0 \n"     # no prompt: claude gets no arguments
+
+
+@pytest.mark.parametrize("args,err", [
+    ("--prompt", "--prompt needs the text"),
+    ("-c --prompt /x -p personal -t Other -T tooling demo", "can't be used with -c"),
+])
+def test_claude_new_prompt_errors(tmp_path, args, err):
+    (tmp_path / ".claude-personal").mkdir()
+    r = run_new(tmp_path, args)
+    assert r.returncode == 1 and err in r.stderr

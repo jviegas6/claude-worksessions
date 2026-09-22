@@ -410,3 +410,53 @@ def test_uninstall_removes_the_vscode_pieces(tmp_path, settings, after, message)
         assert message in r.stdout
     assert "--uninstall-extension jviegas6.claude-worksessions" in (tmp_path / "code.log").read_text()
     assert "uninstalled the Work sessions sidebar" in r.stdout
+
+
+def run_new_tty(root, args, typed):
+    """claude-new on a terminal (a pty), with `typed` already waiting as input."""
+    import pty
+    master, slave = pty.openpty()
+    os.write(master, typed.encode())
+    stub = root / "bin"
+    stub.mkdir(exist_ok=True)
+    (stub / "claude").write_text("#!/bin/sh\nexit 0\n")
+    (stub / "claude").chmod(0o755)
+    e = dict(os.environ, CLAUDE_WORK_ROOT=str(root), CWS_CONFIG=os.devnull, ZDOTDIR=str(root),
+             HOME=str(root), CWS_PROFILES="personal", CWS_DEFAULT_PROFILE="personal",
+             PATH=str(stub) + os.pathsep + os.environ["PATH"])
+    src = 'source "{}/shell/worksessions.zsh"\nclaude-new {}'.format(REPO, args)
+    try:
+        r = subprocess.run(["zsh", "-fc", src], env=e, stdin=slave, capture_output=True, text=True, timeout=20)
+    finally:
+        os.close(slave)
+        os.close(master)
+    return r
+
+
+@pytest.mark.parametrize("args,typed,audit", [
+    ("", "\n", True),          # Enter keeps it in the review
+    ("", "y\n", True),
+    ("", "n\n", False),        # asked, and left out
+    ("", "No\n", False),
+    ("-n", "", False),         # -n: not asked
+    ("-a", "", True),          # -a: not asked
+])
+def test_claude_new_asks_about_the_review(tmp_path, args, typed, audit):
+    (tmp_path / ".claude-personal").mkdir()
+    r = run_new_tty(tmp_path, args + " -t Other -T tooling demo", typed)
+    assert r.returncode == 0, r.stderr
+    meta = json.loads(next(tmp_path.glob("[0-9]*/*/*/*/.session.json")).read_text())
+    assert meta["audit"] is audit
+    assert ("(no-audit)" in r.stdout) is (not audit)
+
+
+def test_claude_new_without_a_terminal_counts_the_session(tmp_path):
+    (tmp_path / ".claude-personal").mkdir()
+    stub = tmp_path / "bin"
+    stub.mkdir()
+    (stub / "claude").write_text("#!/bin/sh\nexit 0\n")
+    (stub / "claude").chmod(0o755)
+    r = run_new(tmp_path, "-p personal -t Other -T tooling demo",
+                PATH=str(stub) + os.pathsep + os.environ["PATH"])
+    assert r.returncode == 0, r.stderr
+    assert json.loads(next(tmp_path.glob("[0-9]*/*/*/*/.session.json")).read_text())["audit"] is True

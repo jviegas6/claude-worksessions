@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.5.0] — 2026-09-22
+
+- `claude-new` asks whether the session counts in the weekly review and daily recap
+  (`[Y/n]`, Enter for yes) unless `-n` or the new `-a` / `--audit` answers it. Until now
+  only `-n` could leave a session out, so a session started without it — such as from
+  the VS Code sidebar's **+**, which runs plain `claude-new` — always counted.
+
 ## [2.4.0] — 2026-09-22
 
 - **Work sessions sidebar for VS Code.** `install.sh` builds and installs a small

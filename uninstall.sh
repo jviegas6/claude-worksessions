@@ -4,7 +4,8 @@
 emulate -L zsh
 REPO="${0:A:h}"
 say() { print -r -- "  $*"; }
-for b in claude-audit claude-search claude-sessions; do
+if [[ -x /usr/bin/python3 ]]; then PY=/usr/bin/python3; else PY="$(command -v python3)"; fi
+for b in claude-audit claude-search claude-sessions claude-vscode; do
   f="$HOME/.local/bin/$b"
   [[ -L "$f" && "$(readlink "$f")" == "$REPO/bin/$b" ]] && rm "$f" && say "removed $f"
 done
@@ -17,6 +18,32 @@ s = re.sub(r"\n?# >>> claude-worksessions >>>.*?# <<< claude-worksessions <<<\n?
 open(p, "w").write(s)
 PY
   say "removed the block from ~/.zshrc (backup kept)"
+fi
+# VS Code: the Claude extension must stop launching through the claude-vscode just removed
+for vsset in "$HOME/Library/Application Support/Code/User/settings.json" \
+             "$HOME/.config/Code/User/settings.json" "$HOME/.vscode-server/data/Machine/settings.json"; do
+  [[ -f "$vsset" ]] || continue
+  out=$(WRAPPER="$HOME/.local/bin/claude-vscode" "$PY" - "$vsset" 2>&1 <<'PY'
+import json, os, sys
+p = sys.argv[1]
+try:
+    d = json.load(open(p))
+except ValueError:
+    print("unparsed"); raise SystemExit
+if d.get("claudeCode.claudeProcessWrapper") == os.environ["WRAPPER"]:
+    del d["claudeCode.claudeProcessWrapper"]
+    open(p, "w").write(json.dumps(d, indent=4) + "\n")
+    print("removed")
+PY
+  )
+  case $out in
+    removed)  say "removed claudeCode.claudeProcessWrapper from $vsset" ;;
+    unparsed) say "remove claudeCode.claudeProcessWrapper from $vsset yourself (it has comments)" ;;
+  esac
+done
+if command -v code >/dev/null 2>&1 &&
+   code --list-extensions 2>/dev/null | grep -qix "jviegas6.claude-worksessions"; then
+  code --uninstall-extension jviegas6.claude-worksessions >/dev/null 2>&1 && say "uninstalled the Work sessions sidebar"
 fi
 L="$HOME/.config/claude-worksessions/config.env"
 [[ -L "$L" ]] && rm "$L" && say "removed $L (the config file itself is kept)"

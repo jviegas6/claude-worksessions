@@ -1,5 +1,21 @@
 # Changelog
 
+## [2.4.0] — 2026-09-22
+
+- **Work sessions sidebar for VS Code.** `install.sh` builds and installs a small
+  extension (no npm; `vscode/package_vsix.py` packages it) when `code` is on the PATH.
+  It lists your requests and their Claude sessions, grouped by day, by ticket, or as a
+  flat recent list, and opens each session as a terminal tab in the editor area, in its
+  own folder with its own profile. New request (`claude-new`) and new session in a request
+  are one click; tabs are named `TICKET · title` and survive a window reload.
+  See [docs/commands.md](docs/commands.md#vs-code-sidebar).
+- `claude-sessions --json`: each session with its auto-title, latest prompt and request
+  folder (name, ticket, task type, profile). The sidebar reads this.
+- `uninstall.sh` removes the sidebar and the `claudeCode.claudeProcessWrapper` setting
+  with `claude-vscode`, and no longer fails to clean `~/.zshrc` (it used `$PY` without
+  setting it).
+- The extension's logic has `node --test` tests, run by pytest when node is installed.
+
 ## [2.3.0] — 2026-09-22
 
 - **VS Code.** The Claude extension now runs with the profile of the request folder it

@@ -8,6 +8,7 @@ across past sessions, and daily/weekly review skills — all driven by one confi
 |---|---|
 | `claude-new` | creates `YYYY/MM/DD/HH-mm-ss_slug/`, records profile + ticket in `.session.json`, starts Claude there |
 | `claude-new -c` | the same, then opens the folder in VS Code, where the Claude extension uses the session's profile |
+| VS Code sidebar | requests and their sessions by day or ticket, each session opened as a tab in its own folder and profile |
 | `claude-resume` | Claude Code with a profile: `claude-resume -p work --resume ID`; no args opens the session picker |
 | `claude-audit` | what you worked on — per day, week, month — from transcripts plus meetings/mail/chats |
 | `claude-search` | find past sessions by ticket or topic, with the command to resume each |
@@ -76,7 +77,7 @@ it. See [docs/configuration.md](docs/configuration.md).
 ## Docs
 
 - [Configuration](docs/configuration.md) — every setting, profiles, gateway tokens
-- [Commands](docs/commands.md) — `claude-new`, `claude-audit`, `claude-search`, `claude-sessions`, `ws`, `y`, yazi keys
+- [Commands](docs/commands.md) — `claude-new`, `claude-audit`, `claude-search`, `claude-sessions`, the VS Code sidebar, `ws`, `y`, yazi keys
 - [Folder layout](docs/folder-layout.md) — what goes where, and moving folders safely
 - [New computer](docs/new-computer.md) — moving the whole setup
 - [Releasing](docs/releasing.md) — versions, tags and GitHub releases

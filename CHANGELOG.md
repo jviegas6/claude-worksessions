@@ -1,5 +1,24 @@
 # Changelog
 
+## [2.0.0] — 2026-09-22
+
+- **Breaking:** `claude-new`'s `-w` / `--work`, `-p` / `--personal` and `-P` are gone.
+  `-p NAME` / `--profile NAME` now takes any profile in `CWS_PROFILES`, so adding a
+  profile needs no code change. Replace `claude-new -w ...` with `claude-new -p work ...`.
+  An unknown or missing name is an error that lists the valid ones.
+- **Breaking:** the per-profile aliases `claude-personal`, `claude-work`, … are gone.
+  Use `claude-resume -p NAME [claude args]` — `claude-work --resume ID` becomes
+  `claude-resume -p work --resume ID`. With no claude arguments it opens the resume
+  picker. `claude-search` prints and runs resume commands this way, and now sets the
+  config dir for every configured profile, not just `work` / `personal`.
+- Profile names can no longer contain dashes. `CWS_PROFILE_my-work_DESC` / `_BASE_URL`
+  are not valid variable names, so they were silently ignored — a gateway profile named
+  `my-work` lost its URL and was set up as a subscription login. `install.sh --profiles`
+  now asks for letters, digits and underscores, and `install.sh` stops if `CWS_PROFILES`
+  holds a dashed name (rename it, e.g. `my_work`, and its `~/.claude-<name>` folder).
+- `claude-new -L` / `--profiles` lists the configured profiles: default and shared
+  markers, description, gateway URL, and a warning when `~/.claude-<name>` is missing.
+
 ## [1.9.2] — 2026-09-21
 
 - Test suite (`tests/`, pytest) and a `tests` GitHub Actions workflow on every pull

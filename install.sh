@@ -194,7 +194,7 @@ configure_profiles() {
   local name kind desc url current="${CWS_PROFILES:-}"
   print -r -- ""
   print -r -- "  A profile is a separate Claude Code login with its own config dir"
-  print -r -- "  (~/.claude-<name>) and command (claude-<name>). They share history,"
+  print -r -- "  (~/.claude-<name>), run with claude-resume -p <name>. They share history,"
   print -r -- "  projects and skills, so every session shows up in claude-audit."
   [[ -n "$current" ]] && print -r -- "  Current: $current"
   print -r -- ""
@@ -206,8 +206,10 @@ configure_profiles() {
       read "name?  First profile name [personal]: "
       name="${name:-personal}"
     fi
-    if [[ ! "$name" =~ '^[a-z0-9][a-z0-9-]*$' ]]; then
-      warn "use lowercase letters, digits and dashes"; continue
+    # No dashes: the name goes into CWS_PROFILE_<name>_DESC / _BASE_URL, and a dash is not
+    # valid in a variable name, so those settings would be silently ignored.
+    if [[ ! "$name" =~ '^[a-z0-9][a-z0-9_]*$' ]]; then
+      warn "use lowercase letters, digits and underscores (no dashes)"; continue
     fi
     if (( ${names[(Ie)$name]} )); then warn "'$name' already added"; continue; fi
     print -r -- "    1) Claude subscription (Pro/Max/Team) — sign in with your account"
@@ -349,6 +351,11 @@ export CWS_CONFIG="$CONFIG"
 source "$REPO/shell/worksessions.zsh" || { print -u2 "install.sh: could not load $REPO/shell/worksessions.zsh"; exit 1; }
 unalias -m 'claude-*' 2>/dev/null || true
 typeset -a PROFILES=(${=CWS_PROFILES})
+for p in $PROFILES; do
+  [[ "$p" =~ '^[a-z0-9][a-z0-9_]*$' ]] && continue
+  print -u2 -r -- "install.sh: profile '$p' in CWS_PROFILES is not valid -- use lowercase letters, digits and underscores (no dashes); run install.sh --profiles or edit $CONFIG"
+  exit 1
+done
 : ${CWS_SHARED_PROFILE:=${PROFILES[1]}}
 : ${CWS_ORG:=} ${CWS_USER_ROLE:=} ${CWS_TIMEZONE:=UTC} ${CWS_TIMEZONE_WINDOWS:=UTC} ${CWS_JIRA_CLOUD_ID:=} ${CWS_INSTALL_YAZI:=1}
 export HOME CWS_WORK_ROOT="$CLAUDE_WORK_ROOT" CWS_ORG CWS_USER_ROLE CWS_TIMEZONE CWS_TIMEZONE_WINDOWS \

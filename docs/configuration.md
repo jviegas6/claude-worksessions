@@ -27,7 +27,7 @@ just as well — re-run `install.sh` afterwards so the skills and `CLAUDE.md` ca
 | `CWS_TIMEZONE_WINDOWS` | `UTC` | the same zone as Outlook names it (e.g. `GMT Standard Time`) |
 | `CWS_TICKET_EXAMPLE` | `PROJ-123` | prompts and help text; any `PREFIX-123` or `Other` is accepted |
 | `CWS_JIRA_CLOUD_ID` | — | the weekly review's Jira query (Atlassian MCP `getAccessibleAtlassianResources` gives it) |
-| `CWS_PROFILES` | `personal work` | Claude profiles; each is `~/.claude-<name>` with alias `claude-<name>` |
+| `CWS_PROFILES` | `personal work` | Claude profiles; each is `~/.claude-<name>`, picked with `-p <name>` in `claude-new` / `claude-resume` |
 | `CWS_DEFAULT_PROFILE` | first profile | what a bare `claude` uses; the default in `claude-new`'s menu |
 | `CWS_SHARED_PROFILE` | first profile | the profile that owns history, projects, skills, plugins, MCP |
 | `CWS_PROFILE_<name>_DESC` | — | the line shown in `claude-new`'s profile menu |
@@ -41,7 +41,9 @@ those are rendered into the skills and the work root's `CLAUDE.md`.
 
 ## Profiles
 
-Have as many as you like. Each is either a **Claude subscription** — you sign in with
+Have as many as you like. Names are lowercase letters, digits and underscores — no
+dashes, because the name becomes part of `CWS_PROFILE_<name>_DESC` / `_BASE_URL`.
+Each is either a **Claude subscription** — you sign in with
 your account, and `install.sh` offers to open it for you — or an **inference gateway**:
 an Anthropic-compatible `CWS_PROFILE_<name>_BASE_URL` plus a token, which needs no
 login at all. `install.sh --profiles` adds, renames or removes them; a profile you drop

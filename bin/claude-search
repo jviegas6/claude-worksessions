@@ -402,7 +402,7 @@ def shell_path(path):
 
 
 def launcher(r):
-    return "claude-" + r["profile"] if r["profile"] in CA.PROFILES else "claude"
+    return "claude-resume -p " + r["profile"] if r["profile"] in CA.PROFILES else "claude"
 
 
 def resume_cmd(r):
@@ -425,7 +425,7 @@ def pick_and_resume(results):
     d = r["doc"]
     if not os.path.isdir(d["cwd"]):
         sys.exit("claude-search: folder no longer exists: " + short(d["cwd"]))
-    if r["profile"] in ("work", "personal"):  # what the claude-work / claude-personal aliases do
+    if r["profile"] in CA.PROFILES:  # what claude-resume -p does
         os.environ["CLAUDE_CONFIG_DIR"] = os.path.join(HOME, ".claude-" + r["profile"])
     os.chdir(d["cwd"])
     print(resume_cmd(r))

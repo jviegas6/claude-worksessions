@@ -3,8 +3,9 @@
 ## claude-new
 
 ```
-claude-new [-w|-p|-P PROFILE] [-n] [-t TICKET] [name]
+claude-new [-p PROFILE] [-n] [-t TICKET] [-T TYPE] [name]
 claude-new -l
+claude-new -L
 ```
 
 Creates `<work root>/YYYY/MM/DD/HH-mm-ss_slug/`, writes `.session.json` (name, slug,
@@ -13,8 +14,8 @@ that profile. `ended_at` is filled in when Claude exits.
 
 - **Ticket is mandatory**: `PREFIX-123` or `Other`. A ticket-shaped first word is taken
   as the ticket: `claude-new PROJ-123 cost pipeline`.
-- `-w` / `-p` pick the `work` / `personal` profile, `-P name` any profile; otherwise
-  you get a menu.
+- `-p name` / `--profile name` picks the profile — any name in `CWS_PROFILES`, so a
+  new profile needs no code change. Left out, you get a menu. An unknown name is an error.
 - `-n` / `--no-audit` keeps the session out of `claude-audit` and the weekly review.
   `claude-search` still finds it.
 - `-T type` / `--type` sets the **task type** — what kind of work *starts* this session
@@ -25,6 +26,21 @@ that profile. `ended_at` is filled in when Claude exits.
   The type is the **trigger**, not the detours: a job error that needs investigation, a
   permission change and a doc update is `job errors`.
 - `-l` lists the 15 most recent sessions with profile, ticket and type.
+- `-L` / `--profiles` lists the configured profiles: which is the default and which is
+  shared, the description, the gateway URL if any, and a warning if `~/.claude-<name>`
+  is missing.
+
+## claude-resume
+
+```
+claude-resume [-p PROFILE] [--] [claude args...]
+```
+
+Runs Claude Code with a profile (default `CWS_DEFAULT_PROFILE`). Everything except `-p`
+goes to `claude` unchanged, so `claude-resume -p work --resume ID` or `-c` work as usual.
+With no claude arguments it adds `--resume`, which opens the session picker. `--` ends
+its own options, for claude's `-p` (print mode): `claude-resume -p work -- -p "question"`.
+This replaces the per-profile `claude-<name>` aliases.
 
 ## claude-type
 

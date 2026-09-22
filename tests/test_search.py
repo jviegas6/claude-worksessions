@@ -340,8 +340,8 @@ def test_paths_and_resume_cmd(search, home):
     assert search.shell_path(str(home / "My Docs" / "x(1)")) == r"~/My\ Docs/x\(1\)"
     assert search.shell_path("/opt/a b") == r"/opt/a\ b"
     r = {"profile": "work", "doc": {"cwd": str(home / "w s"), "session_id": "abc"}}
-    assert search.launcher(r) == "claude-work"
-    assert search.resume_cmd(r) == r"cd ~/w\ s && claude-work --resume abc"
+    assert search.launcher(r) == "claude-resume -p work"
+    assert search.resume_cmd(r) == r"cd ~/w\ s && claude-resume -p work --resume abc"
     assert search.launcher({"profile": "unknown"}) == "claude"
 
 
@@ -421,7 +421,7 @@ def test_main_prints_results(search, corpus, monkeypatch, capsys):
     assert out.startswith('claude-search "firewall" · 1 of 2 sessions')
     assert "Firewall for Databricks" in out
     assert "not booked yet" in out
-    assert "claude-work --resume fw1" in out
+    assert "claude-resume -p work --resume fw1" in out
     assert "Thu 10 Sep" in out
 
 

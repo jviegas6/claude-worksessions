@@ -47,12 +47,42 @@ export CLAUDE_WORK_ROOT="${CWS_WORK_ROOT:-${CLAUDE_WORK_ROOT:-$HOME/work_session
 # Default profile for a bare `claude`
 export CLAUDE_CONFIG_DIR="$HOME/.claude-$CWS_DEFAULT_PROFILE"
 
-# One alias per profile: claude-personal, claude-work, ...
-() {
-  local p
-  for p in ${=CWS_PROFILES}; do
-    alias "claude-$p=CLAUDE_CONFIG_DIR=\$HOME/.claude-$p claude"
-  done
+# `-p NAME` for claude-new and claude-resume: NAME must be one of CWS_PROFILES.
+_cws_check_profile() {
+  local cmd="$1" name="$2"
+  local -a profiles=(${=CWS_PROFILES})
+  if [[ -z "$name" || "$name" == -* ]]; then
+    print -u2 -- "$cmd: -p needs a profile name (one of: ${profiles[*]})"
+    return 1
+  fi
+  if (( ! ${profiles[(Ie)$name]} )); then
+    print -u2 -- "$cmd: unknown profile '$name' (one of: ${profiles[*]}; see claude-new -L)"
+    return 1
+  fi
+}
+
+# Claude Code with a profile: `claude-resume -p work --resume ID`. Everything but -p goes
+# to claude unchanged; with nothing else it adds --resume, which opens the session picker.
+# `--` ends claude-resume's options, for claude's own -p (print mode).
+claude-resume() {
+  emulate -L zsh
+  local profile="$CWS_DEFAULT_PROFILE"
+  case "$1" in
+    -p|--profile) _cws_check_profile claude-resume "$2" || return 1; profile="$2"; shift 2 ;;
+    -h|--help)
+      print -r -- 'claude-resume [-p PROFILE] [--] [claude args...]'
+      print -r -- "    run Claude Code with a profile (${=CWS_PROFILES}; default $CWS_DEFAULT_PROFILE)"
+      print -r -- '    no claude args: --resume, i.e. pick a session to resume'
+      return 0 ;;
+  esac
+  [[ "$1" == -- ]] && shift
+  (( $# )) || set -- --resume
+  local cfg="$HOME/.claude-$profile"
+  if [[ ! -d "$cfg" ]]; then
+    print -u2 -- "claude-resume: config dir $cfg does not exist"
+    return 1
+  fi
+  CLAUDE_CONFIG_DIR="$cfg" command claude "$@"
 }
 
 # --- task type ---------------------------------------------------------------------
@@ -202,9 +232,18 @@ claude-new() {
 
   while [[ "$1" == -* ]]; do
     case "$1" in
-      -w|--work)     profile=work;     shift ;;
-      -p|--personal) profile=personal; shift ;;
-      -P|--profile)  profile="$2";     shift 2 ;;
+      -p|--profile)  _cws_check_profile claude-new "$2" || return 1; profile="$2"; shift 2 ;;
+      -L|--profiles)
+        local p desc url tag
+        for p in $profiles; do
+          desc="CWS_PROFILE_${p}_DESC" url="CWS_PROFILE_${p}_BASE_URL" tag=""
+          [[ "$p" == "$CWS_DEFAULT_PROFILE" ]] && tag+=" default"
+          [[ "$p" == "${CWS_SHARED_PROFILE:-${profiles[1]}}" ]] && tag+=" shared"
+          [[ -d "$HOME/.claude-$p" ]] || tag+=" (no ~/.claude-$p)"
+          printf '  %-12s %-18s %s\n' "$p" "${tag# }" \
+            "${(P)desc:-}${${(P)url}:+  [${(P)url}]}"
+        done
+        return 0 ;;
       -n|--no-audit) audit=0;          shift ;;
       -T|--type)     ttype="$2";       shift 2 ;;
       -t|--ticket)
@@ -227,14 +266,15 @@ print("{:<10} {:<14} {:<16} {:<9}".format("[" + (d.get("profile") or "?") + "]",
         done
         return 0 ;;
       -h|--help)
-        print -r -- 'claude-new [-w|-p|-P PROFILE] [-n] [-t TICKET] [-T TYPE] [name]'
+        print -r -- 'claude-new [-p PROFILE] [-n] [-t TICKET] [-T TYPE] [name]'
         print -r -- '    create a YYYY/MM/DD/HH-mm-ss_slug folder and start Claude in it'
         print -r -- "    TICKET is mandatory: PREFIX-123 (e.g. $CWS_TICKET_EXAMPLE), or Other"
         print -r -- '    -T / --type is the kind of work (permissions, job errors, ...); asked if omitted'
         print -r -- '    -n / --no-audit keeps the session out of claude-audit and the weekly review'
         print -r -- '    (claude-search still finds it)'
-        print -r -- "    profiles: ${profiles[*]}  (-w = work, -p = personal)"
+        print -r -- "    -p / --profile picks the profile (${profiles[*]}); asked if omitted"
         print -r -- 'claude-new -l    list recent sessions'
+        print -r -- 'claude-new -L    list the configured profiles'
         return 0 ;;
       *) print -u2 -- "claude-new: unknown option $1"; return 1 ;;
     esac

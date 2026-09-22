@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.3.0] — 2026-09-22
+
+- **VS Code.** The Claude extension now runs with the profile of the request folder it
+  is opened on.
+  - New `claude-vscode`, which `install.sh` sets as the extension's
+    `claudeCode.claudeProcessWrapper`. It reads `profile` from the folder's
+    `.session.json` (or the nearest one above) and sets `CLAUDE_CONFIG_DIR` to match;
+    outside a request folder it changes nothing. The extension's own env setting is
+    machine-wide, so it couldn't do this per folder.
+  - `install.sh` writes that setting to VS Code's user settings (the remote machine
+    settings on WSL), backing the file up first. If the file has comments or trailing
+    commas it leaves it alone and prints the line to add.
+  - `claude-new -c` / `--code` creates the folder and `.session.json` as usual, then
+    opens the folder in a new VS Code window instead of starting Claude in the terminal.
+
 ## [2.2.0] — 2026-09-22
 
 - New `claude-sessions` command, installed with the others: the most recent sessions

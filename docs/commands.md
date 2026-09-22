@@ -3,7 +3,7 @@
 ## claude-new
 
 ```
-claude-new [-p PROFILE] [-n] [-t TICKET] [-T TYPE] [name]
+claude-new [-p PROFILE] [-n] [-c] [-t TICKET] [-T TYPE] [name]
 claude-new -l
 claude-new -L
 ```
@@ -25,6 +25,10 @@ that profile. `ended_at` is filled in when Claude exits.
   in the name matches there is no default — it asks you to pick.
   The type is the **trigger**, not the detours: a job error that needs investigation, a
   permission change and a doc update is `job errors`.
+- `-c` / `--code` opens the new folder in a new VS Code window instead of starting
+  Claude in the terminal. Start Claude from the extension there; it runs with the
+  session's profile through [`claude-vscode`](#claude-vscode). `ended_at` stays empty,
+  since nothing waits for VS Code to close.
 - `-l` lists the 15 most recent sessions with profile, ticket and type.
 - `-L` / `--profiles` lists the configured profiles: which is the default and which is
   shared, the description, the gateway URL if any, and a warning if `~/.claude-<name>`
@@ -41,6 +45,22 @@ goes to `claude` unchanged, so `claude-resume -p work --resume ID` or `-c` work 
 With no claude arguments it adds `--resume`, which opens the session picker. `--` ends
 its own options, for claude's `-p` (print mode): `claude-resume -p work -- -p "question"`.
 This replaces the per-profile `claude-<name>` aliases.
+
+## claude-vscode
+
+Not run by hand: `install.sh` sets it as the Claude extension's
+`claudeCode.claudeProcessWrapper` in VS Code's user settings (on WSL, the remote machine
+settings in `~/.vscode-server/data/Machine/`). The extension then starts Claude as
+`claude-vscode <claude> [args]` in the workspace folder. If that folder, or one above it,
+has a `.session.json`, Claude gets that session's profile (`CLAUDE_CONFIG_DIR=~/.claude-<profile>`),
+gateway included; anywhere else it runs with whatever the extension's own settings say.
+
+The extension's `claudeCode.environmentVariables` can't do this: it is a machine-wide
+setting, so every window would get the same profile.
+
+Open a request folder as the VS Code workspace (`claude-new -c`, `ws -c`, or
+*File → Open Folder*) so the extension's sessions run there. A window opened on the
+work root gets the default profile and no `.session.json`, like a bare `claude` there.
 
 ## claude-type
 

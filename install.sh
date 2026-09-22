@@ -636,7 +636,7 @@ done
 # --- 5. commands and skills -----------------------------------------------------------
 step "Commands"
 local b
-for b in claude-audit claude-search; do link "$REPO/bin/$b" "$HOME/.local/bin/$b"; done
+for b in claude-audit claude-search claude-sessions; do link "$REPO/bin/$b" "$HOME/.local/bin/$b"; done
 
 step "Skills"
 local s

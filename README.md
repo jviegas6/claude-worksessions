@@ -10,6 +10,7 @@ across past sessions, and daily/weekly review skills — all driven by one confi
 | `claude-resume` | Claude Code with a profile: `claude-resume -p work --resume ID`; no args opens the session picker |
 | `claude-audit` | what you worked on — per day, week, month — from transcripts plus meetings/mail/chats |
 | `claude-search` | find past sessions by ticket or topic, with the command to resume each |
+| `claude-sessions` | the most recent sessions across all profiles: when, id, folder, first prompt |
 | `ws` / `y` | fuzzy-jump to a request folder; browse it in yazi |
 | `weekly-review` skill | fills the weekly tracker, asking only about what's new |
 | `workday-recap` skill | reconstructs a day from Claude, Teams, calendar and sent mail |
@@ -74,7 +75,7 @@ it. See [docs/configuration.md](docs/configuration.md).
 ## Docs
 
 - [Configuration](docs/configuration.md) — every setting, profiles, gateway tokens
-- [Commands](docs/commands.md) — `claude-new`, `claude-audit`, `claude-search`, `ws`, `y`, yazi keys
+- [Commands](docs/commands.md) — `claude-new`, `claude-audit`, `claude-search`, `claude-sessions`, `ws`, `y`, yazi keys
 - [Folder layout](docs/folder-layout.md) — what goes where, and moving folders safely
 - [New computer](docs/new-computer.md) — moving the whole setup
 - [Releasing](docs/releasing.md) — versions, tags and GitHub releases

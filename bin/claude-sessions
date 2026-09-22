@@ -1,0 +1,111 @@
+#!/usr/bin/env python3
+"""claude-sessions: the most recent Claude sessions across every profile, newest first.
+
+  claude-sessions          the 30 most recent
+  claude-sessions 50       the 50 most recent
+  claude-sessions -a       all of them
+
+One line per session: last activity, session id, the folder it ran in (where that
+folder lives now, if it was moved since) and the first prompt.
+"""
+
+import argparse
+import datetime as dt
+import importlib.machinery
+import importlib.util
+import json
+import os
+
+HOME = os.path.expanduser("~")
+
+
+def load_audit():
+    """claude-audit's transcript discovery and moved-folder map, reused as is."""
+    path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "claude-audit")
+    if not os.path.isfile(path):
+        path = os.path.join(HOME, ".local", "bin", "claude-audit")
+    loader = importlib.machinery.SourceFileLoader("claude_audit", path)
+    spec = importlib.util.spec_from_loader("claude_audit", loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+CA = load_audit()
+
+
+def first_prompt(content):
+    """The first line of what the user typed, or None for tool results and command wrappers."""
+    if isinstance(content, str):
+        text = content
+    else:
+        text = next((b.get("text") for b in content or []
+                     if isinstance(b, dict) and b.get("type") == "text"), None)
+    if not text or text.startswith("<") or not text.strip():
+        return None
+    return text.strip().splitlines()[0]
+
+
+def read_head(path):
+    """(cwd, first prompt) from the start of a transcript."""
+    cwd, first = None, None
+    with open(path, errors="replace") as fh:
+        for line in fh:
+            try:
+                m = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(m, dict):
+                continue
+            cwd = cwd or m.get("cwd")
+            if first is None and m.get("type") == "user" and not m.get("isMeta") \
+                    and not m.get("isSidechain"):
+                first = first_prompt((m.get("message") or {}).get("content"))
+            if first and cwd:
+                break
+    return cwd, first
+
+
+def sessions():
+    """One row per session id: (mtime, cwd, sid, first prompt).
+
+    The same session can have a transcript in more than one project dir — moving a
+    folder leaves a copy under the old path's project dir — so rows are keyed by id
+    and the most recently written copy wins."""
+    rows = {}
+    for path in CA.transcript_files():
+        sid = os.path.basename(path)[:-len(".jsonl")]
+        try:
+            mtime = os.path.getmtime(path)
+            if sid in rows and rows[sid][0] >= mtime:
+                continue
+            cwd, first = read_head(path)
+        except OSError:
+            continue
+        cwd = CA.moved_path(cwd) if cwd else os.path.basename(os.path.dirname(path))
+        rows[sid] = (mtime, cwd, sid, first or "(no prompt)")
+    return sorted(rows.values(), reverse=True)
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        prog="claude-sessions", description=__doc__.split("\n\n")[0].split(": ", 1)[1],
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("n", nargs="?", type=int, default=30, help="how many to show (default 30)")
+    ap.add_argument("-a", "--all", action="store_true", help="show every session")
+    args = ap.parse_args()
+
+    rows = sessions()
+    if not args.all:
+        rows = rows[:args.n]
+    for mtime, cwd, sid, first in rows:
+        when = dt.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
+        if cwd == HOME or cwd.startswith(HOME + os.sep):
+            cwd = "~" + cwd[len(HOME):]
+        print("{}  {}  {:<45}  {}".format(when, sid, cwd, first[:70]))
+    print("\n{} session(s). Resume one with:  claude-resume --resume <session-id>"
+          "   (from any profile)".format(len(rows)))
+
+
+if __name__ == "__main__":
+    main()

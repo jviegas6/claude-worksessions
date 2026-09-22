@@ -45,6 +45,7 @@ jobs:
           claude-resume -h
           claude-audit --help >/dev/null
           claude-search --help >/dev/null
+          claude-sessions --help >/dev/null
           whence -p fzf pandoc claude
           grep -q ">>> claude-worksessions >>>" "$HOME/.zshrc"
           test -f "$HOME/ws/CLAUDE.md"

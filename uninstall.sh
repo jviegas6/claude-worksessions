@@ -4,7 +4,7 @@
 emulate -L zsh
 REPO="${0:A:h}"
 say() { print -r -- "  $*"; }
-for b in claude-audit claude-search; do
+for b in claude-audit claude-search claude-sessions; do
   f="$HOME/.local/bin/$b"
   [[ -L "$f" && "$(readlink "$f")" == "$REPO/bin/$b" ]] && rm "$f" && say "removed $f"
 done

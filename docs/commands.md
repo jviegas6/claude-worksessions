@@ -101,6 +101,18 @@ Ranks past sessions by ticket or topic across titles, your prompts, Claude's rep
 commands run and linked meetings/mail. Prints the resume command for each and offers
 to resume one (`--no-pick` just lists). `--ai` asks Claude to judge relevance.
 
+## claude-sessions
+
+```
+claude-sessions [N]      # the N most recent sessions (default 30)
+claude-sessions -a       # all of them
+```
+
+One line per session, newest first: last activity, session id, the folder it ran in
+and the first prompt. Folders moved since are shown where they are now
+(`_audit/moved-folders.json`), and a session is listed once even when a move left a
+copy of its transcript under the old folder.
+
 ## ws, y
 
 | command | does |

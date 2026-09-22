@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.2.0] — 2026-09-22
+
+- New `claude-sessions` command, installed with the others: the most recent sessions
+  across all profiles, one line each (`claude-sessions [N]`, `-a` for all). It replaces
+  a stand-alone script of the same name in `~/.local/bin`, which `install.sh` backs up
+  and links over. Unlike that script it:
+  - lists each session once. Moving a folder leaves a copy of its transcripts under the
+    old path's project dir, so moved sessions used to appear twice.
+  - shows moved folders where they are now, through `_audit/moved-folders.json`, instead
+    of the flat `YYYY-MM-DD_slug` path they ran in.
+  - reads every profile in `CWS_PROFILES`, not just `~/.claude-personal`.
+
 ## [2.1.0] — 2026-09-22
 
 - Runs on **Linux** and on **Windows through WSL**, as well as macOS.

@@ -7,6 +7,7 @@ across past sessions, and daily/weekly review skills — all driven by one confi
 | piece | what it does |
 |---|---|
 | `claude-new` | creates `YYYY/MM/DD/HH-mm-ss_slug/`, records profile + ticket in `.session.json`, starts Claude there |
+| `claude-new -c` | the same, then opens the folder in VS Code, where the Claude extension uses the session's profile |
 | `claude-resume` | Claude Code with a profile: `claude-resume -p work --resume ID`; no args opens the session picker |
 | `claude-audit` | what you worked on — per day, week, month — from transcripts plus meetings/mail/chats |
 | `claude-search` | find past sessions by ticket or topic, with the command to resume each |

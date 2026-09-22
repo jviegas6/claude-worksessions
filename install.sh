@@ -636,7 +636,55 @@ done
 # --- 5. commands and skills -----------------------------------------------------------
 step "Commands"
 local b
-for b in claude-audit claude-search claude-sessions; do link "$REPO/bin/$b" "$HOME/.local/bin/$b"; done
+for b in claude-audit claude-search claude-sessions claude-vscode; do link "$REPO/bin/$b" "$HOME/.local/bin/$b"; done
+
+# --- 5a. VS Code ------------------------------------------------------------------------
+# The Claude extension's env setting is machine-wide, so it can't follow a session's profile.
+# Its process wrapper can: claude-vscode reads the profile from the folder's .session.json.
+step "VS Code"
+local vsdir vsset vsstate wrapper="$HOME/.local/bin/claude-vscode"
+case $OS in
+  mac) vsdir="$HOME/Library/Application Support/Code/User" ;;
+  wsl) vsdir="$HOME/.vscode-server/data/Machine" ;;   # the extension runs inside WSL
+  *)   vsdir="$HOME/.config/Code/User" ;;
+esac
+vsset="$vsdir/settings.json"
+# vscode_wrapper check|write: prints "same", "set", "other:<old value>" or "unparsed"
+vscode_wrapper() {
+  WRAPPER="$wrapper" "$PY" - "$vsset" "$1" <<'PY'
+import json, os, sys
+p, mode = sys.argv[1:3]
+key, want = "claudeCode.claudeProcessWrapper", os.environ["WRAPPER"]
+try:
+    d = json.load(open(p)) if os.path.getsize(p) else {}
+except FileNotFoundError:
+    d = {}
+except ValueError:          # comments or trailing commas: VS Code allows them, json doesn't
+    print("unparsed"); raise SystemExit
+old = d.get(key)
+print("same" if old == want else "other:" + old if old else "set")
+if mode == "write" and old != want:
+    d[key] = want
+    open(p, "w").write(json.dumps(d, indent=4) + "\n")
+PY
+}
+if [[ ! -d "$vsdir" ]]; then
+  say "no VS Code settings in $vsdir — skipped"
+else
+  vsstate="$(vscode_wrapper check)"
+  case $vsstate in
+    same)     say "ok claudeCode.claudeProcessWrapper in $vsset" ;;
+    unparsed) warn "$vsset isn't plain JSON — add this line to it yourself:"
+              print -r -- "      \"claudeCode.claudeProcessWrapper\": \"$wrapper\"," ;;
+    *)        if (( DRY )); then say "[dry-run] set claudeCode.claudeProcessWrapper in $vsset"
+              else
+                backup "$vsset"
+                vscode_wrapper write >/dev/null
+                say "set claudeCode.claudeProcessWrapper in $vsset"
+                [[ $vsstate == other:* ]] && warn "it was ${vsstate#other:} before"
+              fi ;;
+  esac
+fi
 
 step "Skills"
 local s

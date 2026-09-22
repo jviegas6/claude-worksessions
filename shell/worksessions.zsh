@@ -227,7 +227,7 @@ claude-new() {
   emulate -L zsh
   setopt local_options no_nomatch
 
-  local profile="" name="" ticket="" canon="" dir slug cfg started ended audit=1 ttype=""
+  local profile="" name="" ticket="" canon="" dir slug cfg started ended audit=1 ttype="" vscode=0
   local -a profiles=(${=CWS_PROFILES})
 
   while [[ "$1" == -* ]]; do
@@ -245,6 +245,7 @@ claude-new() {
         done
         return 0 ;;
       -n|--no-audit) audit=0;          shift ;;
+      -c|--code)     vscode=1;         shift ;;
       -T|--type)     ttype="$2";       shift 2 ;;
       -t|--ticket)
         if [[ -z "$2" ]]; then
@@ -266,8 +267,10 @@ print("{:<10} {:<14} {:<16} {:<9}".format("[" + (d.get("profile") or "?") + "]",
         done
         return 0 ;;
       -h|--help)
-        print -r -- 'claude-new [-p PROFILE] [-n] [-t TICKET] [-T TYPE] [name]'
+        print -r -- 'claude-new [-p PROFILE] [-n] [-c] [-t TICKET] [-T TYPE] [name]'
         print -r -- '    create a YYYY/MM/DD/HH-mm-ss_slug folder and start Claude in it'
+        print -r -- '    -c / --code opens the folder in VS Code instead; the Claude extension there'
+        print -r -- '    picks up the profile through claude-vscode'
         print -r -- "    TICKET is mandatory: PREFIX-123 (e.g. $CWS_TICKET_EXAMPLE), or Other"
         print -r -- '    -T / --type is the kind of work (permissions, job errors, ...); asked if omitted'
         print -r -- '    -n / --no-audit keeps the session out of claude-audit and the weekly review'
@@ -339,6 +342,10 @@ print("{:<10} {:<14} {:<16} {:<9}".format("[" + (d.get("profile") or "?") + "]",
   cfg="$HOME/.claude-$profile"
   if [[ ! -d "$cfg" ]]; then
     print -u2 -- "claude-new: config dir $cfg does not exist"
+    return 1
+  fi
+  if (( vscode )) && ! command -v code >/dev/null 2>&1; then
+    print -u2 -- "claude-new: -c needs VS Code's 'code' command on PATH"
     return 1
   fi
 
@@ -423,6 +430,13 @@ json.dump({
 
   print -r -- "→ $profile  $ticket  ${ttype:+[$ttype]  }${dir#$CLAUDE_WORK_ROOT/}${${audit:#1}:+  (no-audit)}"
   cd "$dir" || return 1
+
+  # VS Code: the extension starts Claude itself, through claude-vscode, which reads the
+  # profile from .session.json. Nothing waits for it, so ended_at stays empty.
+  if (( vscode )); then
+    code -n "$dir"
+    return
+  fi
 
   CLAUDE_CONFIG_DIR="$cfg" command claude
   local rc=$?

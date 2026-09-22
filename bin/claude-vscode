@@ -1,0 +1,31 @@
+#!/usr/bin/env zsh
+# claude-vscode: the VS Code extension's `claudeCode.claudeProcessWrapper`.
+#
+# The extension runs `claude-vscode <claude binary> [args...]` in the session's folder.
+# If that folder (or one above it) has a .session.json from claude-new, Claude runs with
+# that session's profile (~/.claude-<profile>); otherwise the environment is left as the
+# extension set it. The extension's own env setting is machine-wide, so it can't do this.
+
+emulate -L zsh
+
+if (( ! $# )); then
+  print -u2 -- "claude-vscode: set this as claudeCode.claudeProcessWrapper in VS Code; it is not run by hand"
+  exit 2
+fi
+
+local dir="${PWD:A}" meta profile=""
+while true; do
+  meta="$dir/.session.json"
+  if [[ -r "$meta" ]]; then
+    [[ "$(<$meta)" =~ '"profile"[[:space:]]*:[[:space:]]*"([A-Za-z0-9_]+)"' ]] && profile="${match[1]}"
+    break
+  fi
+  [[ "$dir" == / ]] && break
+  dir="${dir:h}"
+done
+
+if [[ -n "$profile" && -d "$HOME/.claude-$profile" ]]; then
+  export CLAUDE_CONFIG_DIR="$HOME/.claude-$profile"
+fi
+
+exec "$@"

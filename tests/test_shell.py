@@ -89,6 +89,68 @@ def test_profile_flag_takes_any_configured_name(tmp_path):
     assert json.loads(meta.read_text())["profile"] == "ops"
 
 
+def test_code_flag_opens_vscode_instead_of_claude(tmp_path):
+    (tmp_path / ".claude-work").mkdir()
+    stub = tmp_path / "bin"
+    stub.mkdir()
+    (stub / "code").write_text('#!/bin/sh\necho "$*" > "$HOME/opened"\n')
+    (stub / "claude").write_text('#!/bin/sh\ntouch "$HOME/launched"\n')
+    for f in stub.iterdir():
+        f.chmod(0o755)
+    r = run_new(tmp_path, "-c -p work -t Other -T tooling demo",
+                PATH=str(stub) + os.pathsep + os.environ["PATH"])
+    assert r.returncode == 0, r.stderr
+    meta = next(tmp_path.glob("[0-9]*/*/*/*/.session.json"))
+    assert (tmp_path / "opened").read_text().split() == ["-n", str(meta.parent)]
+    assert not (tmp_path / "launched").exists()
+    d = json.loads(meta.read_text())
+    assert d["profile"] == "work" and d["ended_at"] is None
+
+
+def test_code_flag_needs_the_code_command(tmp_path):
+    (tmp_path / ".claude-work").mkdir()
+    r = run_new(tmp_path, "-c -p work -t Other -T tooling demo", PATH="/usr/bin:/bin")
+    assert r.returncode == 1
+    assert "needs VS Code's 'code' command" in r.stderr
+    assert not list(tmp_path.glob("[0-9]*"))
+
+
+def run_wrapper(home, cwd):
+    """bin/claude-vscode wrapping a stub claude that reports its config dir and args."""
+    stub = home / "stub-claude"
+    stub.write_text('#!/bin/sh\necho "${CLAUDE_CONFIG_DIR:-unset} $*"\n')
+    stub.chmod(0o755)
+    env = {k: v for k, v in os.environ.items() if k != "CLAUDE_CONFIG_DIR"}
+    env.update(HOME=str(home), PWD=str(cwd))
+    return subprocess.run([os.path.join(REPO, "bin", "claude-vscode"), str(stub), "--x", "a b"],
+                          cwd=cwd, env=env, capture_output=True, text=True)
+
+
+@pytest.mark.parametrize("meta,sub,expected", [
+    ({"profile": "work"}, "", ".claude-work"),               # the session's profile
+    ({"profile": "work"}, "src/deep", ".claude-work"),       # found from a subfolder
+    ({"profile": "ops"}, "", "unset"),                       # no ~/.claude-ops: left alone
+    ({"profile": "../x"}, "", "unset"),                      # not a profile name
+    (None, "", "unset"),                                     # not a request folder
+])
+def test_vscode_wrapper_follows_the_session_profile(tmp_path, meta, sub, expected):
+    (tmp_path / ".claude-work").mkdir()
+    folder = tmp_path / "ws" / "2026" / "09" / "22" / "10-00-00_demo"
+    (folder / sub).mkdir(parents=True)
+    if meta is not None:
+        (folder / ".session.json").write_text(json.dumps(meta, indent=2))
+    r = run_wrapper(tmp_path, folder / sub)
+    assert r.returncode == 0, r.stderr
+    cfg, args = r.stdout.strip().split(" ", 1)
+    assert cfg == (str(tmp_path / expected) if expected != "unset" else "unset")
+    assert args == "--x a b"
+
+
+def test_vscode_wrapper_without_a_command(tmp_path):
+    r = subprocess.run([os.path.join(REPO, "bin", "claude-vscode")], capture_output=True, text=True)
+    assert r.returncode == 2 and "claudeProcessWrapper" in r.stderr
+
+
 def test_profile_flag_rejects_unknown_name(tmp_path):
     r = run_new(tmp_path, "-p nope -t Other demo")
     assert r.returncode == 1
@@ -208,6 +270,29 @@ def dry_install(tmp_path, os_name, path=None, shell="/bin/zsh"):
         env["PATH"] = path
     return subprocess.run(["zsh", os.path.join(REPO, "install.sh"), "--dry-run", "--yes"], env=env,
                           capture_output=True, text=True, stdin=subprocess.DEVNULL)
+
+
+@pytest.mark.parametrize("os_name,vsdir", [
+    ("mac", "Library/Application Support/Code/User"),
+    ("linux", ".config/Code/User"),
+    ("wsl", ".vscode-server/data/Machine"),
+])
+@pytest.mark.parametrize("settings,expected", [
+    (None, "no VS Code settings in"),
+    ("", "[dry-run] set claudeCode.claudeProcessWrapper"),
+    ('{"editor.fontSize": 13}', "[dry-run] set claudeCode.claudeProcessWrapper"),
+    ('{"claudeCode.claudeProcessWrapper": "HOME/.local/bin/claude-vscode"}', "ok claudeCode.claudeProcessWrapper"),
+    ('{\n  // a comment\n  "editor.fontSize": 13,\n}', "isn't plain JSON"),
+])
+def test_install_sets_the_vscode_wrapper(tmp_path, os_name, vsdir, settings, expected):
+    if settings is not None:
+        d = tmp_path / vsdir
+        d.mkdir(parents=True)
+        (d / "settings.json").write_text(settings.replace("HOME", str(tmp_path)))
+    r = dry_install(tmp_path, os_name)
+    assert expected in r.stdout + r.stderr
+    if settings is not None:   # a dry run changes nothing
+        assert (tmp_path / vsdir / "settings.json").read_text() == settings.replace("HOME", str(tmp_path))
 
 
 HAS_BREW = any(os.access(p, os.X_OK) for p in (

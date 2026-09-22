@@ -361,3 +361,52 @@ def test_cws_open_uses_the_desktop_opener(tmp_path, os_name, tool, expected):
     r = subprocess.run(["zsh", "-fc", src], env=env, capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     assert (tmp_path / "opened").read_text().strip() == expected
+
+
+def stub_code(tmp_path, listed=""):
+    """A `code` that lists `listed` as installed extensions and logs every call."""
+    d = tmp_path / "code-stub"
+    d.mkdir(exist_ok=True)
+    (d / "code").write_text('#!/bin/sh\necho "$*" >> "{}/code.log"\n'
+                            'case "$1" in --list-extensions) printf "%s\\n" "{}" ;; esac\n'
+                            .format(tmp_path, listed))
+    (d / "code").chmod(0o755)
+    return str(d) + os.pathsep + "/usr/bin:/bin"
+
+
+def test_install_plans_the_sidebar_extension(tmp_path):
+    version = open(os.path.join(REPO, "VERSION")).read().strip()
+    r = dry_install(tmp_path, "mac", path=stub_code(tmp_path))
+    assert "[dry-run] install the Work sessions sidebar " + version in r.stdout
+    r = dry_install(tmp_path, "mac", path=stub_code(tmp_path, "jviegas6.claude-worksessions@0.1.0"))
+    assert "install the Work sessions sidebar {} (have 0.1.0)".format(version) in r.stdout
+    r = dry_install(tmp_path, "mac", path=stub_code(tmp_path, "jviegas6.claude-worksessions@" + version))
+    assert "ok Work sessions sidebar " + version in r.stdout
+    assert "--install-extension" not in (tmp_path / "code.log").read_text()   # dry run
+    r = dry_install(tmp_path, "mac", path="/usr/bin:/bin")
+    assert "no 'code' command" in r.stdout
+
+
+@pytest.mark.parametrize("settings,after,message", [
+    ('{"a": 1, "claudeCode.claudeProcessWrapper": "HOME/.local/bin/claude-vscode"}', '{"a": 1}', "removed claudeCode"),
+    ('{"claudeCode.claudeProcessWrapper": "/other/wrapper"}', None, None),
+    ('{\n  // mine\n  "claudeCode.claudeProcessWrapper": "HOME/.local/bin/claude-vscode"\n}', None, "yourself"),
+])
+def test_uninstall_removes_the_vscode_pieces(tmp_path, settings, after, message):
+    d = tmp_path / "Library" / "Application Support" / "Code" / "User"
+    d.mkdir(parents=True)
+    before = settings.replace("HOME", str(tmp_path))
+    (d / "settings.json").write_text(before)
+    env = dict(os.environ, HOME=str(tmp_path), ZDOTDIR=str(tmp_path),
+               PATH=stub_code(tmp_path, "jviegas6.claude-worksessions"))
+    r = subprocess.run(["zsh", os.path.join(REPO, "uninstall.sh")], env=env, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    now = (d / "settings.json").read_text()
+    if after is None:
+        assert now == before
+    else:
+        assert json.loads(now) == json.loads(after)
+    if message:
+        assert message in r.stdout
+    assert "--uninstall-extension jviegas6.claude-worksessions" in (tmp_path / "code.log").read_text()
+    assert "uninstalled the Work sessions sidebar" in r.stdout

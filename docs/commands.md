@@ -126,12 +126,52 @@ to resume one (`--no-pick` just lists). `--ai` asks Claude to judge relevance.
 ```
 claude-sessions [N]      # the N most recent sessions (default 30)
 claude-sessions -a       # all of them
+claude-sessions --json   # as JSON, for the VS Code sidebar
 ```
 
 One line per session, newest first: last activity, session id, the folder it ran in
 and the first prompt. Folders moved since are shown where they are now
 (`_audit/moved-folders.json`), and a session is listed once even when a move left a
 copy of its transcript under the old folder.
+
+`--json` adds what the VS Code sidebar shows: each session's auto-title and latest
+prompt (Claude Code keeps both in the transcript), and its request folder with name,
+ticket, task type and profile. A session belongs to the nearest folder with a
+`.session.json` above where it ran, else the `YYYY/MM/DD/slug` folder it is in, else
+the one it was assigned to in `_audit/session-folders.json`.
+
+## VS Code sidebar
+
+`install.sh` installs a **Work sessions** extension into VS Code when the `code` command
+is on your PATH (in VS Code: *Shell Command: Install 'code' command in PATH*), at the
+same version as the rest; `--update` updates it. Reload open windows after installing.
+
+It adds a sidebar (the history icon) listing your requests and their Claude sessions.
+Open a window on the work root and use it instead of `claude-new -c`'s one window per
+request: every session opens as a **terminal tab in the editor area**, running in its
+own folder with its own profile, so requests on different tickets and profiles sit side
+by side.
+
+| in the sidebar | does |
+|---|---|
+| **+** (top) | new request: a tab running `claude-new`, with its usual prompts |
+| list icon (top) | group by **day**, by **ticket**, or a flat list of **recent** sessions; remembered |
+| a session | open it in a tab (`claude-resume -p <profile> --resume <id>`), or go to its tab if open |
+| **+** on a request | a new session in that request's folder, with its profile |
+| folder on a request | reveal it in the Explorer (right-click: in Finder) |
+
+Sessions are named by Claude's auto-title, else their first prompt; hovering shows the
+title, first and latest prompt, ticket, type, profile and age. Open sessions have a
+green terminal icon. Tabs are named `TICKET · title`; a tab opened with **+** takes its
+session's name once its first prompt is in. The list refreshes itself as transcripts
+and `.session.json` files change.
+
+Tabs are editor terminals, not the Claude extension's chat tabs: those always run in
+the window's first folder, so they can't hold sessions from different requests. Diffs
+still open in VS Code, since Claude in VS Code's terminal connects to it (`/ide` if not).
+
+Settings: `claudeWorksessions.sessionsCommand` (default `~/.local/bin/claude-sessions`),
+`claudeWorksessions.showEmptySessions` (sessions closed without a prompt; off).
 
 ## ws, y
 

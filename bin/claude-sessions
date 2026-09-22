@@ -4,6 +4,8 @@
   claude-sessions          the 30 most recent
   claude-sessions 50       the 50 most recent
   claude-sessions -a       all of them
+  claude-sessions --json   the same as JSON, with each session's title, last prompt and
+                           request folder (ticket, task type, profile) -- for the VS Code sidebar
 
 One line per session: last activity, session id, the folder it ran in (where that
 folder lives now, if it was moved since) and the first prompt.
@@ -15,6 +17,7 @@ import importlib.machinery
 import importlib.util
 import json
 import os
+import re
 
 HOME = os.path.expanduser("~")
 
@@ -67,7 +70,7 @@ def read_head(path):
 
 
 def sessions():
-    """One row per session id: (mtime, cwd, sid, first prompt).
+    """One row per session id: (mtime, cwd, sid, first prompt, transcript path).
 
     The same session can have a transcript in more than one project dir — moving a
     folder leaves a copy under the old path's project dir — so rows are keyed by id
@@ -83,8 +86,90 @@ def sessions():
         except OSError:
             continue
         cwd = CA.moved_path(cwd) if cwd else os.path.basename(os.path.dirname(path))
-        rows[sid] = (mtime, cwd, sid, first or "(no prompt)")
+        rows[sid] = (mtime, cwd, sid, first or "(no prompt)", path)
     return sorted(rows.values(), reverse=True)
+
+
+TAIL = 1 << 19
+
+
+def read_tail(path):
+    """(latest ai-title, latest last-prompt). Claude Code appends both again as a session
+    runs, so the last 512 KiB nearly always has them; the whole file is read only when not."""
+    title = last = None
+    size = os.path.getsize(path)
+    for start in ((size - TAIL, 0) if size > TAIL else (0,)):
+        with open(path, "rb") as fh:
+            fh.seek(start)
+            text = fh.read().decode("utf-8", "replace")
+        for line in text.splitlines():
+            if '"ai-title"' not in line and '"last-prompt"' not in line:
+                continue
+            try:
+                m = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(m, dict):
+                continue
+            if m.get("type") == "ai-title" and m.get("aiTitle"):
+                title = m["aiTitle"]
+            elif m.get("type") == "last-prompt" and m.get("lastPrompt"):
+                last = m["lastPrompt"]
+        if title and last:
+            break
+    return title, last
+
+
+REQUEST_RE = re.compile(r"^\d{4}/\d{2}/\d{2}/[^/]+")
+
+
+def request_dir(cwd, sid):
+    """The request folder a session belongs to: the nearest folder with a .session.json
+    between cwd and the work root, else the YYYY/MM/DD/slug folder cwd is in, else the one
+    it was assigned to in _audit/session-folders.json. None for the root and elsewhere."""
+    root = CA.DEFAULT_ROOT
+    d = cwd
+    while d.startswith(root + os.sep):
+        if os.path.isfile(os.path.join(d, ".session.json")):
+            return d
+        d = os.path.dirname(d)
+    if cwd.startswith(root + os.sep):
+        m = REQUEST_RE.match(os.path.relpath(cwd, root).replace(os.sep, "/"))
+        if m:
+            return os.path.join(root, m.group(0))
+    return CA.session_folder(sid) or None
+
+
+def request_info(folder, sid):
+    """Name, ticket, task type and profile of a request folder, from its .session.json."""
+    meta = CA.session_meta(folder)
+    try:
+        with open(os.path.join(folder, ".session.json")) as fh:
+            name = json.load(fh).get("name")
+    except (OSError, ValueError, AttributeError):
+        name = None
+    return {"path": folder,
+            "name": name or os.path.basename(folder),
+            "ticket": meta["ticket"],
+            "task_type": meta["session_types"].get(sid) or meta["task_type"],
+            "profile": "" if meta["profile"] == "unknown" else meta["profile"]}
+
+
+def as_json(rows):
+    root = CA.DEFAULT_ROOT
+    out = []
+    for mtime, cwd, sid, first, path in rows:
+        try:
+            title, last = read_tail(path)
+        except OSError:
+            title = last = None
+        folder = request_dir(cwd, sid)
+        out.append({"id": sid, "mtime": mtime, "cwd": cwd,
+                    "in_work_root": cwd == root or cwd.startswith(root + os.sep),
+                    "title": title, "last_prompt": last,
+                    "first_prompt": None if first == "(no prompt)" else first,
+                    "request": request_info(folder, sid) if folder else None})
+    return {"work_root": root, "sessions": out}
 
 
 def main():
@@ -93,12 +178,17 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("n", nargs="?", type=int, default=30, help="how many to show (default 30)")
     ap.add_argument("-a", "--all", action="store_true", help="show every session")
+    ap.add_argument("--json", action="store_true",
+                    help="JSON with titles, last prompts and request folders")
     args = ap.parse_args()
 
     rows = sessions()
     if not args.all:
         rows = rows[:args.n]
-    for mtime, cwd, sid, first in rows:
+    if args.json:
+        print(json.dumps(as_json(rows), indent=1))
+        return
+    for mtime, cwd, sid, first, _path in rows:
         when = dt.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
         if cwd == HOME or cwd.startswith(HOME + os.sep):
             cwd = "~" + cwd[len(HOME):]

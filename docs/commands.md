@@ -3,7 +3,7 @@
 ## claude-new
 
 ```
-claude-new [-p PROFILE] [-n] [-c] [-t TICKET] [-T TYPE] [name]
+claude-new [-p PROFILE] [-n|-a] [-c] [-t TICKET] [-T TYPE] [name]
 claude-new -l
 claude-new -L
 ```
@@ -17,7 +17,9 @@ that profile. `ended_at` is filled in when Claude exits.
 - `-p name` / `--profile name` picks the profile — any name in `CWS_PROFILES`, so a
   new profile needs no code change. Left out, you get a menu. An unknown name is an error.
 - `-n` / `--no-audit` keeps the session out of `claude-audit` and the weekly review.
-  `claude-search` still finds it.
+  `claude-search` still finds it. `-a` / `--audit` keeps it in. With neither, `claude-new`
+  asks *Count it in the weekly review and daily recap? [Y/n]* — Enter keeps it in. Run
+  without a terminal it doesn't ask, and counts the session.
 - `-T type` / `--type` sets the **task type** — what kind of work *starts* this session
   (permissions, job errors, new features, security, ...). Left out, `claude-new` guesses
   from the name and offers the types you have used before: Enter takes the guess, a

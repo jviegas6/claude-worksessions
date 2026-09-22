@@ -227,7 +227,7 @@ claude-new() {
   emulate -L zsh
   setopt local_options no_nomatch
 
-  local profile="" name="" ticket="" canon="" dir slug cfg started ended audit=1 ttype="" vscode=0
+  local profile="" name="" ticket="" canon="" dir slug cfg started ended audit=1 ask_audit=1 ttype="" vscode=0
   local -a profiles=(${=CWS_PROFILES})
 
   while [[ "$1" == -* ]]; do
@@ -245,6 +245,7 @@ claude-new() {
         done
         return 0 ;;
       -n|--no-audit) audit=0;          shift ;;
+      -a|--audit)    ask_audit=0;      shift ;;
       -c|--code)     vscode=1;         shift ;;
       -T|--type)     ttype="$2";       shift 2 ;;
       -t|--ticket)
@@ -267,14 +268,14 @@ print("{:<10} {:<14} {:<16} {:<9}".format("[" + (d.get("profile") or "?") + "]",
         done
         return 0 ;;
       -h|--help)
-        print -r -- 'claude-new [-p PROFILE] [-n] [-c] [-t TICKET] [-T TYPE] [name]'
+        print -r -- 'claude-new [-p PROFILE] [-n|-a] [-c] [-t TICKET] [-T TYPE] [name]'
         print -r -- '    create a YYYY/MM/DD/HH-mm-ss_slug folder and start Claude in it'
         print -r -- '    -c / --code opens the folder in VS Code instead; the Claude extension there'
         print -r -- '    picks up the profile through claude-vscode'
         print -r -- "    TICKET is mandatory: PREFIX-123 (e.g. $CWS_TICKET_EXAMPLE), or Other"
         print -r -- '    -T / --type is the kind of work (permissions, job errors, ...); asked if omitted'
         print -r -- '    -n / --no-audit keeps the session out of claude-audit and the weekly review'
-        print -r -- '    (claude-search still finds it)'
+        print -r -- '    (claude-search still finds it); -a / --audit keeps it in; asked if neither'
         print -r -- "    -p / --profile picks the profile (${profiles[*]}); asked if omitted"
         print -r -- 'claude-new -l    list recent sessions'
         print -r -- 'claude-new -L    list the configured profiles'
@@ -386,6 +387,14 @@ print("{:<10} {:<14} {:<16} {:<9}".format("[" + (d.get("profile") or "?") + "]",
     fi
   fi
   [[ "$ttype" == "-" ]] && ttype=""
+
+  # Audit: whether the weekly review and daily recap count this session. Asked unless
+  # -n or -a said; Enter keeps it in, as does running without a terminal.
+  if (( audit && ask_audit )) && [[ -t 0 ]]; then
+    local inc=""
+    read "inc?Count it in the weekly review and daily recap? [Y/n]: " || return 1
+    [[ "${inc:l}" == n* ]] && audit=0
+  fi
 
   # slugify: lowercase, non-alphanumerics to dashes, collapse, trim, cap at 60 chars
   slug="${name:l}"

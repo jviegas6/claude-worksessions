@@ -1,0 +1,71 @@
+{
+  "name": "claude-worksessions",
+  "displayName": "Claude work sessions",
+  "description": "Your claude-worksessions requests and Claude sessions in a sidebar; each session opens as a tab in its own folder and profile.",
+  "version": "0.0.0",
+  "publisher": "jviegas6",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "https://github.com/jviegas6/claude-worksessions" },
+  "engines": { "vscode": "^1.93.0" },
+  "categories": ["Other"],
+  "main": "extension.js",
+  "activationEvents": ["onStartupFinished"],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        { "id": "claudeWorksessions", "title": "Work sessions", "icon": "$(history)" }
+      ]
+    },
+    "views": {
+      "claudeWorksessions": [
+        { "id": "claudeWorksessions.sessions", "name": "Sessions" }
+      ]
+    },
+    "commands": [
+      { "command": "claudeWorksessions.newRequest", "title": "New request (claude-new)", "category": "Work sessions", "icon": "$(add)" },
+      { "command": "claudeWorksessions.grouping",   "title": "Change grouping",          "category": "Work sessions", "icon": "$(list-tree)" },
+      { "command": "claudeWorksessions.refresh",    "title": "Refresh",                  "category": "Work sessions", "icon": "$(refresh)" },
+      { "command": "claudeWorksessions.open",       "title": "Open in a tab",            "icon": "$(terminal)" },
+      { "command": "claudeWorksessions.addSession", "title": "New session in this request", "icon": "$(add)" },
+      { "command": "claudeWorksessions.reveal",     "title": "Reveal in Explorer",       "icon": "$(folder-opened)" },
+      { "command": "claudeWorksessions.revealInOS", "title": "Reveal in Finder / file manager" },
+      { "command": "claudeWorksessions.copyId",     "title": "Copy session id" }
+    ],
+    "menus": {
+      "view/title": [
+        { "command": "claudeWorksessions.newRequest", "when": "view == claudeWorksessions.sessions", "group": "navigation@1" },
+        { "command": "claudeWorksessions.grouping",   "when": "view == claudeWorksessions.sessions", "group": "navigation@2" },
+        { "command": "claudeWorksessions.refresh",    "when": "view == claudeWorksessions.sessions", "group": "navigation@3" }
+      ],
+      "view/item/context": [
+        { "command": "claudeWorksessions.addSession", "when": "view == claudeWorksessions.sessions && viewItem == request", "group": "inline@1" },
+        { "command": "claudeWorksessions.reveal",     "when": "view == claudeWorksessions.sessions && viewItem == request", "group": "inline@2" },
+        { "command": "claudeWorksessions.revealInOS", "when": "view == claudeWorksessions.sessions && viewItem == request", "group": "1@1" },
+        { "command": "claudeWorksessions.open",       "when": "view == claudeWorksessions.sessions && viewItem == session", "group": "inline@1" },
+        { "command": "claudeWorksessions.copyId",     "when": "view == claudeWorksessions.sessions && viewItem == session", "group": "1@1" }
+      ],
+      "commandPalette": [
+        { "command": "claudeWorksessions.open",       "when": "false" },
+        { "command": "claudeWorksessions.addSession", "when": "false" },
+        { "command": "claudeWorksessions.reveal",     "when": "false" },
+        { "command": "claudeWorksessions.revealInOS", "when": "false" },
+        { "command": "claudeWorksessions.copyId",     "when": "false" }
+      ]
+    },
+    "configuration": {
+      "title": "Claude work sessions",
+      "properties": {
+        "claudeWorksessions.sessionsCommand": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Path to `claude-sessions`. Empty means `~/.local/bin/claude-sessions`, where `install.sh` puts it."
+        },
+        "claudeWorksessions.showEmptySessions": {
+          "type": "boolean",
+          "default": false,
+          "description": "Also list sessions that were opened and closed without a prompt."
+        }
+      }
+    }
+  }
+}

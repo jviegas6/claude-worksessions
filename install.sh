@@ -686,6 +686,27 @@ else
   esac
 fi
 
+# The Work sessions sidebar: packaged here as a .vsix (no npm) and installed with `code`,
+# at the repo's VERSION, so --update brings it along.
+local ext_id="jviegas6.claude-worksessions" ext_want ext_have
+ext_want="$(<"$REPO/VERSION")"
+if ! command -v code >/dev/null 2>&1; then
+  say "no 'code' command — skipped the Work sessions sidebar (VS Code: Shell Command: Install 'code' command in PATH)"
+else
+  ext_have="$(code --list-extensions --show-versions 2>/dev/null | grep -i "^$ext_id@" | cut -d@ -f2)"
+  if [[ "$ext_have" == "$ext_want" ]]; then say "ok Work sessions sidebar $ext_want"
+  elif (( DRY )); then say "[dry-run] install the Work sessions sidebar $ext_want${ext_have:+ (have $ext_have)}"
+  else
+    local vsix="$(mktemp -d)/claude-worksessions.vsix"
+    if "$PY" "$REPO/vscode/package_vsix.py" "$vsix" >/dev/null &&
+       code --install-extension "$vsix" --force >/dev/null 2>&1; then
+      say "installed the Work sessions sidebar $ext_want — reload VS Code windows to load it"
+    else
+      warn "could not install the Work sessions sidebar — try: code --install-extension $vsix"
+    fi
+  fi
+fi
+
 step "Skills"
 local s
 for s in "$REPO"/skills/*(/); do

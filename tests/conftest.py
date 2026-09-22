@@ -53,3 +53,8 @@ def audit(home):
 @pytest.fixture
 def search(home):
     return load_script("claude-search")
+
+
+@pytest.fixture
+def sessions(home):
+    return load_script("claude-sessions")

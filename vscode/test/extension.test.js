@@ -312,7 +312,8 @@ test("the search box filters the tree, counts matches and searches contents on E
   // Enter: claude-search, then pick the first hit → opens its tab
   w.fake.answers.push(items => items[0]);
   web.send({ type: "search", value: "firewall" });
-  await new Promise(r => setTimeout(r, 300));
+  // the search runs claude-search in the background: wait for its tab, not a fixed time
+  for (let i = 0; i < 100 && !w.fake.terminals.length; i++) await new Promise(r => setTimeout(r, 50));
   assert.match(fs.readFileSync(path.join(w.dir, "search.log"), "utf8"), /^firewall --csv - --no-pick --limit 25$/m);
   assert.deepStrictEqual(w.fake.terminals.at(-1).sent, ["claude-resume -p 'work' --resume 's1'"]);
 

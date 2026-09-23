@@ -559,6 +559,8 @@ for item in $SHARED_ITEMS; do
     if [[ "$item" == *.jsonl ]]; then run touch "$SHARED/$item"; else run mkdir -p "$SHARED/$item"; fi
   fi
 done
+# Declared once: a `local` inside the loop would print its value on the second pass
+local keep=3650 kstate=""
 for p in $PROFILES; do
   pdir="$HOME/.claude-$p"
   [[ -d "$pdir" ]] || { run mkdir -p "$pdir"; say "created $pdir"; }
@@ -603,7 +605,6 @@ PY
   # Transcript retention: Claude Code deletes transcripts after cleanupPeriodDays (default
   # 30), and they are the audit trail. Set it long where it isn't set; a shorter value set
   # on purpose is left alone, with a warning.
-  local keep=3650 kstate
   kstate=$(KEEP=$keep "$PY" - "$pdir/settings.json" <<'PY'
 import json, os, sys
 try:

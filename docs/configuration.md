@@ -65,6 +65,15 @@ shared profile and re-run.
 
 `~/.claude` is linked to the shared profile if it doesn't exist yet.
 
+## Transcript retention
+
+Claude Code deletes transcripts it hasn't written to for `cleanupPeriodDays` days —
+**30 by default**. Those transcripts are what `claude-audit`, the weekly review, the
+daily recap, `claude-search` and the VS Code sidebar read, so `install.sh` sets
+`"cleanupPeriodDays": 3650` (about ten years) in each profile's `settings.json` where
+it isn't set. A value you set yourself is kept; if it is shorter, `install.sh` warns
+that the audit will lose older sessions.
+
 ## Gateway tokens
 
 With `CWS_PROFILE_work_BASE_URL="https://gateway.example.com"`, `install.sh` sets

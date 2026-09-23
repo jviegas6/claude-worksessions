@@ -484,3 +484,43 @@ def test_claude_new_prompt_errors(tmp_path, args, err):
     (tmp_path / ".claude-personal").mkdir()
     r = run_new(tmp_path, args)
     assert r.returncode == 1 and err in r.stderr
+
+
+@pytest.mark.parametrize("settings,expected", [
+    (None, "[dry-run] personal: keep transcripts 3650 days"),
+    ('{"model": "x"}', "[dry-run] personal: keep transcripts 3650 days"),
+    ('{"cleanupPeriodDays": true}', "[dry-run] personal: keep transcripts 3650 days"),
+    ('{"cleanupPeriodDays": 30}', "personal: cleanupPeriodDays is 30"),
+    ('{"cleanupPeriodDays": 5000}', "personal: transcripts kept 3650+ days"),
+    ("{not json", "isn't valid JSON"),
+])
+def test_install_keeps_transcripts(tmp_path, settings, expected):
+    if settings is not None:
+        d = tmp_path / ".claude-personal"
+        d.mkdir()
+        (d / "settings.json").write_text(settings)
+    r = dry_install(tmp_path, "mac")
+    assert expected in r.stdout + r.stderr
+    if settings is not None:
+        assert (tmp_path / ".claude-personal" / "settings.json").read_text() == settings   # dry run: unchanged
+
+
+def test_install_writes_retention_keeping_other_settings(tmp_path):
+    conf = tmp_path / "ws" / "_config" / "config.env"
+    conf.parent.mkdir(parents=True)
+    conf.write_text('CWS_WORK_ROOT="{}/ws"\nCWS_PROFILES="personal"\nCWS_INSTALL_YAZI="0"\n'.format(tmp_path))
+    link = tmp_path / ".config" / "claude-worksessions" / "config.env"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(conf)
+    prof = tmp_path / ".claude-personal"
+    prof.mkdir()
+    (prof / "settings.json").write_text('{"model": "opus"}')
+    os.chmod(prof / "settings.json", 0o600)
+    env = {k: v for k, v in os.environ.items() if not k.startswith("CWS_")}
+    env.update(HOME=str(tmp_path), ZDOTDIR=str(tmp_path), CWS_OS="mac", PATH="/usr/bin:/bin")
+    r = subprocess.run(["zsh", os.path.join(REPO, "install.sh"), "--yes", "--no-bootstrap"], env=env,
+                       capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    assert "personal: transcripts kept 3650 days (was Claude Code's default, 30)" in r.stdout, r.stdout + r.stderr
+    assert json.loads((prof / "settings.json").read_text()) == {"model": "opus", "cleanupPeriodDays": 3650}
+    assert oct(os.stat(prof / "settings.json").st_mode & 0o777) == "0o600"
+    assert list(prof.glob("settings.json.bak-*"))

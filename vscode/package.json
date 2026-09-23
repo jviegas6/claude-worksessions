@@ -204,6 +204,23 @@
         "command": "claudeWorksessions.emptyBin",
         "title": "Empty the bin\u2026",
         "icon": "$(clear-all)"
+      },
+      {
+        "command": "claudeWorksessions.filter",
+        "title": "Filter\u2026",
+        "category": "Work sessions",
+        "icon": "$(filter)"
+      },
+      {
+        "command": "claudeWorksessions.filterActive",
+        "title": "Filter\u2026 (filters on)",
+        "icon": "$(filter-filled)"
+      },
+      {
+        "command": "claudeWorksessions.clearFilters",
+        "title": "Clear filters",
+        "category": "Work sessions",
+        "icon": "$(clear-all)"
       }
     ],
     "menus": {
@@ -221,12 +238,12 @@
         {
           "command": "claudeWorksessions.grouping",
           "when": "view == claudeWorksessions.sessions",
-          "group": "navigation@4"
+          "group": "navigation@5"
         },
         {
           "command": "claudeWorksessions.refresh",
           "when": "view == claudeWorksessions.sessions",
-          "group": "navigation@5"
+          "group": "navigation@6"
         },
         {
           "command": "claudeWorksessions.runSkill",
@@ -251,7 +268,22 @@
         {
           "command": "claudeWorksessions.sort",
           "when": "view == claudeWorksessions.sessions",
+          "group": "navigation@4"
+        },
+        {
+          "command": "claudeWorksessions.filter",
+          "when": "view == claudeWorksessions.sessions && !claudeWorksessions.filtered",
           "group": "navigation@3"
+        },
+        {
+          "command": "claudeWorksessions.filterActive",
+          "when": "view == claudeWorksessions.sessions && claudeWorksessions.filtered",
+          "group": "navigation@3"
+        },
+        {
+          "command": "claudeWorksessions.clearFilters",
+          "when": "view == claudeWorksessions.sessions && claudeWorksessions.filtered",
+          "group": "1_run@5"
         }
       ],
       "view/item/context": [
@@ -439,6 +471,10 @@
         },
         {
           "command": "claudeWorksessions.emptyBin",
+          "when": "false"
+        },
+        {
+          "command": "claudeWorksessions.filterActive",
           "when": "false"
         }
       ],

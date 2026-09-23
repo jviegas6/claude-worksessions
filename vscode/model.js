@@ -69,9 +69,85 @@ function fileChildren(files, prefix = "") {
 
 // Sessions worth listing: in the work root or assigned to a request, not empty (opened
 // and closed without a prompt), and matching the search box.
-function visible(data, { showEmpty = false, filter = "" } = {}) {
+function visible(data, { showEmpty = false, filter = "", filters = null, now } = {}) {
+  const pass = passes(filters, now);
   return data.sessions.filter(s => (s.in_work_root || s.request) &&
-    (showEmpty || s.title || s.first_prompt || s.last_prompt) && matches(s, filter));
+    (showEmpty || s.title || s.first_prompt || s.last_prompt) && matches(s, filter) && pass(s));
+}
+
+// --- filters: day, ticket, artifacts -------------------------------------------------------
+//   { day: { preset, date? }, tickets: [ticket or NO_TICKET], artifacts: "any" | "with" | "without" }
+const NO_TICKET = "(no ticket)";
+const DAY_PRESETS = {
+  any: "Any day", today: "Today", yesterday: "Yesterday", last7: "Last 7 days",
+  thisweek: "This week", lastweek: "Last week", thismonth: "This month", date: "A day…",
+};
+const ARTIFACT_LABELS = { any: "Any", with: "With artifacts", without: "Without artifacts" };
+
+const midnight = d => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+
+// The [from, to) seconds a day filter covers, local time; null for any day.
+function dayRange(day, now = Date.now() / 1000) {
+  if (!day || !day.preset || day.preset === "any") return null;
+  const today = midnight(new Date(now * 1000));
+  const at = (d, n = 0) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + n).getTime() / 1000;
+  const monday = at(today, -((today.getDay() + 6) % 7));
+  switch (day.preset) {
+    case "today": return [at(today), at(today, 1)];
+    case "yesterday": return [at(today, -1), at(today)];
+    case "last7": return [at(today, -6), at(today, 1)];
+    case "thisweek": return [monday, monday + 7 * 86400];
+    case "lastweek": return [monday - 7 * 86400, monday];
+    case "thismonth": return [new Date(today.getFullYear(), today.getMonth(), 1).getTime() / 1000,
+                              new Date(today.getFullYear(), today.getMonth() + 1, 1).getTime() / 1000];
+    case "date": {
+      const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day.date || "");
+      if (!m) return null;
+      const d = new Date(+m[1], +m[2] - 1, +m[3]);
+      return [at(d), at(d, 1)];
+    }
+    default: return null;
+  }
+}
+
+const ticketOf = s => (s.request && s.request.ticket) || NO_TICKET;
+const hasArtifacts = s => !!((s.artifacts && s.artifacts.length) || (s.written && s.written.length));
+
+// A predicate for the filters. A session is on a day if it was active during it: started
+// before the day ended, last written after it began.
+function passes(filters, now) {
+  if (!filters) return () => true;
+  const range = dayRange(filters.day, now);
+  const tickets = filters.tickets && filters.tickets.length ? new Set(filters.tickets) : null;
+  const art = filters.artifacts || "any";
+  return s => (!range || ((s.started || s.mtime) < range[1] && s.mtime >= range[0])) &&
+    (!tickets || tickets.has(ticketOf(s))) &&
+    (art === "any" || (art === "with") === hasArtifacts(s));
+}
+
+const filtersActive = f => !!(f && ((f.day && f.day.preset && f.day.preset !== "any") ||
+                                    (f.tickets && f.tickets.length) || (f.artifacts && f.artifacts !== "any")));
+
+// A short description of what is filtered, for the panel's subtitle: "today · BTPA-1 · with artifacts".
+function describeFilters(f) {
+  if (!filtersActive(f)) return "";
+  const parts = [];
+  if (f.day && f.day.preset && f.day.preset !== "any") {
+    parts.push(f.day.preset === "date" ? f.day.date : DAY_PRESETS[f.day.preset].toLowerCase());
+  }
+  if (f.tickets && f.tickets.length) parts.push(f.tickets.length > 2 ? `${f.tickets.length} tickets` : f.tickets.join(", "));
+  if (f.artifacts && f.artifacts !== "any") parts.push(ARTIFACT_LABELS[f.artifacts].toLowerCase());
+  return parts.join(" · ");
+}
+
+// Tickets to offer in the ticket filter: those in use, most recent first, then (no ticket).
+function ticketsInUse(data) {
+  const out = [];
+  for (const s of [...data.sessions].sort((a, b) => b.mtime - a.mtime)) {
+    const t = ticketOf(s);
+    if (t !== NO_TICKET && !out.includes(t)) out.push(t);
+  }
+  return [...out, NO_TICKET];
 }
 
 // Requests, newest activity first, each with its sessions newest first. Sessions with no
@@ -324,7 +400,8 @@ function auditArgs(period, detail, date) {
   return detail ? [...args, "--detail"] : args;
 }
 
-module.exports = { binDir, readDeleted, GROUPINGS, GROUPING_LABELS, SORTS, SORT_LABELS, ROOT_KEY, readPins, togglePin, requestKey,
+module.exports = { NO_TICKET, DAY_PRESETS, ARTIFACT_LABELS, dayRange, passes, filtersActive,
+                   describeFilters, ticketsInUse, binDir, readDeleted, GROUPINGS, GROUPING_LABELS, SORTS, SORT_LABELS, ROOT_KEY, readPins, togglePin, requestKey,
                    isPinnedSession, isPinnedRequest, pinned, matches, shownFiles, fileChildren, visible, requests, dayOf, tree,
                    sessionLabel, tabName, ago, matchPending, parseCsv, taskTypes, setTaskType,
                    readSkills, auditArgs };

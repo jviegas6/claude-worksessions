@@ -161,6 +161,7 @@ by side.
 |---|---|
 | **+** (top) | new request: a tab running `claude-new`, with its usual prompts |
 | list icon (top) | group by **day**, by **ticket**, or a flat list of **recent** sessions; remembered |
+| funnel icon (top) | **filter** by **day** (today, yesterday, last 7 days, this or last week, this month, or a date — a session counts on every day it was active), **ticket** (tick one or more, or *(no ticket)*) and **artifacts** (with / without). Combines with the search box; remembered; shown in the subtitle. The icon fills while filters are on; *Clear filters* in the `…` menu |
 | arrows icon (top) | sort by **last activity** (a resumed session moves up), **started** (newest first; resuming moves nothing) or **name**; remembered. By day always lists days newest first |
 | a session | open it in a tab (`claude-resume -p <profile> --resume <id>`), or go to its tab if open |
 | **+** on a request | a new session in that request's folder, with its profile |

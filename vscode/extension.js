@@ -47,6 +47,8 @@ const loadData = () => run(sessionsCommand(), ["-a", "--json"]).then(JSON.parse)
 
 const shq = s => "'" + String(s).replace(/'/g, "'\\''") + "'";
 
+const NO_FILTERS = { day: { preset: "any" }, tickets: [], artifacts: "any" };
+
 class Sidebar {
   constructor(context) {
     this.context = context;
@@ -55,6 +57,7 @@ class Sidebar {
     this.sort = context.globalState.get("sort", "activity");
     this.pins = { sessions: {}, requests: {} };
     this.bin = M.binDir(process.env, os.homedir());
+    this.filters = context.globalState.get("filters", NO_FILTERS);
     this.filter = "";
     this.tabs = new Map();      // session id → terminal
     this.pending = [];          // tabs waiting for their session to appear
@@ -66,8 +69,15 @@ class Sidebar {
   }
 
   opts() {
-    return { filter: this.filter, sort: this.sort, pins: this.pins,
+    return { filter: this.filter, sort: this.sort, pins: this.pins, filters: this.filters,
              showEmpty: vscode.workspace.getConfiguration("claudeWorksessions").get("showEmptySessions", false) };
+  }
+
+  setFilters(f) {
+    this.filters = f;
+    this.context.globalState.update("filters", f);
+    this.emitter.fire();
+    this.onChange && this.onChange();
   }
 
   setFilter(text) {
@@ -220,7 +230,7 @@ class Sidebar {
     if (!el) {
       const top = M.tree(this.data, this.grouping, opts);
       const firstGroup = top.findIndex(x => x.kind !== "pinned");
-      const gone = M.readDeleted(this.bin, this.filter);
+      const gone = M.filtersActive(this.filters) ? [] : M.readDeleted(this.bin, this.filter);
       return [...top.map((x, i) => ({ ...x, first: i === firstGroup })),
               ...(gone.length ? [{ kind: "deleted", items: gone }] : [])];
     }
@@ -664,6 +674,51 @@ async function purge(bar, args, question, detail) {
   await bar.refresh();
 }
 
+// Filter by day, ticket and artifacts: a menu of the three, each opening its own picker,
+// until Esc. Filters are remembered and combine with the search box.
+async function filterMenu(bar) {
+  for (;;) {
+    const f = bar.filters;
+    const day = f.day && f.day.preset !== "any" ? (f.day.preset === "date" ? f.day.date : M.DAY_PRESETS[f.day.preset]) : "Any day";
+    const tickets = f.tickets && f.tickets.length ? f.tickets.join(", ") : "Any ticket";
+    const pick = await vscode.window.showQuickPick([
+      { label: "$(calendar) Day", description: day, key: "day" },
+      { label: "$(tag) Ticket", description: tickets, key: "ticket" },
+      { label: "$(file) Artifacts", description: M.ARTIFACT_LABELS[f.artifacts || "any"], key: "artifacts" },
+      ...(M.filtersActive(f) ? [{ label: "$(clear-all) Clear all filters", key: "clear" }] : []),
+    ], { placeHolder: "Filter sessions — pick one to change it, Esc when done" });
+    if (!pick) return;
+    if (pick.key === "clear") { bar.setFilters(NO_FILTERS); continue; }
+    if (pick.key === "day") {
+      const p = await vscode.window.showQuickPick(
+        Object.entries(M.DAY_PRESETS).map(([k, label]) => ({ label, k, description: f.day && f.day.preset === k ? "current" : "" })),
+        { placeHolder: "Sessions active on…" });
+      if (!p) continue;
+      let date;
+      if (p.k === "date") {
+        date = await vscode.window.showInputBox({ prompt: "Day (YYYY-MM-DD)", value: (f.day && f.day.date) || new Date().toISOString().slice(0, 10),
+          validateInput: v => (/^\d{4}-\d{2}-\d{2}$/.test(v) ? null : "YYYY-MM-DD") });
+        if (!date) continue;
+      }
+      bar.setFilters({ ...f, day: date ? { preset: "date", date } : { preset: p.k } });
+    }
+    if (pick.key === "ticket") {
+      const chosen = await vscode.window.showQuickPick(
+        M.ticketsInUse(bar.data).map(t => ({ label: t, picked: (f.tickets || []).includes(t) })),
+        { canPickMany: true, placeHolder: "Tickets to show — none ticked means any" });
+      if (!chosen) continue;
+      bar.setFilters({ ...f, tickets: chosen.map(c => c.label) });
+    }
+    if (pick.key === "artifacts") {
+      const a = await vscode.window.showQuickPick(
+        Object.entries(M.ARTIFACT_LABELS).map(([k, label]) => ({ label, k, description: (f.artifacts || "any") === k ? "current" : "" })),
+        { placeHolder: "Artifacts — files the session produced" });
+      if (!a) continue;
+      bar.setFilters({ ...f, artifacts: a.k });
+    }
+  }
+}
+
 async function resumeById(bar) {
   const id = await vscode.window.showInputBox({ prompt: "Session id to resume",
     validateInput: v => (/^[0-9A-Za-z-]{2,}$/.test(v.trim()) ? null : "a session id, e.g. 34e66495-1e97-…") });
@@ -679,9 +734,14 @@ function activate(context) {
   const view = vscode.window.createTreeView("claudeWorksessions.sessions", { treeDataProvider: bar });
   const box = new SearchBox(bar, q => searchSessions(bar, q));
   bar.onChange = () => {
-    view.description = `${M.GROUPING_LABELS[bar.grouping]} · ${M.SORT_LABELS[bar.sort] || M.SORT_LABELS.activity}`;
+    const filtered = M.describeFilters(bar.filters);
+    view.description = `${M.GROUPING_LABELS[bar.grouping]} · ${M.SORT_LABELS[bar.sort] || M.SORT_LABELS.activity}` +
+      (filtered ? ` · only ${filtered}` : "");
+    vscode.commands.executeCommand("setContext", "claudeWorksessions.filtered", !!filtered);
     view.message = bar.error ? `claude-sessions failed: ${bar.error}`
-      : (bar.filter && !bar.counts().shown ? `No session matches "${bar.filter}" — press Enter in the box to search their contents.` : undefined);
+      : bar.filter && !bar.counts().shown ? `No session matches "${bar.filter}" — press Enter in the box to search their contents.`
+      : filtered && !bar.counts().shown ? `No session matches the filters (${filtered}).`
+      : undefined;
     vscode.commands.executeCommand("setContext", "claudeWorksessions.filtering", !!bar.filter);
     box.update();
   };
@@ -702,6 +762,9 @@ function activate(context) {
       bar.emitter.fire();
       bar.onChange();
     }),
+    cmd("filter", () => filterMenu(bar)),
+    cmd("filterActive", () => filterMenu(bar)),
+    cmd("clearFilters", () => bar.setFilters(NO_FILTERS)),
     cmd("sort", async () => {
       const pick = await vscode.window.showQuickPick(
         M.SORTS.map(k => ({ label: M.SORT_LABELS[k], k, description: k === bar.sort ? "current" : "" })),

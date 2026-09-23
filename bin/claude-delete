@@ -1,0 +1,229 @@
+#!/usr/bin/env python3
+"""claude-delete: move a Claude session with no lasting value to the Trash.
+
+  claude-delete ID            say what goes, ask, then move it to the Trash
+  claude-delete ID --yes      without asking
+  claude-delete ID --check    only say whether it may go and what that would mean
+  claude-delete ID --json     the same, as JSON (for the VS Code sidebar)
+
+ID is a session id, or the start of one (8 characters are usually enough).
+
+Only a session with no value may go: one with no artifacts (none of the files it wrote
+still exist, and if it is its request's only session, the request folder is empty), or one
+kept out of the review with -n. Never one the weekly review booked, or one active in the
+last two minutes.
+
+Its transcript, and what Claude Code keeps beside it (subagent logs, file history, session
+environment), go to the Trash, so it can be put back. So does its request folder when the
+session was the folder's only one and nothing but .session.json is in it. Files the session
+wrote are never touched. A pin on it is removed.
+"""
+
+import argparse
+import datetime as dt
+import importlib.machinery
+import importlib.util
+import json
+import os
+import shutil
+import subprocess
+import sys
+import time
+
+HOME = os.path.expanduser("~")
+
+
+def load_sessions():
+    """claude-sessions, which knows every session and whether it may be deleted."""
+    path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "claude-sessions")
+    if not os.path.isfile(path):
+        path = os.path.join(HOME, ".local", "bin", "claude-sessions")
+    loader = importlib.machinery.SourceFileLoader("claude_sessions", path)
+    spec = importlib.util.spec_from_loader("claude_sessions", loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+CS = load_sessions()
+CA = CS.CA
+
+
+def find(prefix):
+    """The session whose id starts with prefix: (entry, every entry)."""
+    entries = CS.as_json(CS.sessions())["sessions"]
+    hits = [e for e in entries if e["id"].startswith(prefix)]
+    if not prefix or not hits:
+        raise SystemExit("claude-delete: no session {!r}".format(prefix))
+    if len(hits) > 1:
+        raise SystemExit("claude-delete: {!r} matches {} sessions -- give more of the id".format(prefix, len(hits)))
+    return hits[0], entries
+
+
+def leftovers(sid):
+    """Everything Claude Code keeps for a session: its transcripts (a moved folder can leave a
+    copy under the old path), their subagent folders, file history and session environment."""
+    out, seen = [], set()
+    for cfg in CA.CONFIG_DIRS:
+        projects = os.path.join(cfg, "projects")
+        for d in _listdir(projects):
+            out += [os.path.join(projects, d, sid + ".jsonl"), os.path.join(projects, d, sid)]
+        out += [os.path.join(cfg, "file-history", sid), os.path.join(cfg, "session-env", sid)]
+    result = []
+    for p in out:
+        if os.path.lexists(p):
+            real = os.path.realpath(p)
+            if real not in seen:
+                seen.add(real)
+                result.append(real)
+    return result
+
+
+def _listdir(path):
+    try:
+        return sorted(os.listdir(path))
+    except OSError:
+        return []
+
+
+def empty_request(entry, entries):
+    """The request folder, if this session is its only one and nothing but hidden files
+    (.session.json) is in it; else None."""
+    r = entry["request"]
+    if not r or r["files"] or sum(1 for e in entries if e["request"] and e["request"]["path"] == r["path"]) > 1:
+        return None
+    root = CA.DEFAULT_ROOT
+    if r["path"] == root or not r["path"].startswith(root + os.sep):
+        return None
+    return r["path"]
+
+
+def when(ts):
+    return dt.datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M") if ts else "?"
+
+
+def label(entry):
+    return entry["title"] or entry["first_prompt"] or entry["last_prompt"] or "(empty session)"
+
+
+def impact(entry, entries):
+    """What deleting it means, one line each, for the confirmation."""
+    lines = ["The conversation goes: it can no longer be resumed, and claude-search won't find it."]
+    if entry["audited"]:
+        lines.append("It counts in your review today: its time leaves claude-audit, the weekly review "
+                     "and the daily recap.")
+    else:
+        lines.append("It is already kept out of the review (-n), so no time records change.")
+    if entry["artifacts"]:
+        shown = [os.path.relpath(f, entry["request"]["path"]) if entry["request"] and
+                 f.startswith(entry["request"]["path"] + os.sep) else f.replace(HOME, "~")
+                 for f in entry["artifacts"]]
+        lines.append("{} file(s) it produced stay where they are, no longer linked to any session: {}{}".format(
+            len(shown), ", ".join(shown[:6]), " and {} more".format(len(shown) - 6) if len(shown) > 6 else ""))
+    else:
+        lines.append("It left no files, so nothing else is lost.")
+    folder = empty_request(entry, entries)
+    if folder:
+        lines.append("Its request folder {} is left empty, so it goes too.".format(
+            os.path.relpath(folder, CA.DEFAULT_ROOT)))
+    lines.append("Everything goes to the Trash, so it can be put back.")
+    return lines
+
+
+def trash_dir():
+    if sys.platform == "darwin":
+        return os.path.join(HOME, ".Trash")
+    return os.path.join(os.environ.get("XDG_DATA_HOME") or os.path.join(HOME, ".local", "share"), "Trash")
+
+
+def to_trash(path):
+    """Move a file or folder to the Trash. macOS: ~/.Trash; elsewhere the freedesktop
+    Trash (files/ + an info/ entry that remembers where it came from)."""
+    base = trash_dir()
+    darwin = sys.platform == "darwin"
+    files = base if darwin else os.path.join(base, "files")
+    os.makedirs(files, exist_ok=True)
+    name, n = os.path.basename(path.rstrip(os.sep)), 1
+    dest = os.path.join(files, name)
+    while os.path.lexists(dest):
+        n += 1
+        dest = os.path.join(files, "{} {}".format(name, n))
+    if not darwin:
+        info = os.path.join(base, "info")
+        os.makedirs(info, exist_ok=True)
+        with open(os.path.join(info, os.path.basename(dest) + ".trashinfo"), "w") as fh:
+            fh.write("[Trash Info]\nPath={}\nDeletionDate={}\n".format(
+                path, dt.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")))
+    shutil.move(path, dest)
+    return dest
+
+
+def unpin(sid):
+    p = os.path.join(CA.DEFAULT_ROOT, "_config", "pinned.json")
+    try:
+        with open(p) as fh:
+            pins = json.load(fh)
+        if sid not in (pins.get("sessions") or {}):
+            return False
+        del pins["sessions"][sid]
+    except (OSError, ValueError, AttributeError, TypeError):
+        return False
+    with open(p, "w") as fh:
+        json.dump(pins, fh, indent=2)
+        fh.write("\n")
+    return True
+
+
+def delete(entry, entries):
+    """Move the session (and its empty request folder) to the Trash. Returns what moved."""
+    moved = [to_trash(p) for p in leftovers(entry["id"])]
+    folder = empty_request(entry, entries)
+    if folder and os.path.isdir(folder):
+        moved.append(to_trash(folder))
+    unpin(entry["id"])
+    return moved
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(prog="claude-delete", description=__doc__.split("\n\n")[0].split(": ", 1)[1],
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("id", help="the session id, or its start")
+    ap.add_argument("--yes", "-y", action="store_true", help="don't ask")
+    ap.add_argument("--check", action="store_true", help="only say whether it may go, and what that would mean")
+    ap.add_argument("--json", action="store_true", help="--check, as JSON")
+    args = ap.parse_args(argv)
+
+    entry, entries = find(args.id)
+    verdict = entry["deletable"]
+    lines = impact(entry, entries)
+    if args.json:
+        print(json.dumps({"id": entry["id"], "title": label(entry), "last_activity": when(entry["mtime"]),
+                          "request": entry["request"] and entry["request"]["name"],
+                          "deletable": verdict["ok"], "why": verdict["why"], "blocked": verdict["blocked"],
+                          "impact": lines, "folder": empty_request(entry, entries)}, indent=1))
+        return 0 if verdict["ok"] else 1
+
+    where = entry["request"]["name"] if entry["request"] else "the work root"
+    print("{}  {}  ({}, last active {})".format(entry["id"][:8], label(entry), where, when(entry["mtime"])))
+    if not verdict["ok"]:
+        print("Can't delete it: " + "; ".join(verdict["blocked"]) + ".")
+        return 1
+    print("It may go: " + " and ".join(verdict["why"]) + ".")
+    for ln in lines:
+        print("  - " + ln)
+    if args.check:
+        return 0
+    if not args.yes:
+        if not sys.stdin.isatty():
+            print("Not deleted: run with --yes to confirm without a terminal.")
+            return 1
+        if input("Move it to the Trash? [y/N]: ").strip().lower() not in ("y", "yes"):
+            print("Not deleted.")
+            return 1
+    moved = delete(entry, entries)
+    print("Moved to the Trash: {} item(s).".format(len(moved)))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

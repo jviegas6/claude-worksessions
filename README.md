@@ -13,6 +13,7 @@ across past sessions, and daily/weekly review skills — all driven by one confi
 | `claude-audit` | what you worked on — per day, week, month — from transcripts plus meetings/mail/chats |
 | `claude-search` | find past sessions by ticket or topic, with the command to resume each |
 | `claude-sessions` | the most recent sessions across all profiles: when, id, folder, first prompt |
+| `claude-delete` | move a session with no value (no artifacts, or started with `-n`) to the Trash, after saying what that means — also **Delete session…** in VS Code |
 | `claude-md-email` | a Markdown file onto the clipboard, formatted for email (black on white, Calibri, bordered tables) — also **Copy for email** in VS Code |
 | `ws` / `y` | fuzzy-jump to a request folder; browse it in yazi |
 | `weekly-review` skill | fills the weekly tracker, asking only about what's new |

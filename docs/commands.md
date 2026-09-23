@@ -204,6 +204,36 @@ still open in VS Code, since Claude in VS Code's terminal connects to it (`/ide`
 Settings: `claudeWorksessions.sessionsCommand` (default `~/.local/bin/claude-sessions`),
 `claudeWorksessions.showEmptySessions` (sessions closed without a prompt; off).
 
+## claude-delete
+
+```
+claude-delete ID            # say what goes, ask, then move it to the Trash
+claude-delete ID --yes      # without asking
+claude-delete ID --check    # only say whether it may go and what that would mean
+claude-delete ID --json     # the same, as JSON
+```
+
+For clearing out test sessions and other noise. `ID` is a session id or its start.
+A session may go only when it has **no value**:
+
+- **no artifacts** — none of the files it wrote still exist, and if it is its request's
+  only session, the request folder has no files either; or
+- it is **kept out of the review** — started with `claude-new -n` (`"audit": false`), or
+  listed in `_audit/no-audit.txt`.
+
+Never when the weekly review booked it (it is in `_audit/review/ledger.json`), or when it
+was active in the last two minutes. Before anything moves it says what deleting means:
+the conversation can't be resumed or found, whether its time leaves your audit, which
+files it produced (those stay), and whether its request folder goes too.
+
+What goes to the Trash (so it can be put back): its transcript and any copies left by a
+folder move, its subagent logs, file history and session environment — and its request
+folder when it was the folder's only session and nothing but `.session.json` is in it.
+Files it wrote are never touched. A pin on it is removed.
+
+In VS Code: right-click a session → **Delete session…**, offered only on sessions that
+qualify; it shows the same summary and asks before moving anything.
+
 ## claude-md-email
 
 ```

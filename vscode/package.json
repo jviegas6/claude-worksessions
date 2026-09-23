@@ -184,6 +184,11 @@
         "command": "claudeWorksessions.unpin",
         "title": "Unpin",
         "icon": "$(pinned)"
+      },
+      {
+        "command": "claudeWorksessions.deleteSession",
+        "title": "Delete session\u2026",
+        "icon": "$(trash)"
       }
     ],
     "menus": {
@@ -312,23 +317,28 @@
         },
         {
           "command": "claudeWorksessions.pin",
-          "when": "view == claudeWorksessions.sessions && viewItem =~ /^(session|request)$/",
+          "when": "view == claudeWorksessions.sessions && viewItem =~ /^(session|request)(-del)?$/",
           "group": "inline@0"
         },
         {
           "command": "claudeWorksessions.unpin",
-          "when": "view == claudeWorksessions.sessions && viewItem =~ /^(session|request)-pinned$/",
+          "when": "view == claudeWorksessions.sessions && viewItem =~ /^(session|request)-pinned(-del)?$/",
           "group": "inline@0"
         },
         {
           "command": "claudeWorksessions.pin",
-          "when": "view == claudeWorksessions.sessions && viewItem =~ /^(session|request)$/",
+          "when": "view == claudeWorksessions.sessions && viewItem =~ /^(session|request)(-del)?$/",
           "group": "0_pin@1"
         },
         {
           "command": "claudeWorksessions.unpin",
-          "when": "view == claudeWorksessions.sessions && viewItem =~ /^(session|request)-pinned$/",
+          "when": "view == claudeWorksessions.sessions && viewItem =~ /^(session|request)-pinned(-del)?$/",
           "group": "0_pin@1"
+        },
+        {
+          "command": "claudeWorksessions.deleteSession",
+          "when": "view == claudeWorksessions.sessions && viewItem =~ /^session.*-del$/",
+          "group": "9_delete@1"
         }
       ],
       "commandPalette": [
@@ -378,6 +388,10 @@
         },
         {
           "command": "claudeWorksessions.unpin",
+          "when": "false"
+        },
+        {
+          "command": "claudeWorksessions.deleteSession",
           "when": "false"
         }
       ],

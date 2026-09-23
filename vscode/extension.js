@@ -54,6 +54,7 @@ class Sidebar {
     this.grouping = context.globalState.get("grouping", "day");
     this.sort = context.globalState.get("sort", "activity");
     this.pins = { sessions: {}, requests: {} };
+    this.bin = M.binDir(process.env, os.homedir());
     this.filter = "";
     this.tabs = new Map();      // session id → terminal
     this.pending = [];          // tabs waiting for their session to appear
@@ -219,8 +220,11 @@ class Sidebar {
     if (!el) {
       const top = M.tree(this.data, this.grouping, opts);
       const firstGroup = top.findIndex(x => x.kind !== "pinned");
-      return top.map((x, i) => ({ ...x, first: i === firstGroup }));
+      const gone = M.readDeleted(this.bin, this.filter);
+      return [...top.map((x, i) => ({ ...x, first: i === firstGroup })),
+              ...(gone.length ? [{ kind: "deleted", items: gone }] : [])];
     }
+    if (el.kind === "deleted") return el.items.map(m => ({ kind: "deletedSession", m }));
     const inPinned = !!el.inPinned;
     if (el.kind === "pinned") {
       return [...el.requests.map(r => ({ kind: "request", request: r, inPinned: true })),
@@ -251,6 +255,29 @@ class Sidebar {
     // While searching everything opens up; ids carry the search so that takes effect.
     const searching = !!this.filter;
     const idp = `${this.grouping}|${this.filter}|${el.inPinned ? "p|" : ""}`;
+    if (el.kind === "deleted") {
+      const it = new vscode.TreeItem("Deleted", C.Collapsed);
+      it.id = idp + "deleted";
+      it.description = String(el.items.length);
+      it.iconPath = new vscode.ThemeIcon("trash");
+      it.contextValue = "deleted-group";
+      it.tooltip = "Sessions moved to the bin by claude-delete. Right-click one to restore it or delete it for good.";
+      return it;
+    }
+    if (el.kind === "deletedSession") {
+      const m = el.m;
+      const it = new vscode.TreeItem(m.title || m.id.slice(0, 8), C.None);
+      it.id = idp + "del|" + m.dir;
+      it.description = `${m.request || "work root"} · deleted ${M.ago(m.deleted_at || now, now)} ago`;
+      it.iconPath = new vscode.ThemeIcon("history");
+      it.contextValue = "deleted";
+      const md = new vscode.MarkdownString();
+      md.appendMarkdown("**").appendText(m.title || "(untitled)").appendMarkdown("** — *deleted*\n\n");
+      md.appendText(`${m.request || "work root"}${m.ticket ? " · " + m.ticket : ""} · ${(m.items || []).length} item(s) in the bin`)
+        .appendMarkdown("\n\n").appendText(m.id);
+      it.tooltip = md;
+      return it;
+    }
     if (el.kind === "pinned") {
       const n = el.requests.length + el.sessions.length;
       const it = new vscode.TreeItem("Pinned", C.Expanded);
@@ -603,8 +630,8 @@ async function deleteSession(bar, el) {
     `Delete "${check.title}"?`,
     { modal: true, detail: `${check.request || "Work root"} · last active ${check.last_activity}\n` +
         `It may go: ${check.why.join(" and ")}.\n\n` + check.impact.map(l => "• " + l).join("\n") },
-    "Move to Trash");
-  if (answer !== "Move to Trash") return;
+    "Move to the bin");
+  if (answer !== "Move to the bin") return;
   try {
     await run(binPath("claude-delete"), [s.id, "--yes"]);
   } catch (e) {
@@ -612,7 +639,28 @@ async function deleteSession(bar, el) {
   }
   const tab = bar.tabs.get(s.id);
   if (tab) { bar.tabs.delete(s.id); tab.dispose(); }
-  vscode.window.showInformationMessage(`"${check.title}" moved to the Trash.`);
+  vscode.window.showInformationMessage(`"${check.title}" moved to the bin — restore it from Deleted, at the bottom of this list.`);
+  await bar.refresh();
+}
+
+async function restoreSession(bar, el) {
+  try {
+    await run(binPath("claude-delete"), ["--restore", el.m.id]);
+    vscode.window.showInformationMessage(`"${el.m.title}" restored.`);
+  } catch (e) {
+    vscode.window.showErrorMessage(e.message);
+  }
+  await bar.refresh();
+}
+
+async function purge(bar, args, question, detail) {
+  const answer = await vscode.window.showWarningMessage(question, { modal: true, detail }, "Delete for good");
+  if (answer !== "Delete for good") return;
+  try {
+    await run(binPath("claude-delete"), [...args, "--yes"]);
+  } catch (e) {
+    vscode.window.showErrorMessage(e.message);
+  }
   await bar.refresh();
 }
 
@@ -673,6 +721,13 @@ function activate(context) {
     cmd("copyId", el => vscode.env.clipboard.writeText(el.session.id)),
     cmd("copyForEmail", arg => copyForEmail(arg)),
     cmd("deleteSession", el => deleteSession(bar, el)),
+    cmd("restoreSession", el => restoreSession(bar, el)),
+    cmd("purgeSession", el => purge(bar, ["--purge", el.m.id], `Delete "${el.m.title}" for good?`,
+      "It leaves the bin and can't be restored.")),
+    cmd("emptyBin", () => {
+      const n = M.readDeleted(bar.bin).length;
+      return purge(bar, ["--empty"], `Delete all ${n} session(s) in the bin for good?`, "They can't be restored.");
+    }),
     cmd("pin", el => bar.togglePin(el)),
     cmd("unpin", el => bar.togglePin(el)),
     cmd("openFile", el => {
@@ -713,6 +768,12 @@ function activate(context) {
     context.subscriptions.push(w);
   }
   context.subscriptions.push({ dispose: () => clearTimeout(timer) });
+  // the bin changes when sessions are deleted, restored or purged — here or in a terminal
+  try { fs.mkdirSync(bar.bin, { recursive: true }); } catch {}
+  const binWatch = vscode.workspace.createFileSystemWatcher(
+    new vscode.RelativePattern(vscode.Uri.file(bar.bin), "*/manifest.json"));
+  binWatch.onDidCreate(() => bar.emitter.fire()); binWatch.onDidDelete(() => bar.emitter.fire());
+  context.subscriptions.push(binWatch);
   // pins change here or on another machine (the work root syncs)
   const pinWatch = vscode.workspace.createFileSystemWatcher(
     new vscode.RelativePattern(vscode.Uri.file(bar.data.work_root), "_config/pinned.json"));

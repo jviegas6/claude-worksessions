@@ -7,6 +7,9 @@ const os = require("os");
 const path = require("path");
 const Module = require("module");
 
+// The deleted-sessions bin the tests see: never the real one
+process.env.CWS_TRASH_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "cws-bin-"));
+
 function fakeVscode(settings) {
   const commands = new Map(), executed = [], terminals = [], listeners = {}, messages = [], answers = [], views = {};
   // Quick picks and input boxes take the next scripted answer: a function of the items, or a value.
@@ -634,7 +637,7 @@ test("pins: Pin puts a session or request in a Pinned group on top; Unpin takes 
   assert.strictEqual(top()[0].kind, "pinned");
 });
 
-test("delete: only sessions with no value offer it; confirm shows the impact; Trash, tab closed, refresh", async t => {
+test("delete: only sessions with no value offer it; confirm shows the impact; bin, tab closed, refresh", async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cws-del-"));
   const root = path.join(dir, "ws");
   const A = { path: path.join(root, "2026/09/23/10-00-00_a"), name: "demo", ticket: "", task_type: "", profile: "",
@@ -676,27 +679,101 @@ esac
   let disposed = false;
   tab.dispose = () => { disposed = true; };
 
-  fake.answers.push(items => { assert.deepStrictEqual(items, ["Move to Trash"]); return undefined; });   // cancel
+  fake.answers.push(items => { assert.deepStrictEqual(items, ["Move to the bin"]); return undefined; });   // cancel
   await run(item("junk")[0]);
   assert.deepStrictEqual(fake.messages.at(-1), ["modal", 'Delete "junk"?',
     "demo · last active 2026-09-23 10:00\nIt may go: no artifacts.\n\n• The conversation goes.\n• It left no files."]);
   assert.ok(!fs.readFileSync(log, "utf8").includes("--yes"));
 
-  fake.answers.push("Move to Trash");
+  fake.answers.push("Move to the bin");
   data.sessions = data.sessions.filter(s => s.id !== "junk");
   fs.writeFileSync(json, JSON.stringify(data));
   await run(item("junk")[0]);
   assert.match(fs.readFileSync(log, "utf8"), /junk --yes/);
   assert.ok(disposed);
-  assert.deepStrictEqual(fake.messages.at(-1), ["info", '"junk" moved to the Trash.']);
+  assert.deepStrictEqual(fake.messages.at(-1), ["info", '"junk" moved to the bin — restore it from Deleted, at the bottom of this list.']);
   assert.strictEqual(item("junk"), undefined);                                     // refreshed
 
   await run({ session: { id: "keep" } });                                          // refused by claude-delete
   assert.deepStrictEqual(fake.messages.at(-1), ["warn", '"keep" can\'t be deleted: booked in the weekly review.']);
   await run({ session: { id: "broken" } });
   assert.deepStrictEqual(fake.messages.at(-1), ["error", "claude-delete failed: boom"]);
-  fake.answers.push("Move to Trash");
+  fake.answers.push("Move to the bin");
   await run({ session: { id: "gone" } });
   assert.match(fake.messages.at(-2)[2], /^Work root · last active \?/);
   assert.deepStrictEqual(fake.messages.at(-1), ["error", "claude-delete failed: no permission"]);
+});
+
+test("deleted sessions: a Deleted group at the bottom; restore, delete for good, empty", async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cws-binx-"));
+  const bin = process.env.CWS_TRASH_DIR;
+  for (const n of fs.readdirSync(bin)) fs.rmSync(path.join(bin, n), { recursive: true });
+  const root = path.join(dir, "ws");
+  const A = { path: path.join(root, "2026/09/23/10-00-00_a"), name: "demo", ticket: "", task_type: "", profile: "",
+              files: [], files_truncated: false };
+  fs.mkdirSync(A.path, { recursive: true });
+  const now = Date.now() / 1000;
+  const data = { work_root: root, sessions: [{ id: "live", mtime: now - 60, cwd: A.path, in_work_root: true, title: "Live", request: A }] };
+  const { bin: sessionsBin } = stubSessions(dir, data);
+  const log = path.join(dir, "del.log");
+  fs.writeFileSync(path.join(path.dirname(sessionsBin), "claude-delete"),
+    `#!/bin/sh\necho "$*" >> "${log}"\ncase "$*" in *broken*) echo "claude-delete: can't restore, already there: x" >&2; exit 1;; esac\n`, { mode: 0o755 });
+  const put = (name, m) => { fs.mkdirSync(path.join(bin, name)); fs.writeFileSync(path.join(bin, name, "manifest.json"), JSON.stringify(m)); };
+  put("1_old", { id: "gone-1", title: "Test session", request: "setup", ticket: "Other", deleted_at: now - 7200, items: [{}, {}] });
+  put("2_new", { id: "gone-2", title: "Other test", request: null, deleted_at: now - 60, items: [] });
+
+  const fake = fakeVscode({ sessionsCommand: sessionsBin, openIn: "terminal" });
+  const ctx = context();
+  await load(fake).activate(ctx);
+  await settle(ctx);
+  const p = ctx.subscriptions[0].provider;
+  const run = (name, el) => fake.commands.get("claudeWorksessions." + name)(el);
+
+  let top = p.getChildren(undefined);
+  const group = top.at(-1);
+  assert.strictEqual(group.kind, "deleted");
+  const gItem = p.getTreeItem(group);
+  assert.deepStrictEqual([gItem.label, gItem.description, gItem.iconPath.id, gItem.collapsibleState, gItem.contextValue],
+                         ["Deleted", "2", "trash", 1, "deleted-group"]);
+  const kids = p.getChildren(group);
+  const items = kids.map(k => p.getTreeItem(k));
+  assert.deepStrictEqual(items.map(i => i.label), ["Other test", "Test session"]);                 // newest first
+  assert.deepStrictEqual(items.map(i => i.description), ["work root · deleted 1m ago", "setup · deleted 2h ago"]);
+  assert.deepStrictEqual([items[1].contextValue, items[1].iconPath.id], ["deleted", "history"]);
+  assert.match(items[1].tooltip.value, /Test session.*deleted[\s\S]*setup · Other · 2 item\(s\) in the bin[\s\S]*gone-1/);
+  assert.strictEqual(new Set(items.map(i => i.id)).size, 2);
+
+  // search narrows it; no match hides the group
+  p.setFilter("setup");
+  assert.deepStrictEqual(p.getChildren(p.getChildren(undefined).at(-1)).map(k => k.m.id), ["gone-1"]);
+  p.setFilter("nothing-like-this");
+  assert.notStrictEqual(p.getChildren(undefined).at(-1)?.kind, "deleted");
+  p.setFilter("");
+
+  await run("restoreSession", kids[1]);
+  assert.match(fs.readFileSync(log, "utf8"), /--restore gone-1/);
+  assert.deepStrictEqual(fake.messages.at(-1), ["info", '"Test session" restored.']);
+  await run("restoreSession", { m: { id: "broken", title: "B" } });
+  assert.deepStrictEqual(fake.messages.at(-1), ["error", "claude-delete: can't restore, already there: x"]);
+
+  fake.answers.push(undefined);                                                                    // cancel
+  await run("purgeSession", kids[0]);
+  assert.deepStrictEqual(fake.messages.at(-1), ["modal", 'Delete "Other test" for good?', "It leaves the bin and can't be restored."]);
+  assert.doesNotMatch(fs.readFileSync(log, "utf8"), /--purge/);
+  fake.answers.push("Delete for good");
+  await run("purgeSession", kids[0]);
+  assert.match(fs.readFileSync(log, "utf8"), /--purge gone-2 --yes/);
+  fake.answers.push("Delete for good");
+  await run("emptyBin");
+  assert.deepStrictEqual(fake.messages.filter(m => m[0] === "modal").at(-1).slice(0, 2), ["modal", "Delete all 2 session(s) in the bin for good?"]);
+  assert.match(fs.readFileSync(log, "utf8"), /--empty --yes/);
+  fake.answers.push("Delete for good");
+  await run("purgeSession", { m: { id: "broken", title: "B" } });
+  assert.strictEqual(fake.messages.at(-1)[0], "error");
+
+  // the bin watcher refreshes the tree
+  assert.ok((fake.listeners["watch:*/manifest.json"] || []).length >= 2);
+  for (const n of fs.readdirSync(bin)) fs.rmSync(path.join(bin, n), { recursive: true });
+  fake.listeners["watch:*/manifest.json"].forEach(f => f());
+  assert.notStrictEqual(p.getChildren(undefined).at(-1).kind, "deleted");
 });

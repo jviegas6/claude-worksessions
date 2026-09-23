@@ -263,3 +263,22 @@ test("pins: stored in the work root, toggled, and shown first", () => {
   assert.notStrictEqual(M.tree(d, "day", { pins, filter: "nothing matches" })[0]?.kind, "pinned");
   assert.notStrictEqual(M.tree(d, "day")[0].kind, "pinned");                        // no pins given
 });
+
+test("the deleted-sessions bin: where it is, and what is in it", () => {
+  const fs = require("fs"), os = require("os"), path = require("path");
+  assert.strictEqual(M.binDir({ CWS_TRASH_DIR: "/b" }, "/h"), "/b");
+  assert.strictEqual(M.binDir({ XDG_DATA_HOME: "/x" }, "/h"), "/x/claude-worksessions/trash");
+  assert.strictEqual(M.binDir({}, "/h"), "/h/.local/share/claude-worksessions/trash");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cws-bin-model-"));
+  assert.deepStrictEqual(M.readDeleted(path.join(dir, "missing")), []);
+  const put = (name, m) => { fs.mkdirSync(path.join(dir, name)); if (m !== undefined) fs.writeFileSync(path.join(dir, name, "manifest.json"), typeof m === "string" ? m : JSON.stringify(m)); };
+  put("a", { id: "s-old", title: "Old test", request: "demo", deleted_at: 100 });
+  put("b", { id: "s-new", title: "Newer", ticket: "BTPA-1", deleted_at: 200 });
+  put("c", { id: "s-none", title: "No date" });
+  put("d", "{bad"); put("e", { title: "no id" }); put("f");
+  const all = M.readDeleted(dir);
+  assert.deepStrictEqual(all.map(m => m.id), ["s-new", "s-old", "s-none"]);
+  assert.strictEqual(all[0].dir, path.join(dir, "b"));
+  assert.deepStrictEqual(M.readDeleted(dir, "demo old").map(m => m.id), ["s-old"]);
+  assert.deepStrictEqual(M.readDeleted(dir, "btpa-1").map(m => m.id), ["s-new"]);
+});

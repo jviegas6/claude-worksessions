@@ -31,6 +31,7 @@ function fakeVscode(settings) {
     Uri: { file: p => ({ fsPath: p }) },
     env: { clipboard: { writeText: async t => executed.push(["clipboard", t]) } },
     workspace: {
+      textDocuments: [],
       getConfiguration: () => ({ get: (k, d) => (k in settings ? settings[k] : d) }),
       onDidChangeConfiguration: on("config"),
       createFileSystemWatcher: () => ({ onDidChange() {}, onDidCreate() {}, onDidDelete() {}, dispose() {} }),
@@ -482,7 +483,7 @@ test("files: a Files node per request, folders, opening, reveal, copy, and what 
   assert.deepStrictEqual([dirIt.label, dirIt.iconPath.id, dirIt.resourceUri.fsPath, dirIt.contextValue],
                          ["out", "folder-theme", path.join(A.path, "out/"), "dir"]);
   const md = tree.find(([c]) => c.rel === "notes.md");
-  assert.deepStrictEqual([md[1].label.fsPath, md[1].contextValue, md[1].tooltip], [path.join(A.path, "notes.md"), "file", "notes.md"]);
+  assert.deepStrictEqual([md[1].label.fsPath, md[1].contextValue, md[1].tooltip], [path.join(A.path, "notes.md"), "file-md", "notes.md"]);
 
   // hover: what the session wrote, relative to its request, capped at 8
   const hover = items.find(([c]) => c.session?.id === "sa")[1].tooltip.value;
@@ -506,4 +507,45 @@ test("files: a Files node per request, folders, opening, reveal, copy, and what 
   assert.deepStrictEqual(items.filter(([c]) => c.kind === "file").map(([c]) => c.rel), ["out/brainlabs.csv"]);
   assert.ok(items.filter(([c]) => c.kind === "files" || c.kind === "dir").every(([, it]) => it.collapsibleState === 2));
   assert.ok(!items.some(([c]) => c.session?.id === "sb"));
+});
+
+test("copy for email: from the sidebar, a menu URI, the editor or a preview; saves first; reports errors", async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cws-mail-"));
+  const bin = path.join(dir, "bin");
+  fs.mkdirSync(bin);
+  const log = path.join(dir, "mail.log");
+  fs.writeFileSync(path.join(bin, "claude-sessions"), `#!/bin/sh\necho '{"work_root":"${dir}","sessions":[]}'\n`, { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, "claude-md-email"),
+    `#!/bin/sh\necho "$1" >> "${log}"\ncase "$1" in *broken*) echo "claude-md-email: pandoc is not installed" >&2; exit 1;; esac\n`, { mode: 0o755 });
+  const fake = fakeVscode({ sessionsCommand: path.join(bin, "claude-sessions"), openIn: "terminal" });
+  const ctx = context();
+  await load(fake).activate(ctx);
+  await settle(ctx);
+  const run = arg => fake.commands.get("claudeWorksessions.copyForEmail")(arg);
+  const calls = () => fs.readFileSync(log, "utf8").trim().split("\n");
+  const doc = (p, extra = {}) => ({ languageId: "markdown", uri: { fsPath: p }, isDirty: false, save: async function () { this.saved = true; }, ...extra });
+
+  await run({ request: { path: "/w/req" }, rel: "out/notes.md" });              // sidebar file
+  await run({ fsPath: "/w/menu.md" });                                          // explorer / editor title
+  const dirty = doc("/w/open.md", { isDirty: true });
+  fake.vscode.workspace.textDocuments.push(dirty);
+  fake.vscode.window.activeTextEditor = { document: dirty };
+  await run();                                                                  // the active editor
+  assert.ok(dirty.saved);
+  fake.vscode.window.activeTextEditor = undefined;
+  fake.vscode.workspace.textDocuments.push(doc("/w/other/preview-me.md"));
+  fake.vscode.window.tabGroups = { activeTabGroup: { activeTab: { label: "Preview preview-me.md" } } };
+  await run();                                                                  // a Markdown preview
+  assert.deepStrictEqual(calls(), ["/w/req/out/notes.md", "/w/menu.md", "/w/open.md", "/w/other/preview-me.md"]);
+  assert.deepStrictEqual(fake.messages.at(-1), ["info", "Copied preview-me.md for email — paste it into Outlook."]);
+
+  fake.vscode.window.tabGroups = { activeTabGroup: { activeTab: { label: "Preview unknown.md" } } };
+  await run();
+  assert.match(fake.messages.at(-1)[1], /Open or select a Markdown file/);
+  fake.vscode.window.tabGroups = undefined;
+  await run();
+  assert.match(fake.messages.at(-1)[1], /Open or select a Markdown file/);
+
+  await run({ fsPath: "/w/broken.md" });
+  assert.deepStrictEqual(fake.messages.at(-1), ["error", "claude-md-email: pandoc is not installed"]);
 });

@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.12.1] — 2026-09-23
+
+- `claude-delete` and **Delete session…** no longer offer a session that is open in a
+  running Claude process but idle. Before, only "written in the last two minutes" held
+  it back, so an idle open tab became deletable after two minutes. Running sessions are
+  read from Claude Code's own `sessions/<pid>.json` records and from `claude --resume ID`
+  command lines.
+
 ## [2.12.0] — 2026-09-23
 
 - **Transcripts are kept.** Claude Code deletes transcripts after 30 days unless

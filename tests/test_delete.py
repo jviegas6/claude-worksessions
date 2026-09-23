@@ -209,3 +209,31 @@ def test_load_sessions_falls_back_to_local_bin(deleter, home, monkeypatch):
     isfile = os.path.isfile
     monkeypatch.setattr(os.path, "isfile", lambda p: False if p == real else isfile(p))
     assert deleter.load_sessions().__spec__.loader.path == str(local / "claude-sessions")
+
+
+def test_running_sessions_from_records_and_command_lines(sessions, home, monkeypatch):
+    d = home / ".claude-personal" / "sessions"
+    d.mkdir(parents=True)
+    (d / "1.json").write_text(json.dumps({"pid": os.getpid(), "sessionId": "open-rec"}))
+    (d / "2.json").write_text(json.dumps({"pid": 999999999, "sessionId": "dead-rec"}))
+    (d / "3.json").write_text("{bad")
+    (d / "4.json").write_text(json.dumps({"sessionId": "no-pid"}))
+    (d / "5.key").write_text("x")
+    uid = "b39404a5-300c-45e8-908b-86e1966e8f7e"
+    monkeypatch.setattr(sessions.subprocess, "run", lambda *a, **k: type("R", (), {
+        "stdout": "claude --resume {}\nvim 11111111-2222-3333-4444-555555555555\n".format(uid)})())
+    assert sessions.running_sessions() == {"open-rec", uid}
+    monkeypatch.setattr(sessions.subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(OSError()))
+    assert sessions.running_sessions() == {"open-rec"}
+
+
+def test_alive(sessions, monkeypatch):
+    assert sessions.alive(os.getpid()) and not sessions.alive(999999999)
+    monkeypatch.setattr(sessions.os, "kill", lambda p, s: (_ for _ in ()).throw(PermissionError()))
+    assert sessions.alive(1)
+
+
+def test_open_session_is_blocked_even_when_idle(sessions, world, monkeypatch):
+    monkeypatch.setattr(sessions, "running_sessions", lambda: {"quiet-1"})
+    v = verdicts(sessions)
+    assert v["quiet-1"] == {"ok": False, "why": ["no artifacts"], "blocked": ["open in a running Claude session"]}

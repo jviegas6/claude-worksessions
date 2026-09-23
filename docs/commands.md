@@ -221,8 +221,9 @@ A session may go only when it has **no value**:
 - it is **kept out of the review** — started with `claude-new -n` (`"audit": false`), or
   listed in `_audit/no-audit.txt`.
 
-Never when the weekly review booked it (it is in `_audit/review/ledger.json`), or when it
-was active in the last two minutes. Before anything moves it says what deleting means:
+Never when the weekly review booked it (it is in `_audit/review/ledger.json`), when a
+Claude process has it open (Claude Code's `~/.claude-*/sessions/<pid>.json` records, or
+`claude --resume ID` on a command line), or when it was written in the last two minutes. Before anything moves it says what deleting means:
 the conversation can't be resumed or found, whether its time leaves your audit, which
 files it produced (those stay), and whether its request folder goes too.
 

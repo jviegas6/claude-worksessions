@@ -19,6 +19,7 @@ import importlib.util
 import json
 import os
 import re
+import subprocess
 import time
 
 HOME = os.path.expanduser("~")
@@ -290,18 +291,56 @@ def existing_written(files):
 ACTIVE_SECS = 120
 
 
+def alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except (PermissionError, OSError):
+        return True
+    return True
+
+
+def running_sessions():
+    """Ids of sessions a live Claude process has open: from Claude Code's own records
+    (~/.claude-*/sessions/<pid>.json), and from command lines that name a session
+    (claude --resume ID), which covers the moment before a record is written."""
+    ids = set()
+    for cfg in CA.CONFIG_DIRS:
+        d = os.path.join(cfg, "sessions")
+        for name in (os.listdir(d) if os.path.isdir(d) else []):
+            if not name.endswith(".json"):
+                continue
+            try:
+                with open(os.path.join(d, name)) as fh:
+                    rec = json.load(fh)
+                if rec.get("sessionId") and alive(int(rec.get("pid"))):
+                    ids.add(rec["sessionId"])
+            except (OSError, ValueError, TypeError, AttributeError):
+                continue
+    try:
+        ps = subprocess.run(["ps", "-A", "-o", "command="], capture_output=True, text=True).stdout
+    except OSError:
+        ps = ""
+    ids.update(re.findall(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+                          "\n".join(l for l in ps.splitlines() if "claude" in l)))
+    return ids
+
+
 def value_check(entries):
     """Whether each session may be deleted (claude-delete, the sidebar's Delete). It may when
     it has no artifacts -- none of the files it wrote still exist, and, if it is the only
     session of its request, the request folder has no files either -- or when it is kept
     out of the review (-n / "audit": false, or listed in _audit/no-audit.txt). Never when
-    the weekly review booked it, or it was active in the last two minutes."""
+    the weekly review booked it, when a Claude process has it open, or when it was written
+    in the last two minutes (it may be closing)."""
     try:
         with open(CA.LEDGER_PATH) as fh:
             ledger = fh.read()
     except OSError:
         ledger = ""
     skipped = CA.no_audit_ids()
+    running = running_sessions()
     per_request = {}
     for e in entries:
         if e["request"]:
@@ -316,7 +355,8 @@ def value_check(entries):
                           if os.path.join(r["path"], f) not in artifacts]
         why = (["no artifacts"] if not artifacts else []) + (["kept out of the review (-n)"] if not audited else [])
         blocked = ((["booked in the weekly review"] if e["id"] in ledger else []) +
-                   (["active in the last two minutes"] if now - e["mtime"] < ACTIVE_SECS else []))
+                   (["open in a running Claude session"] if e["id"] in running else
+                    ["active in the last two minutes"] if now - e["mtime"] < ACTIVE_SECS else []))
         if not why:
             blocked.append("it has artifacts and counts in the review")
         e["audited"] = audited

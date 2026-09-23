@@ -274,7 +274,7 @@ class Sidebar {
       it.id = idp + "file|" + el.request.path + "|" + el.rel;
       it.iconPath = vscode.ThemeIcon.File;
       it.tooltip = el.rel;
-      it.contextValue = "file";
+      it.contextValue = /\.(md|markdown)$/i.test(el.rel) ? "file-md" : "file";
       it.command = { command: "claudeWorksessions.openFile", title: "Open", arguments: [el] };
       return it;
     }
@@ -517,6 +517,33 @@ async function runSkill(bar) {
   bar.newRequest(`--prompt ${shq("/" + pick.skill.name)} ${shq(name)}`, "new request · /" + pick.skill.name);
 }
 
+// The Markdown file a Copy for email click means: a sidebar file, a URI from a menu, the
+// active editor, or — from a Markdown preview, which passes nothing — the open document
+// its tab is named after ("Preview notes.md").
+function markdownTarget(arg) {
+  if (arg && arg.request && arg.rel) return path.join(arg.request.path, arg.rel);
+  if (arg && arg.fsPath) return arg.fsPath;
+  const ed = vscode.window.activeTextEditor;
+  if (ed && ed.document.languageId === "markdown") return ed.document.uri.fsPath;
+  const tab = vscode.window.tabGroups && vscode.window.tabGroups.activeTabGroup.activeTab;
+  const shown = tab && (tab.label || "").replace(/^\[?Preview\]?\s*/, "");
+  const docs = vscode.workspace.textDocuments.filter(d => d.languageId === "markdown" && path.basename(d.uri.fsPath) === shown);
+  return docs.length === 1 ? docs[0].uri.fsPath : undefined;
+}
+
+async function copyForEmail(arg) {
+  const file = markdownTarget(arg);
+  if (!file) return vscode.window.showWarningMessage("Open or select a Markdown file to copy for email.");
+  const doc = vscode.workspace.textDocuments.find(d => d.uri.fsPath === file);
+  if (doc && doc.isDirty) await doc.save();
+  try {
+    await run(binPath("claude-md-email"), [file]);
+    vscode.window.showInformationMessage(`Copied ${path.basename(file)} for email — paste it into Outlook.`);
+  } catch (e) {
+    vscode.window.showErrorMessage(e.message);
+  }
+}
+
 async function resumeById(bar) {
   const id = await vscode.window.showInputBox({ prompt: "Session id to resume",
     validateInput: v => (/^[0-9A-Za-z-]{2,}$/.test(v.trim()) ? null : "a session id, e.g. 34e66495-1e97-…") });
@@ -562,6 +589,7 @@ function activate(context) {
     cmd("revealInOS", el => vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(el.request.path))),
     cmd("openInWindow", el => openInWindow(el.request)),
     cmd("copyId", el => vscode.env.clipboard.writeText(el.session.id)),
+    cmd("copyForEmail", arg => copyForEmail(arg)),
     cmd("openFile", el => {
       const uri = vscode.Uri.file(path.join(el.request.path, el.rel));
       return vscode.commands.executeCommand(/\.(md|markdown)$/i.test(el.rel) ? "markdown.showPreview" : "vscode.open", uri);

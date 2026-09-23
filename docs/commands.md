@@ -202,6 +202,27 @@ still open in VS Code, since Claude in VS Code's terminal connects to it (`/ide`
 Settings: `claudeWorksessions.sessionsCommand` (default `~/.local/bin/claude-sessions`),
 `claudeWorksessions.showEmptySessions` (sessions closed without a prompt; off).
 
+## claude-md-email
+
+```
+claude-md-email FILE.md             # copy it, formatted, to the clipboard
+claude-md-email FILE.md --open      # open it as a web page instead
+claude-md-email FILE.md --html OUT  # write the HTML ('-' for stdout)
+```
+
+Renders Markdown with pandoc and styles it with `yazi/md-email.css` — black on white,
+Calibri 11pt, bordered tables with shaded headers — so it pastes into Outlook looking
+like an email, whatever theme your editor uses. The styles are written onto every
+element, because Outlook drops a `<style>` block on paste. The clipboard also gets the
+Markdown as plain text.
+
+In VS Code it is **Copy for email**: the envelope button on a Markdown file or its
+preview, the editor's right-click menu, the Explorer's, and the sidebar's **Files**.
+Unsaved changes are saved first.
+
+Clipboard: macOS natively; WSL through Windows PowerShell (`Set-Clipboard -AsHtml`);
+Linux with `wl-copy` (Wayland) or `xclip`.
+
 ## ws, y
 
 | command | does |

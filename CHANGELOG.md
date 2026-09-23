@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.8.0] — 2026-09-23
+
+- **Copy for email.** New `claude-md-email FILE.md` renders Markdown with pandoc and
+  `md-email.css` and puts it on the clipboard ready to paste into Outlook — black on
+  white, whatever the editor's theme (a dark VS Code preview used to paste white text).
+  Styles are inlined, since Outlook drops `<style>` blocks. `--open` and `--html` for a
+  page instead. In VS Code: **Copy for email** on Markdown files, their preview, the
+  Explorer and the sidebar's Files.
+- `pandoc` is now installed with the base prerequisites, not only with the yazi extras.
+
 ## [2.7.0] — 2026-09-23
 
 - **VS Code: a request's files in the sidebar.** Each request has a **Files** entry with

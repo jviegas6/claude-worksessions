@@ -5,7 +5,7 @@ emulate -L zsh
 REPO="${0:A:h}"
 say() { print -r -- "  $*"; }
 if [[ -x /usr/bin/python3 ]]; then PY=/usr/bin/python3; else PY="$(command -v python3)"; fi
-for b in claude-audit claude-search claude-sessions claude-vscode; do
+for b in claude-audit claude-search claude-sessions claude-vscode claude-md-email; do
   f="$HOME/.local/bin/$b"
   [[ -L "$f" && "$(readlink "$f")" == "$REPO/bin/$b" ]] && rm "$f" && say "removed $f"
 done

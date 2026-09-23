@@ -162,6 +162,12 @@
       {
         "command": "claudeWorksessions.copyPath",
         "title": "Copy path"
+      },
+      {
+        "command": "claudeWorksessions.copyForEmail",
+        "title": "Copy for email",
+        "category": "Work sessions",
+        "icon": "$(mail)"
       }
     ],
     "menus": {
@@ -265,18 +271,23 @@
         },
         {
           "command": "claudeWorksessions.openFile",
-          "when": "view == claudeWorksessions.sessions && viewItem == file",
+          "when": "view == claudeWorksessions.sessions && viewItem =~ /^file/",
           "group": "1_open@1"
         },
         {
           "command": "claudeWorksessions.revealFile",
-          "when": "view == claudeWorksessions.sessions && viewItem =~ /^(file|dir)$/",
+          "when": "view == claudeWorksessions.sessions && viewItem =~ /^(file|file-md|dir)$/",
           "group": "2_reveal@1"
         },
         {
           "command": "claudeWorksessions.copyPath",
-          "when": "view == claudeWorksessions.sessions && viewItem =~ /^(file|dir)$/",
+          "when": "view == claudeWorksessions.sessions && viewItem =~ /^(file|file-md|dir)$/",
           "group": "3_edit@1"
+        },
+        {
+          "command": "claudeWorksessions.copyForEmail",
+          "when": "view == claudeWorksessions.sessions && viewItem == file-md",
+          "group": "1_open@2"
         }
       ],
       "commandPalette": [
@@ -315,6 +326,36 @@
         {
           "command": "claudeWorksessions.copyPath",
           "when": "false"
+        },
+        {
+          "command": "claudeWorksessions.copyForEmail",
+          "when": "resourceLangId == markdown || activeWebviewPanelId == 'markdown.preview'"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "claudeWorksessions.copyForEmail",
+          "when": "resourceLangId == markdown",
+          "group": "navigation@90"
+        },
+        {
+          "command": "claudeWorksessions.copyForEmail",
+          "when": "activeWebviewPanelId == 'markdown.preview'",
+          "group": "navigation@90"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "claudeWorksessions.copyForEmail",
+          "when": "resourceLangId == markdown",
+          "group": "9_cutcopypaste@90"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "claudeWorksessions.copyForEmail",
+          "when": "resourceExtname =~ /^\\.(md|markdown)$/",
+          "group": "6_copypath@90"
         }
       ]
     },

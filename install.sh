@@ -434,8 +434,8 @@ linux_install() {
   done
 }
 
-typeset -a want=(fzf)
-(( CWS_INSTALL_YAZI )) && want+=(yazi glow pandoc)
+typeset -a want=(fzf pandoc)   # pandoc: claude-md-email (Copy for email)
+(( CWS_INSTALL_YAZI )) && want+=(yazi glow)
 [[ "$OS" != mac ]] && want=(curl $want)
 typeset -a pkgs_missing=() plan=() failed=()
 local pkg
@@ -636,7 +636,7 @@ done
 # --- 5. commands and skills -----------------------------------------------------------
 step "Commands"
 local b
-for b in claude-audit claude-search claude-sessions claude-vscode; do link "$REPO/bin/$b" "$HOME/.local/bin/$b"; done
+for b in claude-audit claude-search claude-sessions claude-vscode claude-md-email; do link "$REPO/bin/$b" "$HOME/.local/bin/$b"; done
 
 # --- 5a. VS Code ------------------------------------------------------------------------
 # The Claude extension's env setting is machine-wide, so it can't follow a session's profile.

@@ -13,6 +13,7 @@ across past sessions, and daily/weekly review skills — all driven by one confi
 | `claude-audit` | what you worked on — per day, week, month — from transcripts plus meetings/mail/chats |
 | `claude-search` | find past sessions by ticket or topic, with the command to resume each |
 | `claude-sessions` | the most recent sessions across all profiles: when, id, folder, first prompt |
+| `claude-md-email` | a Markdown file onto the clipboard, formatted for email (black on white, Calibri, bordered tables) — also **Copy for email** in VS Code |
 | `ws` / `y` | fuzzy-jump to a request folder; browse it in yazi |
 | `weekly-review` skill | fills the weekly tracker, asking only about what's new |
 | `workday-recap` skill | reconstructs a day from Claude, Teams, calendar and sent mail |
@@ -28,7 +29,7 @@ source ~/.zshrc
 ```
 
 On a clean **Mac** the installer lists what is missing — Xcode Command Line Tools,
-Homebrew, Claude Code, `fzf`, and `yazi glow pandoc` for the Markdown extras — asks
+Homebrew, Claude Code, `fzf`, `pandoc` (for `claude-md-email`), and `yazi glow` for the Markdown extras — asks
 once, and installs the lot. It then offers to open each profile so you can sign in.
 
 On **Linux**, install zsh and git first (`sudo apt install zsh git`, or your

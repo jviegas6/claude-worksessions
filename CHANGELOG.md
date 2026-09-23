@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.7.0] — 2026-09-23
+
+- **VS Code: a request's files in the sidebar.** Each request has a **Files** entry with
+  its folder's contents as a tree (hidden files, `.git`, `node_modules`, `__pycache__` and
+  virtualenvs left out). Click to open — Markdown in the preview — or right-click to
+  reveal in Finder or copy the path. The search box matches file names too, and narrows
+  the Files to the matches. Hovering a session lists the files it wrote.
+- `claude-sessions --json` adds each request's `files` and each session's `written` files,
+  from its Write / Edit / MultiEdit / NotebookEdit tool calls. Transcripts are read
+  incrementally, with the position cached in `~/.cache/claude-worksessions/written.json`.
+
 ## [2.6.0] — 2026-09-22
 
 - **VS Code: the terminal commands and your skills in the Command Palette** (*Work

@@ -173,6 +173,8 @@ def test_json_output(sessions, home, monkeypatch, capsys):
     data = json.loads(run_main(sessions, monkeypatch, capsys, "-a", "--json"))
     assert data["work_root"] == str(root)
     a, b, c, d, gone = data["sessions"]
+    for x in (a, b, c):
+        assert (x["request"].pop("files"), x["request"].pop("files_truncated")) == ([], False)
     assert (a["id"], a["title"], a["first_prompt"], a["last_prompt"]) == ("a", "Title A", "first", "last A")
     assert a["request"] == {"path": str(req), "name": "demo work", "ticket": "BTPA-1",
                             "task_type": "security", "profile": "work"}
@@ -182,3 +184,99 @@ def test_json_output(sessions, home, monkeypatch, capsys):
                             "task_type": "", "profile": ""}
     assert d["request"] is None and d["in_work_root"] is True
     assert gone["in_work_root"] is False and gone["title"] is None
+
+
+def test_folder_files_skips_hidden_and_dependency_folders(sessions, home, monkeypatch):
+    f = home / "req"
+    for rel in ["notes.md", "b/script.py", "b/c/out.csv", ".session.json", ".git/HEAD",
+                "node_modules/x.js", "b/__pycache__/y.pyc", "b/.hidden"]:
+        (f / rel).parent.mkdir(parents=True, exist_ok=True)
+        (f / rel).write_text("x")
+    assert sessions.folder_files(str(f)) == (["notes.md", "b/script.py", "b/c/out.csv"], False)
+    monkeypatch.setattr(sessions, "MAX_FILES", 2)
+    assert sessions.folder_files(str(f)) == (["notes.md", "b/script.py"], True)
+    assert sessions.folder_files(str(home / "nope")) == ([], False)
+
+
+def tool(name, **inp):
+    return {"type": "assistant", "message": {"content": [
+        {"type": "text", "text": "x"}, {"type": "tool_use", "name": name, "input": inp}]}}
+
+
+def test_written_files_reads_only_what_is_new(sessions, home):
+    p = write_transcript(home, "w", [
+        tool("Write", file_path="/a/one.md"),
+        tool("Edit", file_path="/a/one.md"),
+        tool("Read", file_path="/a/read-only.md"),
+        tool("NotebookEdit", notebook_path="/a/nb.ipynb"),
+        '{"type": "tool_use", "file_path": broken',
+        '["tool_use", "file_path"]',
+        {"type": "assistant", "message": {"content": "tool_use file_path as text"}},
+        {"type": "assistant", "message": None, "x": "tool_use file_path"},
+    ])
+    cache = {}
+    assert sessions.written_files(str(p), cache) == ["/a/one.md", "/a/nb.ipynb"]
+    offset = cache[str(p)]["offset"]
+    assert offset == p.stat().st_size
+    # appended: only the new part is parsed; a half-written last line waits
+    with open(p, "a") as fh:
+        fh.write(json.dumps(tool("MultiEdit", file_path="/a/two.py")) + "\n")
+        fh.write('{"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Write", "input": {"file_path": "/a/half')
+    assert sessions.written_files(str(p), cache) == ["/a/one.md", "/a/nb.ipynb", "/a/two.py"]
+    assert cache[str(p)]["offset"] < p.stat().st_size
+    # a file that shrank is read again from the start
+    p.write_text(json.dumps(tool("Write", file_path="/b/new.md")) + "\n")
+    assert sessions.written_files(str(p), cache) == ["/b/new.md"]
+
+
+def test_written_cache_round_trip_and_bad_files(sessions, home, monkeypatch, tmp_path):
+    monkeypatch.setenv("CWS_CACHE_DIR", str(tmp_path / "c"))
+    assert sessions.load_written_cache() == {}
+    sessions.save_written_cache({"x": {"offset": 1, "files": []}})
+    assert sessions.load_written_cache() == {"x": {"offset": 1, "files": []}}
+    (tmp_path / "c" / "written.json").write_text("[1]")
+    assert sessions.load_written_cache() == {}
+    (tmp_path / "c" / "written.json").write_text("{bad")
+    assert sessions.load_written_cache() == {}
+    monkeypatch.setenv("CWS_CACHE_DIR", "/dev/null/nope")
+    sessions.save_written_cache({})                      # can't write: ignored
+    monkeypatch.delenv("CWS_CACHE_DIR")
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
+    assert sessions.cache_dir() == str(tmp_path / "xdg" / "claude-worksessions")
+
+
+def test_existing_written_maps_moves_and_drops_the_rest(sessions, home):
+    root = home / "work_sessions"
+    old, new = str(root / "2026-09-14_x"), root / "2026" / "09" / "14" / "09-00-00_x"
+    new.mkdir(parents=True)
+    (new / "kept.md").write_text("x")
+    (root / "_audit").mkdir()
+    (root / "_audit" / "moved-folders.json").write_text(json.dumps({old: str(new)}))
+    (home / ".claude-personal").mkdir(exist_ok=True)
+    (home / ".claude-personal" / "mem.md").write_text("x")
+    got = sessions.existing_written([old + "/kept.md", str(new / "kept.md"), old + "/gone.md",
+                                     str(home / ".claude-personal" / "mem.md")])
+    assert got == [str(new / "kept.md")]
+
+
+def test_json_has_request_files_and_written(sessions, home, monkeypatch, capsys, tmp_path):
+    monkeypatch.setenv("CWS_CACHE_DIR", str(tmp_path / "cache"))
+    root = home / "work_sessions"
+    req = root / "2026" / "09" / "22" / "10-00-00_demo"
+    (req / "out").mkdir(parents=True)
+    (req / ".session.json").write_text(json.dumps({"name": "demo"}))
+    (req / "out" / "report.md").write_text("x")
+    write_transcript(home, "a", [rec("user", "go", cwd=str(req)),
+                                 tool("Write", file_path=str(req / "out" / "report.md"))], mtime=2_000)
+    write_transcript(home, "b", [rec("user", "again", cwd=str(req))], mtime=1_000)
+    write_transcript(home, "gone", [rec("user", "x", cwd="/x")], mtime=500)
+    real = sessions.written_files
+    monkeypatch.setattr(sessions, "written_files",
+                        lambda p, c: (_ for _ in ()).throw(OSError) if p.endswith("gone.jsonl") else real(p, c))
+    data = json.loads(run_main(sessions, monkeypatch, capsys, "-a", "--json"))
+    a, b, gone = data["sessions"]
+    assert a["written"] == [str(req / "out" / "report.md")] and b["written"] == []
+    assert a["request"]["files"] == ["out/report.md"] and a["request"]["files_truncated"] is False
+    assert b["request"]["files"] == ["out/report.md"]
+    assert gone["written"] == [] and gone["request"] is None
+    assert (tmp_path / "cache" / "written.json").exists()

@@ -22,7 +22,8 @@ function fakeVscode(settings) {
     EventEmitter, MarkdownString,
     TreeItem: class { constructor(label, state) { this.label = label; this.collapsibleState = state; } },
     TreeItemCollapsibleState: { None: 0, Collapsed: 1, Expanded: 2 },
-    ThemeIcon: class { constructor(id, color) { this.id = id; this.color = color; } },
+    ThemeIcon: Object.assign(class { constructor(id, color) { this.id = id; this.color = color; } },
+                             { Folder: { id: "folder-theme" }, File: { id: "file-theme" } }),
     ThemeColor: class { constructor(id) { this.id = id; } },
     TerminalLocation: { Panel: 1, Editor: 2 },
     ProgressLocation: { Notification: 15 },
@@ -442,4 +443,67 @@ test("run skill with no skills installed says so", async t => {
   fs.rmSync(path.join(process.env.HOME, ".claude-personal/skills"), { recursive: true });
   await w.run("runSkill");
   assert.match(w.fake.messages.at(-1)[1], /No skills found/);
+});
+
+test("files: a Files node per request, folders, opening, reveal, copy, and what a session wrote", async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cws-files-"));
+  const root = path.join(dir, "ws");
+  const A = { path: path.join(root, "2026/09/22/10-00-00_a"), name: "demo", ticket: "BTPA-1", task_type: "",
+              profile: "", files: ["notes.md", "out/report.csv", "out/brainlabs.csv"], files_truncated: true };
+  const B = { path: path.join(root, "2026/09/22/11-00-00_b"), name: "empty", ticket: "", task_type: "",
+              profile: "", files: [], files_truncated: false };
+  for (const r of [A, B]) fs.mkdirSync(r.path, { recursive: true });
+  const now = Date.now() / 1000;
+  const written = [path.join(A.path, "notes.md"), ...Array.from({ length: 9 }, (_, i) => path.join(A.path, `f${i}.txt`)),
+                   path.join(os.homedir(), "elsewhere.py")];
+  const data = { work_root: root, sessions: [
+    { id: "sa", mtime: now - 60, cwd: A.path, in_work_root: true, title: "With files", first_prompt: "x",
+      last_prompt: "y", written, request: A },
+    { id: "sb", mtime: now - 90, cwd: B.path, in_work_root: true, title: "No files", first_prompt: "x",
+      last_prompt: "y", written: [], request: B },
+  ] };
+  const { bin } = stubSessions(dir, data);
+  const fake = fakeVscode({ sessionsCommand: bin, openIn: "terminal" });
+  const ctx = context();
+  await load(fake).activate(ctx);
+  await settle(ctx);
+  const p = ctx.subscriptions[0].provider;
+  const run = (name, ...a) => fake.commands.get("claudeWorksessions." + name)(...a);
+
+  let items = allItems(p);
+  const filesEl = items.find(([c]) => c.kind === "files");
+  assert.strictEqual(items.filter(([c]) => c.kind === "files").length, 1);        // not for the empty request
+  assert.deepStrictEqual([filesEl[1].label, filesEl[1].description, filesEl[1].iconPath.id], ["Files", "3+", "files"]);
+  assert.strictEqual(filesEl[1].collapsibleState, 1);
+  const tree = items.filter(([c]) => c.kind === "dir" || c.kind === "file");
+  assert.deepStrictEqual(tree.map(([c]) => c.kind === "dir" ? c.name + "/" : c.rel),
+                         ["out/", "out/brainlabs.csv", "out/report.csv", "notes.md"]);
+  const [dirEl, dirIt] = tree[0];
+  assert.deepStrictEqual([dirIt.label, dirIt.iconPath.id, dirIt.resourceUri.fsPath, dirIt.contextValue],
+                         ["out", "folder-theme", path.join(A.path, "out/"), "dir"]);
+  const md = tree.find(([c]) => c.rel === "notes.md");
+  assert.deepStrictEqual([md[1].label.fsPath, md[1].contextValue, md[1].tooltip], [path.join(A.path, "notes.md"), "file", "notes.md"]);
+
+  // hover: what the session wrote, relative to its request, capped at 8
+  const hover = items.find(([c]) => c.session?.id === "sa")[1].tooltip.value;
+  assert.match(hover, /\*\*Wrote:\*\* notes\.md, f0\.txt, .*f6\.txt and 3 more/);
+  const noWrite = items.find(([c]) => c.session?.id === "sb")[1].tooltip.value;
+  assert.doesNotMatch(noWrite, /Wrote/);
+
+  // open: Markdown in the preview, everything else in the editor
+  await run("openFile", md[0]);
+  assert.deepStrictEqual(fake.executed.at(-1), ["markdown.showPreview", { fsPath: path.join(A.path, "notes.md") }]);
+  await run("openFile", tree[1][0]);
+  assert.deepStrictEqual(fake.executed.at(-1), ["vscode.open", { fsPath: path.join(A.path, "out/brainlabs.csv") }]);
+  await run("revealFile", dirEl);
+  assert.deepStrictEqual(fake.executed.at(-1), ["revealFileInOS", { fsPath: path.join(A.path, "out/") }]);
+  await run("copyPath", md[0]);
+  assert.deepStrictEqual(fake.executed.at(-1), ["clipboard", path.join(A.path, "notes.md")]);
+
+  // search: a file name finds its request and narrows the files shown, all expanded
+  p.setFilter("brainlabs");
+  items = allItems(p);
+  assert.deepStrictEqual(items.filter(([c]) => c.kind === "file").map(([c]) => c.rel), ["out/brainlabs.csv"]);
+  assert.ok(items.filter(([c]) => c.kind === "files" || c.kind === "dir").every(([, it]) => it.collapsibleState === 2));
+  assert.ok(!items.some(([c]) => c.session?.id === "sb"));
 });

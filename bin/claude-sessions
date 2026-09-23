@@ -4,8 +4,9 @@
   claude-sessions          the 30 most recent
   claude-sessions 50       the 50 most recent
   claude-sessions -a       all of them
-  claude-sessions --json   the same as JSON, with each session's title, last prompt and
-                           request folder (ticket, task type, profile) -- for the VS Code sidebar
+  claude-sessions --json   the same as JSON, with each session's title, last prompt, the files
+                           it wrote, and its request folder (ticket, task type, profile, files)
+                           -- for the VS Code sidebar
 
 One line per session: last activity, session id, the folder it ran in (where that
 folder lives now, if it was moved since) and the first prompt.
@@ -155,20 +156,123 @@ def request_info(folder, sid):
             "profile": "" if meta["profile"] == "unknown" else meta["profile"]}
 
 
+SKIP_DIRS = {"node_modules", "__pycache__", "venv", ".venv", ".git"}
+MAX_FILES = 500
+
+
+def folder_files(folder):
+    """The files in a request folder, relative and sorted, without hidden files or folders
+    (.session.json, .git, ...) or dependency folders. (files, truncated) -- capped at MAX_FILES."""
+    out = []
+    for dirpath, dirnames, filenames in os.walk(folder):
+        dirnames[:] = sorted(d for d in dirnames if not d.startswith(".") and d not in SKIP_DIRS)
+        rel = os.path.relpath(dirpath, folder)
+        for fn in sorted(filenames):
+            if fn.startswith("."):
+                continue
+            out.append(fn if rel == "." else os.path.join(rel, fn).replace(os.sep, "/"))
+            if len(out) > MAX_FILES:
+                return out[:MAX_FILES], True
+    return out, False
+
+
+WRITE_TOOLS = {"Write": "file_path", "Edit": "file_path", "MultiEdit": "file_path",
+               "NotebookEdit": "notebook_path"}
+
+
+def cache_dir():
+    return os.environ.get("CWS_CACHE_DIR") or os.path.join(
+        os.environ.get("XDG_CACHE_HOME") or os.path.join(HOME, ".cache"), "claude-worksessions")
+
+
+def load_written_cache():
+    try:
+        with open(os.path.join(cache_dir(), "written.json")) as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_written_cache(cache):
+    try:
+        os.makedirs(cache_dir(), exist_ok=True)
+        tmp = os.path.join(cache_dir(), "written.json.tmp")
+        with open(tmp, "w") as fh:
+            json.dump(cache, fh)
+        os.replace(tmp, os.path.join(cache_dir(), "written.json"))
+    except OSError:
+        pass
+
+
+def written_files(path, cache):
+    """Files the session's Write / Edit tool calls touched, in first-write order. Transcripts
+    only grow, so the cache keeps how far each was read and only the new part is parsed; a
+    file that shrank is read again from the start."""
+    size = os.path.getsize(path)
+    hit = cache.get(path)
+    start, files = (hit["offset"], list(hit["files"])) if hit and hit.get("offset", 0) <= size else (0, [])
+    if start < size:
+        with open(path, "rb") as fh:
+            fh.seek(start)
+            chunk = fh.read()
+        end = chunk.rfind(b"\n") + 1          # a line still being written waits for next time
+        for line in chunk[:end].decode("utf-8", "replace").splitlines():
+            if '"tool_use"' not in line or ('"file_path"' not in line and '"notebook_path"' not in line):
+                continue
+            try:
+                m = json.loads(line)
+            except ValueError:
+                continue
+            content = ((m.get("message") or {}).get("content") if isinstance(m, dict) else None) or []
+            for block in content if isinstance(content, list) else []:
+                if isinstance(block, dict) and block.get("type") == "tool_use":
+                    key = WRITE_TOOLS.get(block.get("name"))
+                    f = key and (block.get("input") or {}).get(key)
+                    if isinstance(f, str) and f not in files:
+                        files.append(f)
+        cache[path] = {"offset": start + end, "files": files}
+    return files
+
+
+def existing_written(files):
+    """Written files that still exist, where they live now, leaving out Claude's own files."""
+    out = []
+    for f in files:
+        f = CA.moved_path(f)
+        if f.startswith(os.path.join(HOME, ".claude")) or f in out or not os.path.isfile(f):
+            continue
+        out.append(f)
+    return out
+
+
 def as_json(rows):
     root = CA.DEFAULT_ROOT
     out = []
+    listed = {}
+    cache = load_written_cache()
     for mtime, cwd, sid, first, path in rows:
         try:
             title, last = read_tail(path)
         except OSError:
             title = last = None
+        try:
+            written = existing_written(written_files(path, cache))
+        except OSError:
+            written = []
         folder = request_dir(cwd, sid)
+        request = None
+        if folder:
+            request = request_info(folder, sid)
+            if folder not in listed:
+                listed[folder] = folder_files(folder)
+            request["files"], request["files_truncated"] = listed[folder]
         out.append({"id": sid, "mtime": mtime, "cwd": cwd,
                     "in_work_root": cwd == root or cwd.startswith(root + os.sep),
                     "title": title, "last_prompt": last,
                     "first_prompt": None if first == "(no prompt)" else first,
-                    "request": request_info(folder, sid) if folder else None})
+                    "written": written, "request": request})
+    save_written_cache(cache)
     return {"work_root": root, "sessions": out}
 
 

@@ -204,7 +204,13 @@ class Sidebar {
     if (!el) return M.tree(this.data, this.grouping, opts).map((x, i) => ({ ...x, first: i === 0 }));
     if (el.kind === "group") return el.requests.map(r => ({ kind: "request", request: r }));
     if (el.kind === "request") {
-      return el.request.sessions.map(s => ({ kind: "session", session: s, request: el.request }));
+      const r = el.request, files = r.files || [];
+      return [...r.sessions.map(s => ({ kind: "session", session: s, request: r })),
+              ...(files.length ? [{ kind: "files", request: r }] : [])];
+    }
+    if (el.kind === "files" || el.kind === "dir") {
+      const files = M.shownFiles(el.request.files, this.filter);
+      return M.fileChildren(files, el.kind === "dir" ? el.prefix : "").map(x => ({ ...x, request: el.request }));
     }
     return [];
   }
@@ -245,6 +251,33 @@ class Sidebar {
       it.tooltip = md;
       return it;
     }
+    if (el.kind === "files") {
+      const r = el.request, n = r.files.length;
+      const it = new vscode.TreeItem("Files", searching ? C.Expanded : C.Collapsed);
+      it.id = idp + "f|" + r.path;
+      it.description = `${n}${r.files_truncated ? "+" : ""}`;
+      it.iconPath = new vscode.ThemeIcon("files");
+      it.contextValue = "files";
+      return it;
+    }
+    if (el.kind === "dir") {
+      const it = new vscode.TreeItem(el.name, searching ? C.Expanded : C.Collapsed);
+      it.id = idp + "d|" + el.request.path + "|" + el.prefix;
+      it.resourceUri = vscode.Uri.file(path.join(el.request.path, el.prefix));
+      it.iconPath = vscode.ThemeIcon.Folder;
+      it.contextValue = "dir";
+      return it;
+    }
+    if (el.kind === "file") {
+      const uri = vscode.Uri.file(path.join(el.request.path, el.rel));
+      const it = new vscode.TreeItem(uri, C.None);
+      it.id = idp + "file|" + el.request.path + "|" + el.rel;
+      it.iconPath = vscode.ThemeIcon.File;
+      it.tooltip = el.rel;
+      it.contextValue = "file";
+      it.command = { command: "claudeWorksessions.openFile", title: "Open", arguments: [el] };
+      return it;
+    }
     const s = el.session, r = el.request, open = this.isOpen(s.id);
     const it = new vscode.TreeItem(M.sessionLabel(s), C.None);
     it.id = idp + "s|" + s.id + (el.showRequest ? "|flat" : "");
@@ -262,6 +295,13 @@ class Sidebar {
     md.appendMarkdown("**First prompt:** ").appendText(clip(s.first_prompt)).appendMarkdown("\n\n");
     md.appendText([r && !r.root ? r.ticket || "no ticket" : "no request", r && r.task_type, r && r.profile,
                    M.ago(s.mtime, now) + " ago"].filter(Boolean).join(" · ")).appendMarkdown("\n\n");
+    const wrote = s.written || [];
+    if (wrote.length) {
+      const rel = f => (r && !r.root && f.startsWith(r.path + path.sep) ? path.relative(r.path, f)
+                        : f.replace(os.homedir(), "~"));
+      md.appendMarkdown("**Wrote:** ").appendText(wrote.slice(0, 8).map(rel).join(", ") +
+        (wrote.length > 8 ? ` and ${wrote.length - 8} more` : "")).appendMarkdown("\n\n");
+    }
     md.appendText(s.id);
     it.tooltip = md;
     return it;
@@ -522,6 +562,13 @@ function activate(context) {
     cmd("revealInOS", el => vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(el.request.path))),
     cmd("openInWindow", el => openInWindow(el.request)),
     cmd("copyId", el => vscode.env.clipboard.writeText(el.session.id)),
+    cmd("openFile", el => {
+      const uri = vscode.Uri.file(path.join(el.request.path, el.rel));
+      return vscode.commands.executeCommand(/\.(md|markdown)$/i.test(el.rel) ? "markdown.showPreview" : "vscode.open", uri);
+    }),
+    cmd("revealFile", el => vscode.commands.executeCommand("revealFileInOS",
+      vscode.Uri.file(path.join(el.request.path, el.rel || el.prefix || "")))),
+    cmd("copyPath", el => vscode.env.clipboard.writeText(path.join(el.request.path, el.rel || el.prefix || ""))),
     cmd("recentSessions", async () => { const s = await pickSession(bar, "Recent sessions — pick one to open"); if (s) bar.open(s); }),
     cmd("search", () => searchSessions(bar)),
     cmd("searchAi", () => searchSessions(bar, undefined, true)),
@@ -546,7 +593,8 @@ function activate(context) {
   const shared = conf.CWS_SHARED_PROFILE || (conf.CWS_PROFILES || "personal").split(/\s+/)[0];
   let projects = path.join(HOME, ".claude-" + shared, "projects");
   try { projects = fs.realpathSync(projects); } catch {}
-  for (const [dir, glob] of [[projects, "**/*.jsonl"], [bar.data.work_root, "*/*/*/*/.session.json"]]) {
+  // request folders: .session.json edits, and files added or removed (the Files entries)
+  for (const [dir, glob] of [[projects, "**/*.jsonl"], [bar.data.work_root, "[0-9]*/*/*/*/**"]]) {
     const w = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(vscode.Uri.file(dir), glob));
     w.onDidChange(soon); w.onDidCreate(soon); w.onDidDelete(soon);
     context.subscriptions.push(w);

@@ -139,8 +139,9 @@ and the first prompt. Folders moved since are shown where they are now
 copy of its transcript under the old folder.
 
 `--json` adds what the VS Code sidebar shows: each session's auto-title and latest
-prompt (Claude Code keeps both in the transcript), and its request folder with name,
-ticket, task type and profile. A session belongs to the nearest folder with a
+prompt (Claude Code keeps both in the transcript), the files it wrote, and its request
+folder with name, ticket, task type, profile and files. Written files are read once:
+`~/.cache/claude-worksessions/written.json` remembers how far each transcript was read. A session belongs to the nearest folder with a
 `.session.json` above where it ran, else the `YYYY/MM/DD/slug` folder it is in, else
 the one it was assigned to in `_audit/session-folders.json`.
 
@@ -163,9 +164,11 @@ by side.
 | a session | open it in a tab (`claude-resume -p <profile> --resume <id>`), or go to its tab if open |
 | **+** on a request | a new session in that request's folder, with its profile |
 | folder on a request | reveal it in the Explorer (right-click: in Finder, a new window, set task type) |
+| **Files** under a request | the request folder's files as a tree — click to open (Markdown in the preview), right-click to reveal in Finder or copy the path |
 
 **Search box.** Above the tree: typing filters it to the sessions whose title, prompts,
-request name, ticket, task type, profile or folder contain every word, and opens every
+request name, ticket, task type, profile, folder or file names contain every word — and a
+request's **Files** narrow to the files that match, and opens every
 group so the matches show; `Esc` or the clear button in the title bar resets it. **Enter**
 runs `claude-search` on the text, which also looks inside the conversations, and lists
 the hits to pick from. Drag the divider to resize the box; VS Code remembers it.
@@ -186,7 +189,8 @@ panel), the terminal commands and your skills:
 | Focus the search box · Clear search | |
 
 Sessions are named by Claude's auto-title, else their first prompt; hovering shows the
-title, first and latest prompt, ticket, type, profile and age. Open sessions have a
+title, first and latest prompt, ticket, type, profile, age, and the files the session
+wrote (from its Write / Edit tool calls). Open sessions have a
 green terminal icon. Tabs are named `TICKET · title`; a tab opened with **+** takes its
 session's name once its first prompt is in. The list refreshes itself as transcripts
 and `.session.json` files change.

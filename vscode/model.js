@@ -13,15 +13,38 @@ const GROUPING_LABELS = {
 };
 const ROOT_KEY = "(work root)";
 
+const words = filter => (filter || "").toLowerCase().split(/\s+/).filter(Boolean);
+
 // Does a session match the search box? Every word must appear somewhere in its title,
-// prompts, id, or its request's name, ticket, task type, profile or folder.
+// prompts, id, or its request's name, ticket, task type, profile, folder or file names.
 function matches(s, filter) {
-  const words = (filter || "").toLowerCase().split(/\s+/).filter(Boolean);
-  if (!words.length) return true;
+  const ws = words(filter);
+  if (!ws.length) return true;
   const r = s.request || {};
   const hay = [s.title, s.first_prompt, s.last_prompt, s.id, r.name, r.ticket, r.task_type,
-               r.profile, r.path].filter(Boolean).join("\n").toLowerCase();
-  return words.every(w => hay.includes(w));
+               r.profile, r.path, ...(r.files || [])].filter(Boolean).join("\n").toLowerCase();
+  return ws.every(w => hay.includes(w));
+}
+
+// A request's files to show: while searching, those whose path has one of the words, if
+// any does; otherwise all of them.
+function shownFiles(files, filter) {
+  const ws = words(filter);
+  const hit = ws.length ? (files || []).filter(f => ws.some(w => f.toLowerCase().includes(w))) : [];
+  return hit.length ? hit : files || [];
+}
+
+// One level of a file tree: the folders (with their full prefix) then the files directly
+// under `prefix` ("" for the top, "b/c/" below).
+function fileChildren(files, prefix = "") {
+  const dirs = new Set(), here = [];
+  for (const f of files) {
+    if (!f.startsWith(prefix)) continue;
+    const rest = f.slice(prefix.length), i = rest.indexOf("/");
+    if (i < 0) here.push(f); else dirs.add(rest.slice(0, i));
+  }
+  return [...[...dirs].sort().map(d => ({ kind: "dir", name: d, prefix: prefix + d + "/" })),
+          ...here.sort().map(f => ({ kind: "file", rel: f }))];
 }
 
 // Sessions worth listing: in the work root or assigned to a request, not empty (opened
@@ -199,6 +222,6 @@ function auditArgs(period, detail, date) {
   return detail ? [...args, "--detail"] : args;
 }
 
-module.exports = { GROUPINGS, GROUPING_LABELS, ROOT_KEY, matches, visible, requests, dayOf, tree,
+module.exports = { GROUPINGS, GROUPING_LABELS, ROOT_KEY, matches, shownFiles, fileChildren, visible, requests, dayOf, tree,
                    sessionLabel, tabName, ago, matchPending, parseCsv, taskTypes, setTaskType,
                    readSkills, auditArgs };

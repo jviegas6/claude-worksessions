@@ -26,7 +26,7 @@ Announce the folder you created so the user can find it.
 | `YYYY/MM/DD/HH-mm-ss_slug/` | one request: notes, scripts, data, outputs |
 | `YYYY/MM/DD/HH-mm-ss_slug/.session.json` | name, profile, ticket, task_type (the folder's default), session_types (per-session overrides), started_at, ended_at |
 | `_audit/` | CSV exports from `claude-audit`; underscore keeps it out of `claude-new -l` |
-| `_config/` | claude-worksessions settings: `config.env`, `context.md` (the standing context below), `review-rules.md`. The standing context below is copied in from `_config/context.md` — edit it there, then run `install.sh` to regenerate this file |
+| `_config/` | claude-worksessions settings: `config.env`, `context.md` (the standing context below), `review-rules.md`, `pinned.json` (the VS Code sidebar's pins). The standing context below is copied in from `_config/context.md` — edit it there, then run `install.sh` to regenerate this file |
 | `_audit/moved-folders.json` | old → new path map from the 2026-09-18 move off flat `YYYY-MM-DD_slug/`. `claude-audit` and `claude-search` resolve transcript `cwd`s through it — don't delete it; add to it if folders are ever moved again |
 
 Folders beginning with `_` are infrastructure, not requests.

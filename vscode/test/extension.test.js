@@ -34,7 +34,10 @@ function fakeVscode(settings) {
       textDocuments: [],
       getConfiguration: () => ({ get: (k, d) => (k in settings ? settings[k] : d) }),
       onDidChangeConfiguration: on("config"),
-      createFileSystemWatcher: () => ({ onDidChange() {}, onDidCreate() {}, onDidDelete() {}, dispose() {} }),
+      createFileSystemWatcher: pattern => {
+        const keep = f => (listeners["watch:" + pattern.pattern] ||= []).push(f);
+        return { onDidChange: keep, onDidCreate: keep, onDidDelete: keep, dispose() {} };
+      },
     },
     window: {
       terminals, activeTerminal: undefined,
@@ -562,4 +565,66 @@ test("copy for email: from the sidebar, a menu URI, the editor or a preview; sav
 
   await run({ fsPath: "/w/broken.md" });
   assert.deepStrictEqual(fake.messages.at(-1), ["error", "claude-md-email: pandoc is not installed"]);
+});
+
+test("pins: Pin puts a session or request in a Pinned group on top; Unpin takes it out", async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cws-pinx-"));
+  const root = path.join(dir, "ws");
+  const A = { path: path.join(root, "2026/09/22/10-00-00_a"), name: "demo", ticket: "BTPA-1", task_type: "",
+              profile: "", files: ["notes.md"], files_truncated: false };
+  const B = { path: path.join(root, "2026/09/21/10-00-00_b"), name: "older", ticket: "", task_type: "",
+              profile: "", files: [], files_truncated: false };
+  for (const r of [A, B]) fs.mkdirSync(r.path, { recursive: true });
+  const now = Date.now() / 1000;
+  const data = { work_root: root, sessions: [
+    { id: "sa", mtime: now - 60, cwd: A.path, in_work_root: true, title: "Newer", request: A },
+    { id: "sb", mtime: now - 90, cwd: B.path, in_work_root: true, title: "Older", request: B },
+  ] };
+  const { bin } = stubSessions(dir, data);
+  const fake = fakeVscode({ sessionsCommand: bin, openIn: "terminal" });
+  const ctx = context();
+  await load(fake).activate(ctx);
+  await settle(ctx);
+  const p = ctx.subscriptions[0].provider;
+  const run = (name, el) => fake.commands.get("claudeWorksessions." + name)(el);
+  const top = () => p.getChildren(undefined);
+  const find = (items, pred) => items.find(([c]) => pred(c));
+
+  assert.notStrictEqual(top()[0].kind, "pinned");
+  let items = allItems(p);
+  const sb = find(items, c => c.session?.id === "sb");
+  assert.strictEqual(sb[1].contextValue, "session");
+  await run("pin", sb[0]);
+  const reqA = find(allItems(p), c => c.kind === "request" && c.request.name === "demo");
+  assert.strictEqual(reqA[1].contextValue, "request");
+  await run("pin", reqA[0]);
+  const saved = JSON.parse(fs.readFileSync(path.join(root, "_config", "pinned.json"), "utf8"));
+  assert.deepStrictEqual([Object.keys(saved.sessions), Object.keys(saved.requests)], [["sb"], ["2026/09/22/10-00-00_a"]]);
+
+  items = allItems(p);
+  const [pinGroup, pinItem] = items[0];
+  assert.deepStrictEqual([pinGroup.kind, pinItem.label, pinItem.description, pinItem.iconPath.id, pinItem.collapsibleState],
+                         ["pinned", "Pinned", "2", "pinned", 2]);
+  const underPin = items.filter(([c]) => c.inPinned);
+  assert.deepStrictEqual(underPin.map(([c]) => c.kind + ":" + (c.session?.id || c.rel || c.request?.name)),
+                         ["request:demo", "session:sa", "files:demo", "file:notes.md", "session:sb"]);
+  const ids = items.map(([, it]) => it.id).filter(Boolean);
+  assert.strictEqual(new Set(ids).size, ids.length);                                   // copies get their own ids
+  const pinnedSb = find(items, c => c.session?.id === "sb" && !c.inPinned)[1];
+  assert.deepStrictEqual([pinnedSb.contextValue, pinnedSb.iconPath.id], ["session-pinned", "pinned"]);
+  const inPinSb = find(items, c => c.session?.id === "sb" && c.inPinned)[1];
+  assert.match(inPinSb.description, /^older · /);                                      // shows its request
+  const normalA = find(items, c => c.kind === "request" && c.request.name === "demo" && !c.inPinned)[1];
+  assert.deepStrictEqual([normalA.contextValue, normalA.description.split(" · ")[0]], ["request-pinned", "pinned"]);
+  const firstDay = items.find(([c]) => c.kind === "group");
+  assert.strictEqual(firstDay[1].collapsibleState, 2);                                 // first real group still open
+
+  await run("unpin", find(items, c => c.session?.id === "sb")[0]);
+  await run("unpin", find(allItems(p), c => c.kind === "request" && c.request.name === "demo")[0]);
+  assert.notStrictEqual(top()[0].kind, "pinned");
+
+  // a change from elsewhere (another machine, via the synced work root) is picked up
+  fs.writeFileSync(path.join(root, "_config", "pinned.json"), JSON.stringify({ sessions: { sa: 1 }, requests: {} }));
+  for (const f of fake.listeners["watch:_config/pinned.json"] || []) f();
+  assert.strictEqual(top()[0].kind, "pinned");
 });

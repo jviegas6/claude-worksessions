@@ -106,8 +106,61 @@ function dayOf(request, workRoot) {
   return "(elsewhere)";
 }
 
-// Top level of the tree for a grouping: groups of requests, or (recent) sessions directly.
+// --- pins: <work root>/_config/pinned.json, so they sync with the work root -------------
+//   { "sessions": { id: pinnedAt }, "requests": { path relative to the work root: pinnedAt } }
+const pinsFile = root => path.join(root, "_config", "pinned.json");
+
+function readPins(root) {
+  try {
+    const d = JSON.parse(fs.readFileSync(pinsFile(root), "utf8"));
+    const obj = x => (x && typeof x === "object" && !Array.isArray(x) ? x : {});
+    return { sessions: obj(d && d.sessions), requests: obj(d && d.requests) };
+  } catch {
+    return { sessions: {}, requests: {} };
+  }
+}
+
+const requestKey = (root, requestPath) => path.relative(root, requestPath).split(path.sep).join("/");
+
+// Pin or unpin a session (by id) or a request (by path). Returns whether it is now pinned.
+function togglePin(root, kind, key, now = Date.now() / 1000) {
+  const pins = readPins(root), bucket = kind === "request" ? pins.requests : pins.sessions;
+  const k = kind === "request" ? requestKey(root, key) : key;
+  const pinned = !(k in bucket);
+  if (pinned) bucket[k] = now; else delete bucket[k];
+  fs.mkdirSync(path.dirname(pinsFile(root)), { recursive: true });
+  const tmp = pinsFile(root) + ".tmp";
+  fs.writeFileSync(tmp, JSON.stringify(pins, null, 2) + "\n");
+  fs.renameSync(tmp, pinsFile(root));
+  return pinned;
+}
+
+const isPinnedSession = (pins, id) => !!(pins && pins.sessions && id in pins.sessions);
+const isPinnedRequest = (pins, root, r) => !!(pins && pins.requests && !r.root && requestKey(root, r.path) in pins.requests);
+
+// The Pinned group's contents, with the search and sort applied: { requests, sessions }.
+function pinned(data, pins, opts) {
+  const sort = SORTS.includes(opts && opts.sort) ? opts.sort : "activity";
+  const reqs = requests(data, opts);
+  const reqOf = new Map();
+  for (const r of reqs) for (const s of r.sessions) reqOf.set(s.id, r);
+  return {
+    requests: reqs.filter(r => isPinnedRequest(pins, data.work_root, r)),
+    sessions: visible(data, opts).filter(s => isPinnedSession(pins, s.id)).sort(sessionOrder[sort])
+      .map(s => ({ session: s, request: reqOf.get(s.id) })),
+  };
+}
+
+// Top level of the tree for a grouping: groups of requests, or (recent) sessions directly —
+// after a Pinned group when anything pinned is shown.
 function tree(data, grouping, opts) {
+  const pins = opts && opts.pins;
+  const top = pins ? pinned(data, pins, opts) : { requests: [], sessions: [] };
+  const lead = top.requests.length || top.sessions.length ? [{ kind: "pinned", ...top }] : [];
+  return [...lead, ...grouped(data, grouping, opts)];
+}
+
+function grouped(data, grouping, opts) {
   if (grouping === "recent") {
     const reqs = requests(data, opts);
     const reqOf = new Map();
@@ -248,6 +301,7 @@ function auditArgs(period, detail, date) {
   return detail ? [...args, "--detail"] : args;
 }
 
-module.exports = { GROUPINGS, GROUPING_LABELS, SORTS, SORT_LABELS, ROOT_KEY, matches, shownFiles, fileChildren, visible, requests, dayOf, tree,
+module.exports = { GROUPINGS, GROUPING_LABELS, SORTS, SORT_LABELS, ROOT_KEY, readPins, togglePin, requestKey,
+                   isPinnedSession, isPinnedRequest, pinned, matches, shownFiles, fileChildren, visible, requests, dayOf, tree,
                    sessionLabel, tabName, ago, matchPending, parseCsv, taskTypes, setTaskType,
                    readSkills, auditArgs };

@@ -53,6 +53,7 @@ class Sidebar {
     this.data = { work_root: config().CWS_WORK_ROOT || HOME, sessions: [] };
     this.grouping = context.globalState.get("grouping", "day");
     this.sort = context.globalState.get("sort", "activity");
+    this.pins = { sessions: {}, requests: {} };
     this.filter = "";
     this.tabs = new Map();      // session id → terminal
     this.pending = [];          // tabs waiting for their session to appear
@@ -64,7 +65,7 @@ class Sidebar {
   }
 
   opts() {
-    return { filter: this.filter, sort: this.sort,
+    return { filter: this.filter, sort: this.sort, pins: this.pins,
              showEmpty: vscode.workspace.getConfiguration("claudeWorksessions").get("showEmptySessions", false) };
   }
 
@@ -85,6 +86,7 @@ class Sidebar {
     this.loading = (async () => {
       try {
         this.data = await loadData();
+        this.pins = M.readPins(this.data.work_root);
         this.error = null;
       } catch (e) {
         this.error = e.message;
@@ -99,6 +101,18 @@ class Sidebar {
   }
 
   find(id) { return this.data.sessions.find(s => s.id === id); }
+
+  reloadPins() {
+    this.pins = M.readPins(this.data.work_root);
+    this.emitter.fire();
+  }
+
+  togglePin(el) {
+    const now = el.kind === "request" ? M.togglePin(this.data.work_root, "request", el.request.path)
+                                      : M.togglePin(this.data.work_root, "session", el.session.id);
+    this.reloadPins();
+    return now;
+  }
 
   requestOf(id) {
     return M.requests(this.data, { showEmpty: true }).find(r => r.sessions.some(s => s.id === id));
@@ -202,16 +216,26 @@ class Sidebar {
   // --- tree ---------------------------------------------------------------------------
   getChildren(el) {
     const opts = this.opts();
-    if (!el) return M.tree(this.data, this.grouping, opts).map((x, i) => ({ ...x, first: i === 0 }));
+    if (!el) {
+      const top = M.tree(this.data, this.grouping, opts);
+      const firstGroup = top.findIndex(x => x.kind !== "pinned");
+      return top.map((x, i) => ({ ...x, first: i === firstGroup }));
+    }
+    const inPinned = !!el.inPinned;
+    if (el.kind === "pinned") {
+      return [...el.requests.map(r => ({ kind: "request", request: r, inPinned: true })),
+              ...el.sessions.map(x => ({ kind: "session", session: x.session, request: x.request,
+                                         showRequest: true, inPinned: true }))];
+    }
     if (el.kind === "group") return el.requests.map(r => ({ kind: "request", request: r }));
     if (el.kind === "request") {
       const r = el.request, files = r.files || [];
-      return [...r.sessions.map(s => ({ kind: "session", session: s, request: r })),
-              ...(files.length ? [{ kind: "files", request: r }] : [])];
+      return [...r.sessions.map(s => ({ kind: "session", session: s, request: r, inPinned })),
+              ...(files.length ? [{ kind: "files", request: r, inPinned }] : [])];
     }
     if (el.kind === "files" || el.kind === "dir") {
       const files = M.shownFiles(el.request.files, this.filter);
-      return M.fileChildren(files, el.kind === "dir" ? el.prefix : "").map(x => ({ ...x, request: el.request }));
+      return M.fileChildren(files, el.kind === "dir" ? el.prefix : "").map(x => ({ ...x, request: el.request, inPinned }));
     }
     return [];
   }
@@ -226,7 +250,15 @@ class Sidebar {
     const now = Date.now() / 1000;
     // While searching everything opens up; ids carry the search so that takes effect.
     const searching = !!this.filter;
-    const idp = `${this.grouping}|${this.filter}|`;
+    const idp = `${this.grouping}|${this.filter}|${el.inPinned ? "p|" : ""}`;
+    if (el.kind === "pinned") {
+      const n = el.requests.length + el.sessions.length;
+      const it = new vscode.TreeItem("Pinned", C.Expanded);
+      it.id = idp + "pinned";
+      it.description = String(n);
+      it.iconPath = new vscode.ThemeIcon("pinned");
+      return it;
+    }
     if (el.kind === "group") {
       const it = new vscode.TreeItem(el.key, el.first || searching ? C.Expanded : C.Collapsed);
       it.id = idp + "g|" + el.key;
@@ -238,9 +270,10 @@ class Sidebar {
       const r = el.request;
       const it = new vscode.TreeItem(r.name, searching ? C.Expanded : C.Collapsed);
       it.id = idp + "r|" + r.path;
-      it.contextValue = r.root ? "root" : "request";
-      it.description = [this.grouping !== "ticket" && r.ticket, r.task_type, r.profile, M.ago(r.mtime, now)]
-        .filter(Boolean).join(" · ");
+      const pinnedReq = M.isPinnedRequest(this.pins, this.data.work_root, r);
+      it.contextValue = r.root ? "root" : pinnedReq ? "request-pinned" : "request";
+      it.description = [pinnedReq && !el.inPinned && "pinned", this.grouping !== "ticket" && r.ticket,
+                        r.task_type, r.profile, M.ago(r.mtime, now)].filter(Boolean).join(" · ");
       it.iconPath = new vscode.ThemeIcon(r.sessions.some(s => this.isOpen(s.id)) ? "folder-active" : "folder");
       const md = new vscode.MarkdownString();
       md.appendMarkdown("**").appendText(r.name).appendMarkdown("**\n\n");
@@ -282,11 +315,12 @@ class Sidebar {
     const s = el.session, r = el.request, open = this.isOpen(s.id);
     const it = new vscode.TreeItem(M.sessionLabel(s), C.None);
     it.id = idp + "s|" + s.id + (el.showRequest ? "|flat" : "");
-    it.contextValue = "session";
+    const pinnedSes = M.isPinnedSession(this.pins, s.id);
+    it.contextValue = pinnedSes ? "session-pinned" : "session";
     it.description = (el.showRequest && r ? (r.ticket && !r.root ? r.ticket + " · " : "") + r.name + " · " : "") +
       M.ago(s.mtime, now);
     it.iconPath = open ? new vscode.ThemeIcon("terminal", new vscode.ThemeColor("charts.green"))
-                       : new vscode.ThemeIcon("comment-discussion");
+                       : new vscode.ThemeIcon(pinnedSes ? "pinned" : "comment-discussion");
     it.command = { command: "claudeWorksessions.open", title: "Open", arguments: [el] };
     const clip = t => (t || "—").replace(/\s+/g, " ").slice(0, 300);
     const md = new vscode.MarkdownString();
@@ -601,6 +635,8 @@ function activate(context) {
     cmd("openInWindow", el => openInWindow(el.request)),
     cmd("copyId", el => vscode.env.clipboard.writeText(el.session.id)),
     cmd("copyForEmail", arg => copyForEmail(arg)),
+    cmd("pin", el => bar.togglePin(el)),
+    cmd("unpin", el => bar.togglePin(el)),
     cmd("openFile", el => {
       const uri = vscode.Uri.file(path.join(el.request.path, el.rel));
       return vscode.commands.executeCommand(/\.(md|markdown)$/i.test(el.rel) ? "markdown.showPreview" : "vscode.open", uri);
@@ -639,6 +675,12 @@ function activate(context) {
     context.subscriptions.push(w);
   }
   context.subscriptions.push({ dispose: () => clearTimeout(timer) });
+  // pins change here or on another machine (the work root syncs)
+  const pinWatch = vscode.workspace.createFileSystemWatcher(
+    new vscode.RelativePattern(vscode.Uri.file(bar.data.work_root), "_config/pinned.json"));
+  pinWatch.onDidChange(() => bar.reloadPins()); pinWatch.onDidCreate(() => bar.reloadPins());
+  pinWatch.onDidDelete(() => bar.reloadPins());
+  context.subscriptions.push(pinWatch);
   bar.refresh();
 }
 

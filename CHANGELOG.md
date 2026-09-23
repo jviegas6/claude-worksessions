@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.10.0] — 2026-09-23
+
+- **VS Code: pin sessions and requests.** Right-click → **Pin**, or the pin icon on hover.
+  Pinned items get a **Pinned** group at the top of the panel, whatever the grouping and
+  sort, and keep their place below with a pin mark. A pinned request brings its sessions
+  and files. The search box and sort apply to the group too.
+- Pins are kept in `<work root>/_config/pinned.json`, so they sync with the work root; a
+  change made on another machine shows up without a reload.
+
 ## [2.9.0] — 2026-09-23
 
 - **VS Code: sort the sessions.** A Sort button in the Work sessions panel: **last

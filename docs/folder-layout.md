@@ -6,7 +6,7 @@
 ├── YYYY/MM/DD/HH-mm-ss_slug/      one request: notes, scripts, data, outputs
 │   └── .session.json              name, profile, ticket, task_type (folder default),
 │                                   session_types (per session), times
-├── _config/                       config.env, context.md, review-rules.md
+├── _config/                       config.env, context.md, review-rules.md, pinned.json (VS Code pins)
 ├── _audit/
 │   ├── activity/YYYY-MM-DD.json   meetings/mail/chats per day, written by the skills
 │   ├── review/ledger.json         weekly-review decisions — change only via claude-audit --apply

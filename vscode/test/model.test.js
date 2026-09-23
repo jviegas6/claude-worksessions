@@ -215,3 +215,51 @@ test("sorting: last activity, started, or name — days stay newest first", () =
   assert.deepStrictEqual(M.tree(t, "ticket").map(g => g.key), ["ZZ-1", "AA-1"]);
   assert.deepStrictEqual(M.tree(t, "ticket", { sort: "name" }).map(g => g.key), ["ZZ-1", "AA-1"]);   // requests x, y by name
 });
+
+test("pins: stored in the work root, toggled, and shown first", () => {
+  const fs = require("fs"), os = require("os"), path = require("path");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cws-pins-"));
+  assert.deepStrictEqual(M.readPins(root), { sessions: {}, requests: {} });   // no file
+  fs.mkdirSync(path.join(root, "_config"));
+  fs.writeFileSync(path.join(root, "_config", "pinned.json"), "{bad");
+  assert.deepStrictEqual(M.readPins(root), { sessions: {}, requests: {} });
+  fs.writeFileSync(path.join(root, "_config", "pinned.json"), JSON.stringify({ sessions: ["x"], requests: null }));
+  assert.deepStrictEqual(M.readPins(root), { sessions: {}, requests: {} });
+
+  const R = { path: path.join(root, "2026/09/22/10-00-00_r"), name: "R", ticket: "", task_type: "", profile: "" };
+  assert.strictEqual(M.togglePin(root, "session", "s1", 100), true);
+  assert.strictEqual(M.togglePin(root, "request", R.path, 200), true);
+  assert.deepStrictEqual(M.readPins(root), { sessions: { s1: 100 }, requests: { "2026/09/22/10-00-00_r": 200 } });
+  assert.strictEqual(M.togglePin(root, "session", "s1"), false);
+  assert.deepStrictEqual(M.readPins(root).sessions, {});
+  const fresh = fs.mkdtempSync(path.join(os.tmpdir(), "cws-pins-"));      // creates _config
+  M.togglePin(fresh, "session", "z");
+  assert.ok(fs.existsSync(path.join(fresh, "_config", "pinned.json")));
+
+  const S = { path: path.join(root, "2026/09/21/09-00-00_s"), name: "S", ticket: "", task_type: "", profile: "" };
+  const d = { work_root: root, sessions: [
+    { id: "r1", mtime: 50, cwd: R.path, in_work_root: true, title: "in R", request: R },
+    { id: "s1", mtime: 90, cwd: S.path, in_work_root: true, title: "alpha", request: S },
+    { id: "s2", mtime: 80, cwd: S.path, in_work_root: true, title: "Beta", request: S },
+    { id: "root", mtime: 70, cwd: root, in_work_root: true, title: "at root", request: null },
+  ] };
+  const pins = { sessions: { s2: 1, s1: 2, gone: 3, root: 4 }, requests: { "2026/09/22/10-00-00_r": 1 } };
+  assert.ok(M.isPinnedSession(pins, "s1") && !M.isPinnedSession(pins, "r1") && !M.isPinnedSession(null, "s1"));
+  assert.ok(M.isPinnedRequest(pins, root, R) && !M.isPinnedRequest(pins, root, S));
+  assert.ok(!M.isPinnedRequest(pins, root, { root: true, path: root }) && !M.isPinnedRequest(undefined, root, R));
+  const p = M.pinned(d, pins, {});
+  assert.deepStrictEqual(p.requests.map(r => r.name), ["R"]);
+  assert.deepStrictEqual(p.sessions.map(x => x.session.id), ["s1", "s2", "root"]);   // missing "gone" skipped
+  assert.strictEqual(p.sessions[0].request.name, "S");
+  assert.deepStrictEqual(M.pinned(d, pins, { sort: "name" }).sessions.map(x => x.session.id), ["s1", "root", "s2"]);
+  assert.deepStrictEqual(M.pinned(d, pins, { filter: "beta" }).sessions.map(x => x.session.id), ["s2"]);
+
+  for (const g of M.GROUPINGS) {
+    const t = M.tree(d, g, { pins });
+    assert.strictEqual(t[0].kind, "pinned");
+    assert.strictEqual(t[1].kind, g === "recent" ? "session" : "group");
+  }
+  assert.notStrictEqual(M.tree(d, "day", { pins: { sessions: {}, requests: {} } })[0].kind, "pinned");
+  assert.notStrictEqual(M.tree(d, "day", { pins, filter: "nothing matches" })[0]?.kind, "pinned");
+  assert.notStrictEqual(M.tree(d, "day")[0].kind, "pinned");                        // no pins given
+});

@@ -174,6 +174,16 @@
         "title": "Sort\u2026",
         "category": "Work sessions",
         "icon": "$(arrow-swap)"
+      },
+      {
+        "command": "claudeWorksessions.pin",
+        "title": "Pin",
+        "icon": "$(pin)"
+      },
+      {
+        "command": "claudeWorksessions.unpin",
+        "title": "Unpin",
+        "icon": "$(pinned)"
       }
     ],
     "menus": {
@@ -227,57 +237,57 @@
       "view/item/context": [
         {
           "command": "claudeWorksessions.addSession",
-          "when": "view == claudeWorksessions.sessions && viewItem == request",
+          "when": "view == claudeWorksessions.sessions && viewItem =~ /^request/",
           "group": "inline@1"
         },
         {
           "command": "claudeWorksessions.reveal",
-          "when": "view == claudeWorksessions.sessions && viewItem == request",
+          "when": "view == claudeWorksessions.sessions && viewItem =~ /^request/",
           "group": "inline@2"
         },
         {
           "command": "claudeWorksessions.addSession",
-          "when": "view == claudeWorksessions.sessions && viewItem == request",
+          "when": "view == claudeWorksessions.sessions && viewItem =~ /^request/",
           "group": "1_open@1"
         },
         {
           "command": "claudeWorksessions.openInWindow",
-          "when": "view == claudeWorksessions.sessions && viewItem == request",
+          "when": "view == claudeWorksessions.sessions && viewItem =~ /^request/",
           "group": "1_open@2"
         },
         {
           "command": "claudeWorksessions.reveal",
-          "when": "view == claudeWorksessions.sessions && viewItem == request",
+          "when": "view == claudeWorksessions.sessions && viewItem =~ /^request/",
           "group": "2_reveal@1"
         },
         {
           "command": "claudeWorksessions.revealInOS",
-          "when": "view == claudeWorksessions.sessions && viewItem == request",
+          "when": "view == claudeWorksessions.sessions && viewItem =~ /^request/",
           "group": "2_reveal@2"
         },
         {
           "command": "claudeWorksessions.setType",
-          "when": "view == claudeWorksessions.sessions && viewItem == request",
+          "when": "view == claudeWorksessions.sessions && viewItem =~ /^request/",
           "group": "3_edit@1"
         },
         {
           "command": "claudeWorksessions.open",
-          "when": "view == claudeWorksessions.sessions && viewItem == session",
+          "when": "view == claudeWorksessions.sessions && viewItem =~ /^session/",
           "group": "inline@1"
         },
         {
           "command": "claudeWorksessions.open",
-          "when": "view == claudeWorksessions.sessions && viewItem == session",
+          "when": "view == claudeWorksessions.sessions && viewItem =~ /^session/",
           "group": "1_open@1"
         },
         {
           "command": "claudeWorksessions.setType",
-          "when": "view == claudeWorksessions.sessions && viewItem == session",
+          "when": "view == claudeWorksessions.sessions && viewItem =~ /^session/",
           "group": "3_edit@1"
         },
         {
           "command": "claudeWorksessions.copyId",
-          "when": "view == claudeWorksessions.sessions && viewItem == session",
+          "when": "view == claudeWorksessions.sessions && viewItem =~ /^session/",
           "group": "3_edit@2"
         },
         {
@@ -299,6 +309,26 @@
           "command": "claudeWorksessions.copyForEmail",
           "when": "view == claudeWorksessions.sessions && viewItem == file-md",
           "group": "1_open@2"
+        },
+        {
+          "command": "claudeWorksessions.pin",
+          "when": "view == claudeWorksessions.sessions && viewItem =~ /^(session|request)$/",
+          "group": "inline@0"
+        },
+        {
+          "command": "claudeWorksessions.unpin",
+          "when": "view == claudeWorksessions.sessions && viewItem =~ /^(session|request)-pinned$/",
+          "group": "inline@0"
+        },
+        {
+          "command": "claudeWorksessions.pin",
+          "when": "view == claudeWorksessions.sessions && viewItem =~ /^(session|request)$/",
+          "group": "0_pin@1"
+        },
+        {
+          "command": "claudeWorksessions.unpin",
+          "when": "view == claudeWorksessions.sessions && viewItem =~ /^(session|request)-pinned$/",
+          "group": "0_pin@1"
         }
       ],
       "commandPalette": [
@@ -341,6 +371,14 @@
         {
           "command": "claudeWorksessions.copyForEmail",
           "when": "resourceLangId == markdown || activeWebviewPanelId == 'markdown.preview'"
+        },
+        {
+          "command": "claudeWorksessions.pin",
+          "when": "false"
+        },
+        {
+          "command": "claudeWorksessions.unpin",
+          "when": "false"
         }
       ],
       "editor/title": [

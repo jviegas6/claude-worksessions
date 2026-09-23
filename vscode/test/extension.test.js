@@ -62,7 +62,11 @@ function fakeVscode(settings) {
       },
       withProgress: (opts, fn) => fn(),
       showInformationMessage: async m => messages.push(["info", m]),
-      showWarningMessage: async m => messages.push(["warn", m]),
+      showWarningMessage: async (m, opts, ...items) => {
+        if (!(opts && opts.modal)) return messages.push(["warn", m]);
+        messages.push(["modal", m, opts.detail]);
+        return answer(items);
+      },
       showErrorMessage: async m => messages.push(["error", m]),
       registerWebviewViewProvider: (id, provider) => { views[id] = provider; return { dispose() {} }; },
       onDidCloseTerminal: on("close"),
@@ -627,4 +631,71 @@ test("pins: Pin puts a session or request in a Pinned group on top; Unpin takes 
   fs.writeFileSync(path.join(root, "_config", "pinned.json"), JSON.stringify({ sessions: { sa: 1 }, requests: {} }));
   for (const f of fake.listeners["watch:_config/pinned.json"] || []) f();
   assert.strictEqual(top()[0].kind, "pinned");
+});
+
+test("delete: only sessions with no value offer it; confirm shows the impact; Trash, tab closed, refresh", async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cws-del-"));
+  const root = path.join(dir, "ws");
+  const A = { path: path.join(root, "2026/09/23/10-00-00_a"), name: "demo", ticket: "", task_type: "", profile: "",
+              files: [], files_truncated: false };
+  fs.mkdirSync(A.path, { recursive: true });
+  const now = Date.now() / 1000;
+  const ses = (id, ok, extra = {}) => ({ id, mtime: now - 600, cwd: A.path, in_work_root: true, title: id, request: A,
+    deletable: { ok, why: ok ? ["no artifacts"] : [], blocked: ok ? [] : ["x"] }, ...extra });
+  const data = { work_root: root, sessions: [ses("junk", true), ses("keep", false), ses("pinme", true)] };
+  const { bin, json } = stubSessions(dir, data);
+  const log = path.join(dir, "del.log");
+  fs.writeFileSync(path.join(path.dirname(bin), "claude-delete"), `#!/bin/sh
+echo "$*" >> "${log}"
+case "$1 $2" in
+  "junk --json") echo '{"title":"junk","request":"demo","last_activity":"2026-09-23 10:00","deletable":true,"why":["no artifacts"],"blocked":[],"impact":["The conversation goes.","It left no files."]}';;
+  "keep --json") echo '{"title":"keep","deletable":false,"why":[],"blocked":["booked in the weekly review"],"impact":[]}'; exit 1;;
+  "broken --json") echo "boom" >&2; exit 2;;
+  "junk --yes") echo "Moved";;
+  "gone --json") echo '{"title":"gone","request":null,"last_activity":"?","deletable":true,"why":["kept out of the review (-n)"],"blocked":[],"impact":["x"]}';;
+  "gone --yes") echo "no permission" >&2; exit 1;;
+esac
+`, { mode: 0o755 });
+  const fake = fakeVscode({ sessionsCommand: bin, openIn: "terminal" });
+  const ctx = context();
+  await load(fake).activate(ctx);
+  await settle(ctx);
+  const p = ctx.subscriptions[0].provider;
+  const run = el => fake.commands.get("claudeWorksessions.deleteSession")(el);
+  const item = id => allItems(p).find(([c]) => c.session?.id === id);
+
+  assert.strictEqual(item("junk")[1].contextValue, "session-del");
+  assert.strictEqual(item("keep")[1].contextValue, "session");
+  await fake.commands.get("claudeWorksessions.pin")(item("pinme")[0]);
+  assert.strictEqual(item("pinme")[1].contextValue, "session-pinned-del");
+
+  // open it first, so the delete closes its tab
+  await fake.commands.get("claudeWorksessions.open")(item("junk")[0]);
+  const tab = fake.terminals.at(-1);
+  let disposed = false;
+  tab.dispose = () => { disposed = true; };
+
+  fake.answers.push(items => { assert.deepStrictEqual(items, ["Move to Trash"]); return undefined; });   // cancel
+  await run(item("junk")[0]);
+  assert.deepStrictEqual(fake.messages.at(-1), ["modal", 'Delete "junk"?',
+    "demo · last active 2026-09-23 10:00\nIt may go: no artifacts.\n\n• The conversation goes.\n• It left no files."]);
+  assert.ok(!fs.readFileSync(log, "utf8").includes("--yes"));
+
+  fake.answers.push("Move to Trash");
+  data.sessions = data.sessions.filter(s => s.id !== "junk");
+  fs.writeFileSync(json, JSON.stringify(data));
+  await run(item("junk")[0]);
+  assert.match(fs.readFileSync(log, "utf8"), /junk --yes/);
+  assert.ok(disposed);
+  assert.deepStrictEqual(fake.messages.at(-1), ["info", '"junk" moved to the Trash.']);
+  assert.strictEqual(item("junk"), undefined);                                     // refreshed
+
+  await run({ session: { id: "keep" } });                                          // refused by claude-delete
+  assert.deepStrictEqual(fake.messages.at(-1), ["warn", '"keep" can\'t be deleted: booked in the weekly review.']);
+  await run({ session: { id: "broken" } });
+  assert.deepStrictEqual(fake.messages.at(-1), ["error", "claude-delete failed: boom"]);
+  fake.answers.push("Move to Trash");
+  await run({ session: { id: "gone" } });
+  assert.match(fake.messages.at(-2)[2], /^Work root · last active \?/);
+  assert.deepStrictEqual(fake.messages.at(-1), ["error", "claude-delete failed: no permission"]);
 });

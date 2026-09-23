@@ -636,7 +636,7 @@ done
 # --- 5. commands and skills -----------------------------------------------------------
 step "Commands"
 local b
-for b in claude-audit claude-search claude-sessions claude-vscode claude-md-email; do link "$REPO/bin/$b" "$HOME/.local/bin/$b"; done
+for b in claude-audit claude-search claude-sessions claude-vscode claude-md-email claude-delete; do link "$REPO/bin/$b" "$HOME/.local/bin/$b"; done
 
 # --- 5a. VS Code ------------------------------------------------------------------------
 # The Claude extension's env setting is machine-wide, so it can't follow a session's profile.

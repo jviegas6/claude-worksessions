@@ -58,3 +58,8 @@ def search(home):
 @pytest.fixture
 def sessions(home):
     return load_script("claude-sessions")
+
+
+@pytest.fixture
+def deleter(home):
+    return load_script("claude-delete")

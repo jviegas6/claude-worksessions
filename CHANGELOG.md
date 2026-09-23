@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.11.0] — 2026-09-23
+
+- **`claude-delete`**: move a session with no value to the Trash — one with no
+  artifacts, or one kept out of the review (`-n` / `no-audit.txt`). Never one the weekly
+  review booked or one active in the last two minutes. It says what deleting means before
+  asking (conversation gone, time leaving the audit, files it produced staying, request
+  folder going if left empty), and takes the transcript's copies and Claude Code's
+  per-session data with it. `--check`, `--json`, `--yes`.
+- **VS Code: Delete session…** on the sessions that qualify, with that summary in a
+  confirmation dialog; closes the session's tab.
+- `claude-sessions --json` adds `audited`, `artifacts` and `deletable` (with why / why not)
+  to each session.
+
 ## [2.10.0] — 2026-09-23
 
 - **VS Code: pin sessions and requests.** Right-click → **Pin**, or the pin icon on hover.

@@ -316,7 +316,7 @@ class Sidebar {
     const it = new vscode.TreeItem(M.sessionLabel(s), C.None);
     it.id = idp + "s|" + s.id + (el.showRequest ? "|flat" : "");
     const pinnedSes = M.isPinnedSession(this.pins, s.id);
-    it.contextValue = pinnedSes ? "session-pinned" : "session";
+    it.contextValue = (pinnedSes ? "session-pinned" : "session") + (s.deletable && s.deletable.ok ? "-del" : "");
     it.description = (el.showRequest && r ? (r.ticket && !r.root ? r.ticket + " · " : "") + r.name + " · " : "") +
       M.ago(s.mtime, now);
     it.iconPath = open ? new vscode.ThemeIcon("terminal", new vscode.ThemeColor("charts.green"))
@@ -579,6 +579,43 @@ async function copyForEmail(arg) {
   }
 }
 
+// Delete a session with no value (claude-delete decides, and says what it would mean)
+function runJson(file, args) {
+  return new Promise((resolve, reject) => {
+    cp.execFile(file, args, { maxBuffer: 16 << 20 }, (err, stdout, stderr) => {
+      try { resolve(JSON.parse(stdout)); } catch { reject(new Error((stderr || (err && err.message) || "no output").trim())); }
+    });
+  });
+}
+
+async function deleteSession(bar, el) {
+  const s = el.session;
+  let check;
+  try {
+    check = await runJson(binPath("claude-delete"), [s.id, "--json"]);
+  } catch (e) {
+    return vscode.window.showErrorMessage("claude-delete failed: " + e.message);
+  }
+  if (!check.deletable) {
+    return vscode.window.showWarningMessage(`"${check.title}" can't be deleted: ${check.blocked.join("; ")}.`);
+  }
+  const answer = await vscode.window.showWarningMessage(
+    `Delete "${check.title}"?`,
+    { modal: true, detail: `${check.request || "Work root"} · last active ${check.last_activity}\n` +
+        `It may go: ${check.why.join(" and ")}.\n\n` + check.impact.map(l => "• " + l).join("\n") },
+    "Move to Trash");
+  if (answer !== "Move to Trash") return;
+  try {
+    await run(binPath("claude-delete"), [s.id, "--yes"]);
+  } catch (e) {
+    return vscode.window.showErrorMessage("claude-delete failed: " + e.message);
+  }
+  const tab = bar.tabs.get(s.id);
+  if (tab) { bar.tabs.delete(s.id); tab.dispose(); }
+  vscode.window.showInformationMessage(`"${check.title}" moved to the Trash.`);
+  await bar.refresh();
+}
+
 async function resumeById(bar) {
   const id = await vscode.window.showInputBox({ prompt: "Session id to resume",
     validateInput: v => (/^[0-9A-Za-z-]{2,}$/.test(v.trim()) ? null : "a session id, e.g. 34e66495-1e97-…") });
@@ -635,6 +672,7 @@ function activate(context) {
     cmd("openInWindow", el => openInWindow(el.request)),
     cmd("copyId", el => vscode.env.clipboard.writeText(el.session.id)),
     cmd("copyForEmail", arg => copyForEmail(arg)),
+    cmd("deleteSession", el => deleteSession(bar, el)),
     cmd("pin", el => bar.togglePin(el)),
     cmd("unpin", el => bar.togglePin(el)),
     cmd("openFile", el => {

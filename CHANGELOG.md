@@ -5,8 +5,9 @@
 - `claude-delete` and **Delete session…** no longer offer a session that is open in a
   running Claude process but idle. Before, only "written in the last two minutes" held
   it back, so an idle open tab became deletable after two minutes. Running sessions are
-  read from Claude Code's own `sessions/<pid>.json` records and from `claude --resume ID`
-  command lines.
+  read from Claude Code's own `sessions/<pid>.json` records and from the command lines of
+  the Claude program itself (`claude --resume ID`) — not from other commands that mention a
+  session id, such as `claude-delete ID` checking it.
 
 ## [2.12.0] — 2026-09-23
 

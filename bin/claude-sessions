@@ -319,12 +319,26 @@ def running_sessions():
             except (OSError, ValueError, TypeError, AttributeError):
                 continue
     try:
-        ps = subprocess.run(["ps", "-A", "-o", "command="], capture_output=True, text=True).stdout
+        ps = subprocess.run(["ps", "-A", "-o", "pid=,command="], capture_output=True, text=True).stdout
     except OSError:
         ps = ""
-    ids.update(re.findall(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
-                          "\n".join(l for l in ps.splitlines() if "claude" in l)))
+    mine = {os.getpid(), os.getppid()}   # this check, and whatever ran it (claude-delete ID ...)
+    for line in ps.splitlines():
+        pid, _, command = line.strip().partition(" ")
+        if not pid.isdigit() or int(pid) in mine or not is_claude(command):
+            continue
+        ids.update(UUID_RE.findall(command))
     return ids
+
+
+UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+
+
+def is_claude(command):
+    """Is this command line the Claude Code program itself (not a script that mentions it)?
+    Its first word is `claude`, or a path to it (…/claude, …/claude/versions/X.Y.Z)."""
+    first = command.strip().split(" ", 1)[0]
+    return os.path.basename(first) == "claude" or "/claude/versions/" in first
 
 
 def value_check(entries):

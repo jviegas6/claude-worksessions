@@ -220,9 +220,17 @@ def test_running_sessions_from_records_and_command_lines(sessions, home, monkeyp
     (d / "4.json").write_text(json.dumps({"sessionId": "no-pid"}))
     (d / "5.key").write_text("x")
     uid = "b39404a5-300c-45e8-908b-86e1966e8f7e"
-    monkeypatch.setattr(sessions.subprocess, "run", lambda *a, **k: type("R", (), {
-        "stdout": "claude --resume {}\nvim 11111111-2222-3333-4444-555555555555\n".format(uid)})())
-    assert sessions.running_sessions() == {"open-rec", uid}
+    other = "11111111-2222-3333-4444-555555555555"
+    ps = "\n".join([
+        "  101 claude --resume {}".format(uid),                                        # the Claude CLI
+        "  102 /Users/x/.local/share/claude/versions/2.1.281 --resume " + other,        # by its real path
+        "  103 python3 /Users/x/.local/bin/claude-delete {} --json".format(uid.replace("b3", "c3")),
+        "  104 vim " + other.replace("1", "9"),
+        "  {} python3 claude-delete {}".format(os.getpid(), uid.replace("b3", "d3")),   # this very check
+        "  nonsense line",
+    ])
+    monkeypatch.setattr(sessions.subprocess, "run", lambda *a, **k: type("R", (), {"stdout": ps})())
+    assert sessions.running_sessions() == {"open-rec", uid, other}
     monkeypatch.setattr(sessions.subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(OSError()))
     assert sessions.running_sessions() == {"open-rec"}
 

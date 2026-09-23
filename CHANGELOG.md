@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.14.0] — 2026-09-23
+
+- **VS Code: filter the sessions** by **day** (today, yesterday, last 7 days, this or last
+  week, this month, or a date), **ticket** (one or more, or no ticket) and **artifacts**
+  (with or without). A session counts on every day it was active. The funnel button opens
+  a menu of the three; filters combine with the search box and each other, are
+  remembered, and are listed in the panel's subtitle. The Deleted group hides while
+  filtering.
+
 ## [2.13.0] — 2026-09-23
 
 - **Deleted sessions can be seen and restored.** `claude-delete` now moves a session into

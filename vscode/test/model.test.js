@@ -282,3 +282,51 @@ test("the deleted-sessions bin: where it is, and what is in it", () => {
   assert.deepStrictEqual(M.readDeleted(dir, "demo old").map(m => m.id), ["s-old"]);
   assert.deepStrictEqual(M.readDeleted(dir, "btpa-1").map(m => m.id), ["s-new"]);
 });
+
+test("filters: day ranges, tickets, artifacts, and how they combine", () => {
+  const T = (y, mo, d, h = 0) => new Date(y, mo - 1, d, h).getTime() / 1000;
+  const now = T(2026, 9, 23, 12);                                   // Wednesday
+  assert.strictEqual(M.dayRange(null, now), null);
+  assert.strictEqual(M.dayRange({ preset: "any" }, now), null);
+  assert.deepStrictEqual(M.dayRange({ preset: "today" }, now), [T(2026, 9, 23), T(2026, 9, 24)]);
+  assert.deepStrictEqual(M.dayRange({ preset: "yesterday" }, now), [T(2026, 9, 22), T(2026, 9, 23)]);
+  assert.deepStrictEqual(M.dayRange({ preset: "last7" }, now), [T(2026, 9, 17), T(2026, 9, 24)]);
+  assert.deepStrictEqual(M.dayRange({ preset: "thisweek" }, now), [T(2026, 9, 21), T(2026, 9, 28)]);
+  assert.deepStrictEqual(M.dayRange({ preset: "lastweek" }, now), [T(2026, 9, 14), T(2026, 9, 21)]);
+  assert.deepStrictEqual(M.dayRange({ preset: "thismonth" }, now), [T(2026, 9, 1), T(2026, 10, 1)]);
+  assert.deepStrictEqual(M.dayRange({ preset: "date", date: "2026-09-02" }, now), [T(2026, 9, 2), T(2026, 9, 3)]);
+  assert.strictEqual(M.dayRange({ preset: "date", date: "02/09" }, now), null);
+  assert.strictEqual(M.dayRange({ preset: "nonsense" }, now), null);
+  assert.deepStrictEqual(M.dayRange({ preset: "thisweek" }, T(2026, 9, 27, 9))[0], T(2026, 9, 21));   // Sunday: same week
+  assert.ok(Array.isArray(M.dayRange({ preset: "today" })));                                       // defaults to now
+
+  const R = req("2026/09/22/10-00-00_r", { ticket: "BTPA-1" });
+  const d = { work_root: ROOT, sessions: [
+    ses("span", T(2026, 9, 23, 9), R, { started: T(2026, 9, 22, 17), artifacts: ["/x"] }),   // 22nd → 23rd
+    ses("old", T(2026, 9, 2, 10), R, { started: T(2026, 9, 2, 9), artifacts: [] }),
+    ses("root", T(2026, 9, 23, 8), null, { written: ["/y"] }),
+    ses("other", T(2026, 9, 22, 8), req("2026/09/22/08-00-00_o", { ticket: "Other" })),
+  ] };
+  const ids = filters => M.visible(d, { filters, now }).map(s => s.id);
+  assert.deepStrictEqual(ids(null), ["span", "old", "root", "other"]);
+  assert.deepStrictEqual(ids({ day: { preset: "today" } }), ["span", "root"]);
+  assert.deepStrictEqual(ids({ day: { preset: "yesterday" } }), ["span", "other"]);              // active on both days
+  assert.deepStrictEqual(ids({ day: { preset: "date", date: "2026-09-02" } }), ["old"]);
+  assert.deepStrictEqual(ids({ tickets: ["BTPA-1"] }), ["span", "old"]);
+  assert.deepStrictEqual(ids({ tickets: [M.NO_TICKET, "Other"] }), ["root", "other"]);
+  assert.deepStrictEqual(ids({ artifacts: "with" }), ["span", "root"]);
+  assert.deepStrictEqual(ids({ artifacts: "without" }), ["old", "other"]);
+  assert.deepStrictEqual(ids({ day: { preset: "today" }, tickets: ["BTPA-1"], artifacts: "with" }), ["span"]);
+  assert.deepStrictEqual(ids({ tickets: [] }), ids(null));
+
+  assert.ok(!M.filtersActive(null) && !M.filtersActive({ day: { preset: "any" }, tickets: [], artifacts: "any" }));
+  assert.ok(M.filtersActive({ artifacts: "with" }) && M.filtersActive({ tickets: ["X"] }) && M.filtersActive({ day: { preset: "today" } }));
+  assert.strictEqual(M.describeFilters({ day: { preset: "any" } }), "");
+  assert.strictEqual(M.describeFilters({ day: { preset: "lastweek" }, tickets: ["A-1", "B-2"], artifacts: "without" }),
+                     "last week · A-1, B-2 · without artifacts");
+  assert.strictEqual(M.describeFilters({ day: { preset: "date", date: "2026-09-02" }, tickets: ["A", "B", "C"] }),
+                     "2026-09-02 · 3 tickets");
+  assert.deepStrictEqual(M.ticketsInUse(d), ["BTPA-1", "Other", M.NO_TICKET]);
+  // pins and groups follow the filters
+  assert.deepStrictEqual(M.tree(d, "day", { filters: { tickets: ["Other"] } }).map(g => g.key), ["2026-09-22"]);
+});

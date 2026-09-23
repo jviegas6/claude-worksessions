@@ -777,3 +777,70 @@ test("deleted sessions: a Deleted group at the bottom; restore, delete for good,
   fake.listeners["watch:*/manifest.json"].forEach(f => f());
   assert.notStrictEqual(p.getChildren(undefined).at(-1).kind, "deleted");
 });
+
+test("filters: the Filter menu sets day, tickets and artifacts; remembered; shown; cleared", async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cws-filt-"));
+  const root = path.join(dir, "ws");
+  const A = { path: path.join(root, "2026/09/23/10-00-00_a"), name: "demo", ticket: "BTPA-1", task_type: "", profile: "",
+              files: [], files_truncated: false };
+  const B = { path: path.join(root, "2026/09/01/10-00-00_b"), name: "old", ticket: "", task_type: "", profile: "",
+              files: [], files_truncated: false };
+  for (const r of [A, B]) fs.mkdirSync(r.path, { recursive: true });
+  const now = Date.now() / 1000;
+  const data = { work_root: root, sessions: [
+    { id: "fresh", mtime: now - 60, started: now - 120, cwd: A.path, in_work_root: true, title: "Fresh", request: A, artifacts: ["/f"] },
+    { id: "stale", mtime: now - 40 * 86400, started: now - 40 * 86400, cwd: B.path, in_work_root: true, title: "Stale", request: B, artifacts: [] },
+  ] };
+  const { bin } = stubSessions(dir, data);
+  const binDir = process.env.CWS_TRASH_DIR;
+  fs.mkdirSync(path.join(binDir, "x"), { recursive: true });
+  fs.writeFileSync(path.join(binDir, "x", "manifest.json"), JSON.stringify({ id: "gone", title: "Gone", deleted_at: now }));
+  const fake = fakeVscode({ sessionsCommand: bin, openIn: "terminal" });
+  const ctx = context();
+  await load(fake).activate(ctx);
+  await settle(ctx);
+  const view = ctx.subscriptions[0], p = view.provider;
+  const sessions = () => allItems(p).filter(([c]) => c.kind === "session").map(([c]) => c.session.id);
+  const pick = key => items => items.find(i => i.key === key);
+  assert.deepStrictEqual(sessions(), ["fresh", "stale"]);
+  assert.strictEqual(p.getChildren(undefined).at(-1).kind, "deleted");
+
+  // Day → Today; Ticket → BTPA-1; Artifacts → With; then Esc
+  fake.answers.push(pick("day"), items => items.find(i => i.k === "today"),
+                    items => { assert.deepStrictEqual(items.map(i => i.description).slice(0, 2), ["Today", "Any ticket"]); return pick("ticket")(items); },
+                    items => { assert.deepStrictEqual(items.map(i => i.label), ["BTPA-1", "(no ticket)"]); return [items[0]]; },
+                    pick("artifacts"), items => items.find(i => i.k === "with"),
+                    undefined);
+  await fake.commands.get("claudeWorksessions.filter")();
+  assert.deepStrictEqual(ctx.globalState.get("filters"), { day: { preset: "today" }, tickets: ["BTPA-1"], artifacts: "with" });
+  assert.strictEqual(view.description, "By day · Last activity · only today · BTPA-1 · with artifacts");
+  assert.ok(fake.executed.some(e => e[0] === "setContext" && e[1] === "claudeWorksessions.filtered"));
+  assert.deepStrictEqual(sessions(), ["fresh"]);
+  assert.notStrictEqual(p.getChildren(undefined).at(-1).kind, "deleted");                       // bin hidden while filtering
+
+  // the menu shows current values and offers Clear; a date; cancelled sub-pickers change nothing
+  fake.answers.push(items => {
+    assert.deepStrictEqual(items.map(i => i.description), ["Today", "BTPA-1", "With artifacts", undefined]);
+    return pick("day")(items);
+  }, items => items.find(i => i.k === "date"), "2026-09-01",
+  pick("ticket"), undefined,                     // cancel ticket picker
+  pick("artifacts"), undefined,                  // cancel artifacts picker
+  pick("day"), undefined,                        // cancel day picker
+  pick("day"), items => items.find(i => i.k === "date"), undefined,   // cancel the date box
+  pick("ticket"), () => [],                      // untick all: any ticket
+  pick("artifacts"), items => items.find(i => i.k === "any"),
+  undefined);
+  await fake.commands.get("claudeWorksessions.filterActive")();
+  assert.deepStrictEqual(ctx.globalState.get("filters"), { day: { preset: "date", date: "2026-09-01" }, tickets: [], artifacts: "any" });
+  assert.deepStrictEqual(sessions(), []);                        // neither session was active on 2026-09-01
+  assert.match(view.message, /No session matches the filters \(2026-09-01\)/);
+
+  fake.answers.push(pick("clear"), undefined);
+  await fake.commands.get("claudeWorksessions.filter")();
+  assert.deepStrictEqual(ctx.globalState.get("filters"), { day: { preset: "any" }, tickets: [], artifacts: "any" });
+  assert.strictEqual(view.description, "By day · Last activity");
+  p.setFilters({ day: { preset: "any" }, tickets: ["BTPA-1"], artifacts: "any" });
+  await fake.commands.get("claudeWorksessions.clearFilters")();
+  assert.deepStrictEqual(sessions(), ["fresh", "stale"]);
+  fs.rmSync(path.join(binDir, "x"), { recursive: true });
+});

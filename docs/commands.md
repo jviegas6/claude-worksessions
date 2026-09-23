@@ -207,10 +207,14 @@ Settings: `claudeWorksessions.sessionsCommand` (default `~/.local/bin/claude-ses
 ## claude-delete
 
 ```
-claude-delete ID            # say what goes, ask, then move it to the Trash
-claude-delete ID --yes      # without asking
-claude-delete ID --check    # only say whether it may go and what that would mean
-claude-delete ID --json     # the same, as JSON
+claude-delete ID              # say what goes, ask, then move it to the bin
+claude-delete ID --yes        # without asking
+claude-delete ID --check      # only say whether it may go and what that would mean
+claude-delete ID --json       # the same, as JSON
+claude-delete --list          # what is in the bin (--json too)
+claude-delete --restore ID    # put a deleted session back where it was
+claude-delete --purge ID      # delete it for good (asks; --yes)
+claude-delete --empty         # delete everything in the bin for good (asks; --yes)
 ```
 
 For clearing out test sessions and other noise. `ID` is a session id or its start.
@@ -223,17 +227,24 @@ A session may go only when it has **no value**:
 
 Never when the weekly review booked it (it is in `_audit/review/ledger.json`), when a
 Claude process has it open (Claude Code's `~/.claude-*/sessions/<pid>.json` records, or
-`claude --resume ID` on a command line), or when it was written in the last two minutes. Before anything moves it says what deleting means:
-the conversation can't be resumed or found, whether its time leaves your audit, which
-files it produced (those stay), and whether its request folder goes too.
+`claude --resume ID` on a command line), or when it was written in the last two minutes.
+Before anything moves it says what deleting means: the conversation can't be resumed or
+found, whether its time leaves your audit, which files it produced (those stay), and
+whether its request folder goes too.
 
-What goes to the Trash (so it can be put back): its transcript and any copies left by a
-folder move, its subagent logs, file history and session environment — and its request
-folder when it was the folder's only session and nothing but `.session.json` is in it.
-Files it wrote are never touched. A pin on it is removed.
+**The bin** is `~/.local/share/claude-worksessions/trash` (`$XDG_DATA_HOME` if set;
+`CWS_TRASH_DIR` overrides) — local, like the transcripts, never the synced work root. Each
+deleted session gets a folder there with its pieces and a `manifest.json` of where each came
+from: its transcript and any copies left by a folder move, its subagent logs, file history
+and session environment, and its request folder when it was the folder's only session and
+nothing but `.session.json` is in it. Files it wrote are never touched. A pin on it is
+removed. `--restore` puts every piece back (and refuses, moving nothing, if something now
+sits where one of them was); `--purge` / `--empty` delete for good.
 
 In VS Code: right-click a session → **Delete session…**, offered only on sessions that
-qualify; it shows the same summary and asks before moving anything.
+qualify; it shows the same summary and asks. Deleted sessions are listed under **Deleted**
+at the bottom of the panel: right-click → **Restore** (or the inline icon) or **Delete for
+good…**; right-click **Deleted** → **Empty the bin…**.
 
 ## claude-md-email
 

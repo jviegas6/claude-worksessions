@@ -151,6 +151,29 @@ function pinned(data, pins, opts) {
   };
 }
 
+// --- the deleted-sessions bin (claude-delete) -----------------------------------------------
+// Where claude-delete keeps what it moves: CWS_TRASH_DIR, else $XDG_DATA_HOME (or
+// ~/.local/share)/claude-worksessions/trash — one folder per session with a manifest.json.
+function binDir(env, home) {
+  return env.CWS_TRASH_DIR ||
+    path.join(env.XDG_DATA_HOME || path.join(home, ".local", "share"), "claude-worksessions", "trash");
+}
+
+// Deleted sessions, newest first, matching the search box: their manifests, each with "dir".
+function readDeleted(dir, filter = "") {
+  let names = [];
+  try { names = fs.readdirSync(dir); } catch { return []; }
+  const ws = words(filter), out = [];
+  for (const n of names) {
+    let m;
+    try { m = JSON.parse(fs.readFileSync(path.join(dir, n, "manifest.json"), "utf8")); } catch { continue; }
+    if (!m || typeof m !== "object" || !m.id) continue;
+    const hay = [m.id, m.title, m.request, m.ticket].filter(Boolean).join("\n").toLowerCase();
+    if (ws.every(w => hay.includes(w))) out.push({ ...m, dir: path.join(dir, n) });
+  }
+  return out.sort((a, b) => (b.deleted_at || 0) - (a.deleted_at || 0));
+}
+
 // Top level of the tree for a grouping: groups of requests, or (recent) sessions directly —
 // after a Pinned group when anything pinned is shown.
 function tree(data, grouping, opts) {
@@ -301,7 +324,7 @@ function auditArgs(period, detail, date) {
   return detail ? [...args, "--detail"] : args;
 }
 
-module.exports = { GROUPINGS, GROUPING_LABELS, SORTS, SORT_LABELS, ROOT_KEY, readPins, togglePin, requestKey,
+module.exports = { binDir, readDeleted, GROUPINGS, GROUPING_LABELS, SORTS, SORT_LABELS, ROOT_KEY, readPins, togglePin, requestKey,
                    isPinnedSession, isPinnedRequest, pinned, matches, shownFiles, fileChildren, visible, requests, dayOf, tree,
                    sessionLabel, tabName, ago, matchPending, parseCsv, taskTypes, setTaskType,
                    readSkills, auditArgs };

@@ -1,13 +1,20 @@
 # Changelog
 
-## [2.12.1] — 2026-09-23
+## [2.13.0] — 2026-09-23
 
+- **Deleted sessions can be seen and restored.** `claude-delete` now moves a session into
+  its own bin — `~/.local/share/claude-worksessions/trash`, one folder per session with a
+  manifest of where each piece came from — instead of the macOS Trash, which Finder can't
+  *Put Back* from (it only restores what it trashed itself) and which macOS won't let
+  other programs list. New `--list`, `--restore ID`, `--purge ID` and `--empty`.
+- **VS Code: a Deleted group** at the bottom of the panel lists what is in the bin, with
+  **Restore** and **Delete for good…** on each and **Empty the bin…** on the group. The
+  search box covers it too.
 - `claude-delete` and **Delete session…** no longer offer a session that is open in a
   running Claude process but idle. Before, only "written in the last two minutes" held
-  it back, so an idle open tab became deletable after two minutes. Running sessions are
-  read from Claude Code's own `sessions/<pid>.json` records and from the command lines of
-  the Claude program itself (`claude --resume ID`) — not from other commands that mention a
-  session id, such as `claude-delete ID` checking it.
+  it back. Running sessions are read from Claude Code's own `sessions/<pid>.json` records
+  and from the command lines of the Claude program itself (`claude --resume ID`) — not
+  from other commands that mention a session id, such as `claude-delete ID` checking it.
 
 ## [2.12.0] — 2026-09-23
 

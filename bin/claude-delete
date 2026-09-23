@@ -1,22 +1,27 @@
 #!/usr/bin/env python3
-"""claude-delete: move a Claude session with no lasting value to the Trash.
+"""claude-delete: move a Claude session with no lasting value to the deleted-sessions bin.
 
-  claude-delete ID            say what goes, ask, then move it to the Trash
-  claude-delete ID --yes      without asking
-  claude-delete ID --check    only say whether it may go and what that would mean
-  claude-delete ID --json     the same, as JSON (for the VS Code sidebar)
+  claude-delete ID              say what goes, ask, then move it to the bin
+  claude-delete ID --yes        without asking
+  claude-delete ID --check      only say whether it may go and what that would mean
+  claude-delete ID --json       the same, as JSON (for the VS Code sidebar)
+  claude-delete --list [--json] what is in the bin
+  claude-delete --restore ID    put a deleted session back where it was
+  claude-delete --purge ID      delete it for good (asks; --yes to not ask)
+  claude-delete --empty         delete everything in the bin for good (asks; --yes)
 
 ID is a session id, or the start of one (8 characters are usually enough).
 
 Only a session with no value may go: one with no artifacts (none of the files it wrote
 still exist, and if it is its request's only session, the request folder is empty), or one
-kept out of the review with -n. Never one the weekly review booked, or one active in the
-last two minutes.
+kept out of the review with -n. Never one the weekly review booked, one a Claude process has
+open, or one written in the last two minutes.
 
-Its transcript, and what Claude Code keeps beside it (subagent logs, file history, session
-environment), go to the Trash, so it can be put back. So does its request folder when the
-session was the folder's only one and nothing but .session.json is in it. Files the session
-wrote are never touched. A pin on it is removed.
+Its transcript and what Claude Code keeps beside it (subagent logs, file history, session
+environment) move to the bin -- ~/.local/share/claude-worksessions/trash, one folder per
+session with a record of where each piece came from -- and so does its request folder when
+the session was its only one and nothing but .session.json is in it. Files the session wrote
+are never touched. A pin on it is removed. --restore puts every piece back.
 """
 
 import argparse
@@ -29,6 +34,7 @@ import shutil
 import subprocess
 import sys
 import time
+import uuid
 
 HOME = os.path.expanduser("~")
 
@@ -126,36 +132,74 @@ def impact(entry, entries):
     if folder:
         lines.append("Its request folder {} is left empty, so it goes too.".format(
             os.path.relpath(folder, CA.DEFAULT_ROOT)))
-    lines.append("Everything goes to the Trash, so it can be put back.")
+    lines.append("It goes to the deleted-sessions bin, where it can be restored until you purge it.")
     return lines
 
 
-def trash_dir():
-    if sys.platform == "darwin":
-        return os.path.join(HOME, ".Trash")
-    return os.path.join(os.environ.get("XDG_DATA_HOME") or os.path.join(HOME, ".local", "share"), "Trash")
+def bin_dir():
+    """The deleted-sessions bin: CWS_TRASH_DIR, else $XDG_DATA_HOME (or ~/.local/share)
+    /claude-worksessions/trash. Local, like the transcripts -- never the synced work root."""
+    return os.environ.get("CWS_TRASH_DIR") or os.path.join(
+        os.environ.get("XDG_DATA_HOME") or os.path.join(HOME, ".local", "share"), "claude-worksessions", "trash")
 
 
-def to_trash(path):
-    """Move a file or folder to the Trash. macOS: ~/.Trash; elsewhere the freedesktop
-    Trash (files/ + an info/ entry that remembers where it came from)."""
-    base = trash_dir()
-    darwin = sys.platform == "darwin"
-    files = base if darwin else os.path.join(base, "files")
-    os.makedirs(files, exist_ok=True)
-    name, n = os.path.basename(path.rstrip(os.sep)), 1
-    dest = os.path.join(files, name)
-    while os.path.lexists(dest):
-        n += 1
-        dest = os.path.join(files, "{} {}".format(name, n))
-    if not darwin:
-        info = os.path.join(base, "info")
-        os.makedirs(info, exist_ok=True)
-        with open(os.path.join(info, os.path.basename(dest) + ".trashinfo"), "w") as fh:
-            fh.write("[Trash Info]\nPath={}\nDeletionDate={}\n".format(
-                path, dt.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")))
-    shutil.move(path, dest)
-    return dest
+def put_in_bin(entry, paths):
+    """Move paths into a new bin folder with a manifest of where each came from."""
+    folder = os.path.join(bin_dir(), "{}_{}".format(time.strftime("%Y%m%d-%H%M%S"), entry["id"][:8]))
+    while os.path.exists(folder):
+        folder += "-" + uuid.uuid4().hex[:4]
+    items_dir = os.path.join(folder, "items")
+    os.makedirs(items_dir)
+    items = []
+    for i, p in enumerate(paths):
+        name = "{}_{}".format(i, os.path.basename(p.rstrip(os.sep)))
+        shutil.move(p, os.path.join(items_dir, name))
+        items.append({"from": p, "name": name})
+    r = entry["request"]
+    manifest = {"id": entry["id"], "title": label(entry), "request": r and r["name"],
+                "request_path": r and r["path"], "ticket": r and r["ticket"],
+                "last_activity": entry["mtime"], "deleted_at": time.time(), "items": items}
+    with open(os.path.join(folder, "manifest.json"), "w") as fh:
+        json.dump(manifest, fh, indent=2)
+    return folder
+
+
+def deleted():
+    """What is in the bin, newest first: manifests, each with its bin folder as "dir"."""
+    out = []
+    for name in _listdir(bin_dir()):
+        try:
+            with open(os.path.join(bin_dir(), name, "manifest.json")) as fh:
+                m = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        if isinstance(m, dict) and m.get("id"):
+            out.append(dict(m, dir=os.path.join(bin_dir(), name)))
+    return sorted(out, key=lambda m: m.get("deleted_at") or 0, reverse=True)
+
+
+def find_deleted(prefix):
+    hits = [m for m in deleted() if prefix and m["id"].startswith(prefix)]
+    if not hits:
+        raise SystemExit("claude-delete: no deleted session {!r} (see claude-delete --list)".format(prefix))
+    if len(hits) > 1:
+        raise SystemExit("claude-delete: {!r} matches {} deleted sessions -- give more of the id".format(prefix, len(hits)))
+    return hits[0]
+
+
+def restore(m):
+    """Put every piece back where it came from. Nothing moves if any place is taken."""
+    taken = [it["from"] for it in m["items"] if os.path.lexists(it["from"])]
+    if taken:
+        raise SystemExit("claude-delete: can't restore, already there: " + ", ".join(taken))
+    for it in m["items"]:
+        os.makedirs(os.path.dirname(it["from"]), exist_ok=True)
+        shutil.move(os.path.join(m["dir"], "items", it["name"]), it["from"])
+    shutil.rmtree(m["dir"])
+
+
+def purge(m):
+    shutil.rmtree(m["dir"])
 
 
 def unpin(sid):
@@ -175,23 +219,69 @@ def unpin(sid):
 
 
 def delete(entry, entries):
-    """Move the session (and its empty request folder) to the Trash. Returns what moved."""
-    moved = [to_trash(p) for p in leftovers(entry["id"])]
+    """Move the session (and its emptied request folder) to the bin. Returns the bin folder."""
+    paths = leftovers(entry["id"])
     folder = empty_request(entry, entries)
     if folder and os.path.isdir(folder):
-        moved.append(to_trash(folder))
+        paths.append(folder)
+    where = put_in_bin(entry, paths)
     unpin(entry["id"])
-    return moved
+    return where
+
+
+def confirm(question, yes):
+    if yes:
+        return True
+    if not sys.stdin.isatty():
+        print("Not done: run with --yes to confirm without a terminal.")
+        return False
+    return input(question + " [y/N]: ").strip().lower() in ("y", "yes")
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="claude-delete", description=__doc__.split("\n\n")[0].split(": ", 1)[1],
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("id", help="the session id, or its start")
+    ap.add_argument("id", nargs="?", help="the session id, or its start")
     ap.add_argument("--yes", "-y", action="store_true", help="don't ask")
     ap.add_argument("--check", action="store_true", help="only say whether it may go, and what that would mean")
-    ap.add_argument("--json", action="store_true", help="--check, as JSON")
+    ap.add_argument("--json", action="store_true", help="--check or --list, as JSON")
+    what = ap.add_mutually_exclusive_group()
+    what.add_argument("--list", action="store_true", help="what is in the bin")
+    what.add_argument("--restore", metavar="ID", help="put a deleted session back")
+    what.add_argument("--purge", metavar="ID", help="delete a deleted session for good")
+    what.add_argument("--empty", action="store_true", help="delete everything in the bin for good")
     args = ap.parse_args(argv)
+
+    if args.list:
+        items = deleted()
+        if args.json:
+            print(json.dumps(items, indent=1))
+        for m in [] if args.json else items:
+            print("{}  {}  ({}, deleted {})".format(m["id"][:8], m.get("title") or "?",
+                                                    m.get("request") or "the work root", when(m.get("deleted_at"))))
+        if not args.json:
+            print("{} deleted session(s) in {}".format(len(items), bin_dir()))
+        return 0
+    if args.restore:
+        m = find_deleted(args.restore)
+        restore(m)
+        print("Restored {}  {} ({} item(s) put back).".format(m["id"][:8], m.get("title") or "?", len(m["items"])))
+        return 0
+    if args.purge or args.empty:
+        targets = [find_deleted(args.purge)] if args.purge else deleted()
+        if not targets:
+            print("The bin is empty.")
+            return 0
+        names = ", ".join((m.get("title") or m["id"][:8]) for m in targets[:5]) + (" …" if len(targets) > 5 else "")
+        if not confirm("Delete {} session(s) for good ({})? This can't be undone.".format(len(targets), names), args.yes):
+            print("Not deleted.")
+            return 1
+        for m in targets:
+            purge(m)
+        print("Deleted for good: {} session(s).".format(len(targets)))
+        return 0
+    if not args.id:
+        ap.error("give a session id, or --list / --restore / --purge / --empty")
 
     entry, entries = find(args.id)
     verdict = entry["deletable"]
@@ -213,15 +303,11 @@ def main(argv=None):
         print("  - " + ln)
     if args.check:
         return 0
-    if not args.yes:
-        if not sys.stdin.isatty():
-            print("Not deleted: run with --yes to confirm without a terminal.")
-            return 1
-        if input("Move it to the Trash? [y/N]: ").strip().lower() not in ("y", "yes"):
-            print("Not deleted.")
-            return 1
-    moved = delete(entry, entries)
-    print("Moved to the Trash: {} item(s).".format(len(moved)))
+    if not confirm("Move it to the deleted-sessions bin?", args.yes):
+        print("Not deleted.")
+        return 1
+    delete(entry, entries)
+    print("Moved to the bin. Undo: claude-delete --restore {}".format(entry["id"][:8]))
     return 0
 
 

@@ -39,7 +39,7 @@ test("requests are newest first, with the work root as a pseudo-request", () => 
 test("grouping by day", () => {
   const g = M.tree(data, "day");
   assert.deepStrictEqual(g.map(x => [x.key, x.requests.length]),
-                         [["2026-09-22", 2], [M.ROOT_KEY, 1], ["2026-09-21", 1]]);
+                         [["2026-09-22", 2], ["2026-09-21", 1], [M.ROOT_KEY, 1]]);   // days newest first, root last
 });
 
 test("grouping by ticket", () => {
@@ -182,4 +182,36 @@ test("files: search matches file names, shownFiles narrows, fileChildren builds 
   assert.deepStrictEqual(M.fileChildren(files, "b/"), [
     { kind: "dir", name: "c", prefix: "b/c/" }, { kind: "file", rel: "b/script.py" }]);
   assert.deepStrictEqual(M.fileChildren(files, "b/c/").map(x => x.rel), ["b/c/brainlabs.csv", "b/c/out.csv"]);
+});
+
+test("sorting: last activity, started, or name — days stay newest first", () => {
+  const P = req("2026/09/20/08-00-00_p", { name: "Zeta", started: 100 });
+  const Q = req("2026/09/22/09-00-00_q", { name: "alpha", started: 300 });
+  const R = req("2026/09/22/10-00-00_r", { name: "Beta", started: 0 });   // no start: its sessions'
+  const d = { work_root: ROOT, sessions: [
+    ses("p1", 900, P, { started: 110, title: "old one resumed" }),        // oldest, but active last
+    ses("q1", 400, Q, { started: 310, title: "b session" }),
+    ses("q2", 350, Q, { started: 320, title: "A session" }),
+    ses("r1", 500, R, { title: "no start" }),                            // falls back to mtime
+  ] };
+  const names = sort => M.requests(d, { sort }).map(r => r.name);
+  assert.deepStrictEqual(names(), ["Zeta", "Beta", "alpha"]);            // default: last activity
+  assert.deepStrictEqual(names("activity"), ["Zeta", "Beta", "alpha"]);
+  assert.deepStrictEqual(names("started"), ["Beta", "alpha", "Zeta"]);   // Beta: 500 from its session
+  assert.deepStrictEqual(names("name"), ["alpha", "Beta", "Zeta"]);
+  assert.deepStrictEqual(names("bogus"), names("activity"));
+  const q = sort => M.requests(d, { sort }).find(r => r.name === "alpha").sessions.map(s => s.id);
+  assert.deepStrictEqual([q("activity"), q("started"), q("name")], [["q1", "q2"], ["q2", "q1"], ["q2", "q1"]]);
+  assert.strictEqual(M.requests(d, { sort: "name" }).find(r => r.name === "alpha").mtime, 400);
+  assert.deepStrictEqual(M.tree(d, "recent", { sort: "started" }).map(x => x.session.id), ["r1", "q2", "q1", "p1"]);
+  assert.deepStrictEqual(M.tree(d, "recent", { sort: "name" }).map(x => x.session.id), ["q2", "q1", "r1", "p1"]);
+  assert.deepStrictEqual(M.tree(d, "recent").map(x => x.session.id), ["p1", "r1", "q1", "q2"]);
+  // days: newest first whatever the sort; requests within a day follow it
+  for (const sort of M.SORTS) assert.deepStrictEqual(M.tree(d, "day", { sort }).map(g => g.key), ["2026-09-22", "2026-09-20"]);
+  assert.deepStrictEqual(M.tree(d, "day", { sort: "name" })[0].requests.map(r => r.name), ["alpha", "Beta"]);
+  // tickets follow the sort
+  const t = { work_root: ROOT, sessions: [ses("x", 9, req("2026/01/01/x", { ticket: "ZZ-1", name: "x" })),
+                                           ses("y", 1, req("2026/01/02/y", { ticket: "AA-1", name: "y" }))] };
+  assert.deepStrictEqual(M.tree(t, "ticket").map(g => g.key), ["ZZ-1", "AA-1"]);
+  assert.deepStrictEqual(M.tree(t, "ticket", { sort: "name" }).map(g => g.key), ["ZZ-1", "AA-1"]);   // requests x, y by name
 });

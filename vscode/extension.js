@@ -52,6 +52,7 @@ class Sidebar {
     this.context = context;
     this.data = { work_root: config().CWS_WORK_ROOT || HOME, sessions: [] };
     this.grouping = context.globalState.get("grouping", "day");
+    this.sort = context.globalState.get("sort", "activity");
     this.filter = "";
     this.tabs = new Map();      // session id → terminal
     this.pending = [];          // tabs waiting for their session to appear
@@ -63,7 +64,7 @@ class Sidebar {
   }
 
   opts() {
-    return { filter: this.filter,
+    return { filter: this.filter, sort: this.sort,
              showEmpty: vscode.workspace.getConfiguration("claudeWorksessions").get("showEmptySessions", false) };
   }
 
@@ -559,7 +560,7 @@ function activate(context) {
   const view = vscode.window.createTreeView("claudeWorksessions.sessions", { treeDataProvider: bar });
   const box = new SearchBox(bar, q => searchSessions(bar, q));
   bar.onChange = () => {
-    view.description = M.GROUPING_LABELS[bar.grouping];
+    view.description = `${M.GROUPING_LABELS[bar.grouping]} · ${M.SORT_LABELS[bar.sort] || M.SORT_LABELS.activity}`;
     view.message = bar.error ? `claude-sessions failed: ${bar.error}`
       : (bar.filter && !bar.counts().shown ? `No session matches "${bar.filter}" — press Enter in the box to search their contents.` : undefined);
     vscode.commands.executeCommand("setContext", "claudeWorksessions.filtering", !!bar.filter);
@@ -579,6 +580,16 @@ function activate(context) {
       if (!pick) return;
       bar.grouping = pick.g;
       context.globalState.update("grouping", pick.g);
+      bar.emitter.fire();
+      bar.onChange();
+    }),
+    cmd("sort", async () => {
+      const pick = await vscode.window.showQuickPick(
+        M.SORTS.map(k => ({ label: M.SORT_LABELS[k], k, description: k === bar.sort ? "current" : "" })),
+        { placeHolder: "Sort sessions and requests (days stay newest first)" });
+      if (!pick) return;
+      bar.sort = pick.k;
+      context.globalState.update("sort", pick.k);
       bar.emitter.fire();
       bar.onChange();
     }),

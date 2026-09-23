@@ -13,6 +13,26 @@ const GROUPING_LABELS = {
 };
 const ROOT_KEY = "(work root)";
 
+// How sessions and requests are ordered. Days (By day) are always newest first.
+const SORTS = ["activity", "started", "name"];
+const SORT_LABELS = {
+  activity: "Last activity",
+  started: "Started (newest first)",
+  name: "Name (A–Z)",
+};
+const began = s => s.started || s.mtime;
+const byName = (a, b) => a.localeCompare(b, undefined, { sensitivity: "base", numeric: true });
+const sessionOrder = {
+  activity: (a, b) => b.mtime - a.mtime,
+  started: (a, b) => began(b) - began(a),
+  name: (a, b) => byName(sessionLabel(a), sessionLabel(b)),
+};
+const requestOrder = {
+  activity: (a, b) => b.mtime - a.mtime,
+  started: (a, b) => b.started - a.started,
+  name: (a, b) => byName(a.name, b.name),
+};
+
 const words = filter => (filter || "").toLowerCase().split(/\s+/).filter(Boolean);
 
 // Does a session match the search box? Every word must appear somewhere in its title,
@@ -68,12 +88,14 @@ function requests(data, opts) {
     }
     byPath.get(key).sessions.push(s);
   }
+  const sort = SORTS.includes(opts && opts.sort) ? opts.sort : "activity";
   const out = [...byPath.values()];
   for (const r of out) {
-    r.sessions.sort((a, b) => b.mtime - a.mtime);
-    r.mtime = r.sessions[0].mtime;
+    r.mtime = Math.max(...r.sessions.map(s => s.mtime));
+    r.started = r.started || Math.min(...r.sessions.map(began));
+    r.sessions.sort(sessionOrder[sort]);
   }
-  return out.sort((a, b) => b.mtime - a.mtime);
+  return out.sort(requestOrder[sort]);
 }
 
 // YYYY-MM-DD from a request folder's YYYY/MM/DD/... path under the work root.
@@ -90,7 +112,8 @@ function tree(data, grouping, opts) {
     const reqs = requests(data, opts);
     const reqOf = new Map();
     for (const r of reqs) for (const s of r.sessions) reqOf.set(s.id, r);
-    return visible(data, opts).sort((a, b) => b.mtime - a.mtime)
+    const sort = SORTS.includes(opts && opts.sort) ? opts.sort : "activity";
+    return visible(data, opts).sort(sessionOrder[sort])
       .map(s => ({ kind: "session", session: s, request: reqOf.get(s.id), showRequest: true }));
   }
   const keyOf = grouping === "ticket"
@@ -102,7 +125,10 @@ function tree(data, grouping, opts) {
     if (!groups.has(k)) groups.set(k, { kind: "group", key: k, requests: [], mtime: r.mtime });
     groups.get(k).requests.push(r);
   }
-  return [...groups.values()];   // requests arrive newest first, so groups do too
+  const out = [...groups.values()];   // requests arrive in sort order, so groups do too
+  // Days are a calendar: newest first, the work root and anything outside the layout last
+  if (grouping === "day") out.sort((a, b) => (/^\d/.test(b.key) - /^\d/.test(a.key)) || byName(b.key, a.key));
+  return out;
 }
 
 // What a session is called: its auto-title, else its first prompt, else its id.
@@ -222,6 +248,6 @@ function auditArgs(period, detail, date) {
   return detail ? [...args, "--detail"] : args;
 }
 
-module.exports = { GROUPINGS, GROUPING_LABELS, ROOT_KEY, matches, shownFiles, fileChildren, visible, requests, dayOf, tree,
+module.exports = { GROUPINGS, GROUPING_LABELS, SORTS, SORT_LABELS, ROOT_KEY, matches, shownFiles, fileChildren, visible, requests, dayOf, tree,
                    sessionLabel, tabName, ago, matchPending, parseCsv, taskTypes, setTaskType,
                    readSkills, auditArgs };

@@ -168,6 +168,12 @@
         "title": "Copy for email",
         "category": "Work sessions",
         "icon": "$(mail)"
+      },
+      {
+        "command": "claudeWorksessions.sort",
+        "title": "Sort\u2026",
+        "category": "Work sessions",
+        "icon": "$(arrow-swap)"
       }
     ],
     "menus": {
@@ -185,12 +191,12 @@
         {
           "command": "claudeWorksessions.grouping",
           "when": "view == claudeWorksessions.sessions",
-          "group": "navigation@3"
+          "group": "navigation@4"
         },
         {
           "command": "claudeWorksessions.refresh",
           "when": "view == claudeWorksessions.sessions",
-          "group": "navigation@4"
+          "group": "navigation@5"
         },
         {
           "command": "claudeWorksessions.runSkill",
@@ -211,6 +217,11 @@
           "command": "claudeWorksessions.recentSessions",
           "when": "view == claudeWorksessions.sessions",
           "group": "1_run@4"
+        },
+        {
+          "command": "claudeWorksessions.sort",
+          "when": "view == claudeWorksessions.sessions",
+          "group": "navigation@3"
         }
       ],
       "view/item/context": [

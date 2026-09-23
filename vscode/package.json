@@ -150,6 +150,18 @@
       {
         "command": "claudeWorksessions.copyId",
         "title": "Copy session id"
+      },
+      {
+        "command": "claudeWorksessions.openFile",
+        "title": "Open"
+      },
+      {
+        "command": "claudeWorksessions.revealFile",
+        "title": "Reveal in Finder / file manager"
+      },
+      {
+        "command": "claudeWorksessions.copyPath",
+        "title": "Copy path"
       }
     ],
     "menus": {
@@ -250,6 +262,21 @@
           "command": "claudeWorksessions.copyId",
           "when": "view == claudeWorksessions.sessions && viewItem == session",
           "group": "3_edit@2"
+        },
+        {
+          "command": "claudeWorksessions.openFile",
+          "when": "view == claudeWorksessions.sessions && viewItem == file",
+          "group": "1_open@1"
+        },
+        {
+          "command": "claudeWorksessions.revealFile",
+          "when": "view == claudeWorksessions.sessions && viewItem =~ /^(file|dir)$/",
+          "group": "2_reveal@1"
+        },
+        {
+          "command": "claudeWorksessions.copyPath",
+          "when": "view == claudeWorksessions.sessions && viewItem =~ /^(file|dir)$/",
+          "group": "3_edit@1"
         }
       ],
       "commandPalette": [
@@ -275,6 +302,18 @@
         },
         {
           "command": "claudeWorksessions.copyId",
+          "when": "false"
+        },
+        {
+          "command": "claudeWorksessions.openFile",
+          "when": "false"
+        },
+        {
+          "command": "claudeWorksessions.revealFile",
+          "when": "false"
+        },
+        {
+          "command": "claudeWorksessions.copyPath",
           "when": "false"
         }
       ]

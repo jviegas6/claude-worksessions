@@ -165,3 +165,21 @@ test("auditArgs", () => {
   assert.deepStrictEqual(M.auditArgs("weekof", false, "2026-09-01"), ["--week", "2026-09-01"]);
   assert.deepStrictEqual(M.auditArgs("nonsense"), []);
 });
+
+test("files: search matches file names, shownFiles narrows, fileChildren builds one level", () => {
+  const files = ["notes.md", "b/script.py", "b/c/out.csv", "b/c/brainlabs.csv", "a/x.txt"];
+  const s = ses("f1", 1, { ...A, files });
+  assert.ok(M.matches(s, "brainlabs csv"));
+  assert.ok(!M.matches(s, "nothing-like-it"));
+  assert.ok(M.matches(ses("f2", 1, A), "t-f2"));                        // requests without files
+  assert.deepStrictEqual(M.shownFiles(files, ""), files);
+  assert.deepStrictEqual(M.shownFiles(files, "BRAINLABS zzz"), ["b/c/brainlabs.csv"]);
+  assert.deepStrictEqual(M.shownFiles(files, "t-f1"), files);           // no file matches: all
+  assert.deepStrictEqual(M.shownFiles(undefined, "x"), []);
+  assert.deepStrictEqual(M.fileChildren(files), [
+    { kind: "dir", name: "a", prefix: "a/" }, { kind: "dir", name: "b", prefix: "b/" },
+    { kind: "file", rel: "notes.md" }]);
+  assert.deepStrictEqual(M.fileChildren(files, "b/"), [
+    { kind: "dir", name: "c", prefix: "b/c/" }, { kind: "file", rel: "b/script.py" }]);
+  assert.deepStrictEqual(M.fileChildren(files, "b/c/").map(x => x.rel), ["b/c/brainlabs.csv", "b/c/out.csv"]);
+});

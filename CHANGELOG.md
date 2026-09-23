@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.9.0] — 2026-09-23
+
+- **VS Code: sort the sessions.** A Sort button in the Work sessions panel: **last
+  activity** (as before — resuming a session moves it up), **started** (newest first, so
+  resuming moves nothing) or **name**. Remembered, and shown next to the grouping.
+- **By day** always lists days newest first, with the work root last; before, a day moved
+  up whenever one of its sessions was resumed.
+- `claude-sessions --json` adds `started` for each session (its first transcript
+  timestamp) and each request (`started_at` from `.session.json`, else its folder name).
+
 ## [2.8.0] — 2026-09-23
 
 - **Copy for email.** New `claude-md-email FILE.md` renders Markdown with pandoc and

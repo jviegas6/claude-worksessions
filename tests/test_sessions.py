@@ -175,6 +175,7 @@ def test_json_output(sessions, home, monkeypatch, capsys):
     a, b, c, d, gone = data["sessions"]
     for x in (a, b, c):
         assert (x["request"].pop("files"), x["request"].pop("files_truncated")) == ([], False)
+        x["request"].pop("started")
     assert (a["id"], a["title"], a["first_prompt"], a["last_prompt"]) == ("a", "Title A", "first", "last A")
     assert a["request"] == {"path": str(req), "name": "demo work", "ticket": "BTPA-1",
                             "task_type": "security", "profile": "work"}
@@ -280,3 +281,35 @@ def test_json_has_request_files_and_written(sessions, home, monkeypatch, capsys,
     assert b["request"]["files"] == ["out/report.md"]
     assert gone["written"] == [] and gone["request"] is None
     assert (tmp_path / "cache" / "written.json").exists()
+
+
+def test_start_times(sessions, home):
+    assert sessions.iso_epoch("2026-09-22T20:20:56.447Z") == 1790108456.0
+    assert sessions.iso_epoch("nope") is None and sessions.iso_epoch(None) is None
+    p = write_transcript(home, "t", ["junk", rec("user", "x"), {"type": "user", "timestamp": "bad"},
+                                     {"type": "user", "timestamp": "2026-09-22T20:20:56Z"}])
+    assert sessions.started(str(p)) == 1790108456.0
+    assert sessions.started(str(p), lines=2) is None
+    q = write_transcript(home, "u", [rec("user", "no time")])
+    assert sessions.started(str(q)) is None
+    root = home / "work_sessions"
+    f = str(root / "2026" / "09" / "22" / "21-20-13_setup")
+    assert sessions.request_started(f, "2026-09-22T20:20:13Z") == 1790108413.0
+    import datetime as dt
+    assert sessions.request_started(f, None) == dt.datetime(2026, 9, 22, 21, 20, 13).timestamp()
+    assert sessions.request_started("/elsewhere/repo", "garbage") is None
+
+
+def test_json_has_start_times(sessions, home, monkeypatch, capsys, tmp_path):
+    monkeypatch.setenv("CWS_CACHE_DIR", str(tmp_path / "cache"))
+    req = home / "work_sessions" / "2026" / "09" / "22" / "10-00-00_demo"
+    req.mkdir(parents=True)
+    (req / ".session.json").write_text(json.dumps({"name": "d", "started_at": "2026-09-22T09:00:00Z"}))
+    write_transcript(home, "a", [dict(rec("user", "go", cwd=str(req)), timestamp="2026-09-22T09:05:00Z")], mtime=2_000)
+    write_transcript(home, "gone", [rec("user", "x", cwd="/x")], mtime=500)
+    real = sessions.started
+    monkeypatch.setattr(sessions, "started",
+                        lambda p: (_ for _ in ()).throw(OSError) if p.endswith("gone.jsonl") else real(p))
+    a, gone = json.loads(run_main(sessions, monkeypatch, capsys, "-a", "--json"))["sessions"]
+    assert a["started"] == 1790067900.0 and a["request"]["started"] == 1790067600.0
+    assert gone["started"] is None

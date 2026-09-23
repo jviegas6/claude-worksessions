@@ -121,6 +121,44 @@ def read_tail(path):
     return title, last
 
 
+ISO_RE = re.compile(r"(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2})")
+
+
+def iso_epoch(text):
+    """Seconds since the epoch for an ISO UTC time ("2026-09-22T20:20:56.447Z"), or None."""
+    m = ISO_RE.match(text or "")
+    if not m:
+        return None
+    return dt.datetime.strptime(" ".join(m.groups()), "%Y-%m-%d %H:%M:%S").replace(
+        tzinfo=dt.timezone.utc).timestamp()
+
+
+def started(path, lines=200):
+    """When a session began: the first timestamp in its transcript."""
+    with open(path, errors="replace") as fh:
+        for i, line in enumerate(fh):
+            if i >= lines:
+                break
+            m = re.search(r'"timestamp"\s*:\s*"([^"]+)"', line)
+            if m and iso_epoch(m.group(1)):
+                return iso_epoch(m.group(1))
+    return None
+
+
+FOLDER_TIME_RE = re.compile(r"(\d{4})/(\d{2})/(\d{2})/(\d{2})-(\d{2})-(\d{2})_")
+
+
+def request_started(folder, meta_started):
+    """When a request began: started_at from .session.json, else the time in its folder
+    name (local time), else None."""
+    if iso_epoch(meta_started):
+        return iso_epoch(meta_started)
+    m = FOLDER_TIME_RE.search(folder.replace(os.sep, "/"))
+    if m:
+        return dt.datetime(*map(int, m.groups())).timestamp()
+    return None
+
+
 REQUEST_RE = re.compile(r"^\d{4}/\d{2}/\d{2}/[^/]+")
 
 
@@ -146,11 +184,13 @@ def request_info(folder, sid):
     meta = CA.session_meta(folder)
     try:
         with open(os.path.join(folder, ".session.json")) as fh:
-            name = json.load(fh).get("name")
+            raw = json.load(fh)
+        name, when = raw.get("name"), raw.get("started_at")
     except (OSError, ValueError, AttributeError):
-        name = None
+        name = when = None
     return {"path": folder,
             "name": name or os.path.basename(folder),
+            "started": request_started(folder, when if isinstance(when, str) else None),
             "ticket": meta["ticket"],
             "task_type": meta["session_types"].get(sid) or meta["task_type"],
             "profile": "" if meta["profile"] == "unknown" else meta["profile"]}
@@ -260,6 +300,10 @@ def as_json(rows):
             written = existing_written(written_files(path, cache))
         except OSError:
             written = []
+        try:
+            began = started(path)
+        except OSError:
+            began = None
         folder = request_dir(cwd, sid)
         request = None
         if folder:
@@ -271,7 +315,7 @@ def as_json(rows):
                     "in_work_root": cwd == root or cwd.startswith(root + os.sep),
                     "title": title, "last_prompt": last,
                     "first_prompt": None if first == "(no prompt)" else first,
-                    "written": written, "request": request})
+                    "started": began, "written": written, "request": request})
     save_written_cache(cache)
     return {"work_root": root, "sessions": out}
 

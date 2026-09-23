@@ -131,7 +131,7 @@ test("activates, renders every grouping and opens sessions in tabs", async () =>
   await settle(ctx);
   const view = ctx.subscriptions[0];
   const p = view.provider;
-  assert.strictEqual(view.description, "By day");
+  assert.strictEqual(view.description, "By day · Last activity");
   assert.strictEqual(view.message, undefined);
 
   let items = allItems(p);
@@ -164,7 +164,21 @@ test("activates, renders every grouping and opens sessions in tabs", async () =>
   fake.answers.push(items => items.find(i => i.g === "ticket"));
   await fake.commands.get("claudeWorksessions.grouping")();
   assert.strictEqual(ctx.globalState.get("grouping"), "ticket");
-  assert.strictEqual(view.description, "By ticket");
+  assert.strictEqual(view.description, "By ticket · Last activity");
+
+  // sort: remembered, shown in the description, applied to the tree
+  fake.answers.push(items => {
+    assert.deepStrictEqual(items.map(i => i.k), ["activity", "started", "name"]);
+    assert.strictEqual(items[0].description, "current");
+    return items.find(i => i.k === "name");
+  });
+  await fake.commands.get("claudeWorksessions.sort")();
+  assert.strictEqual(ctx.globalState.get("sort"), "name");
+  assert.strictEqual(view.description, "By ticket · Name (A–Z)");
+  assert.strictEqual(p.opts().sort, "name");
+  fake.answers.push(undefined);
+  await fake.commands.get("claudeWorksessions.sort")();                      // cancelled: unchanged
+  assert.strictEqual(p.sort, "name");
   assert.deepStrictEqual(allItems(p).map(([, it]) => it.label)[0], "BTPA-1");
   p.grouping = "recent";
   assert.match(allItems(p)[0][1].description, /^BTPA-1 · demo · 1m$/);

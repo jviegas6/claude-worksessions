@@ -139,7 +139,7 @@ and the first prompt. Folders moved since are shown where they are now
 copy of its transcript under the old folder.
 
 `--json` adds what the VS Code sidebar shows: each session's auto-title and latest
-prompt (Claude Code keeps both in the transcript), the files it wrote, and its request
+prompt (Claude Code keeps both in the transcript), when it started, the files it wrote, and its request
 folder with name, ticket, task type, profile and files. Written files are read once:
 `~/.cache/claude-worksessions/written.json` remembers how far each transcript was read. A session belongs to the nearest folder with a
 `.session.json` above where it ran, else the `YYYY/MM/DD/slug` folder it is in, else
@@ -161,6 +161,7 @@ by side.
 |---|---|
 | **+** (top) | new request: a tab running `claude-new`, with its usual prompts |
 | list icon (top) | group by **day**, by **ticket**, or a flat list of **recent** sessions; remembered |
+| arrows icon (top) | sort by **last activity** (a resumed session moves up), **started** (newest first; resuming moves nothing) or **name**; remembered. By day always lists days newest first |
 | a session | open it in a tab (`claude-resume -p <profile> --resume <id>`), or go to its tab if open |
 | **+** on a request | a new session in that request's folder, with its profile |
 | folder on a request | reveal it in the Explorer (right-click: in Finder, a new window, set task type) |

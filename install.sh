@@ -559,6 +559,8 @@ for item in $SHARED_ITEMS; do
     if [[ "$item" == *.jsonl ]]; then run touch "$SHARED/$item"; else run mkdir -p "$SHARED/$item"; fi
   fi
 done
+# Declared once: a `local` inside the loop would print its value on the second pass
+local keep=3650 kstate=""
 for p in $PROFILES; do
   pdir="$HOME/.claude-$p"
   [[ -d "$pdir" ]] || { run mkdir -p "$pdir"; say "created $pdir"; }
@@ -600,6 +602,47 @@ PY
       (( has_token || ${#token} )) || warn "$p: no token set — re-run install.sh to add one"
     fi
   fi
+  # Transcript retention: Claude Code deletes transcripts after cleanupPeriodDays (default
+  # 30), and they are the audit trail. Set it long where it isn't set; a shorter value set
+  # on purpose is left alone, with a warning.
+  kstate=$(KEEP=$keep "$PY" - "$pdir/settings.json" <<'PY'
+import json, os, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except FileNotFoundError:
+    d = {}
+except ValueError:
+    print("unparsed"); raise SystemExit
+keep, have = int(os.environ["KEEP"]), d.get("cleanupPeriodDays")
+if isinstance(have, int) and not isinstance(have, bool):
+    print("ok" if have >= keep else "short:%d" % have)
+else:
+    print("set")
+PY
+)
+  case $kstate in
+    ok)       say "$p: transcripts kept $keep+ days" ;;
+    short:*)  warn "$p: cleanupPeriodDays is ${kstate#short:} — transcripts older than that are deleted, and the audit loses them" ;;
+    unparsed) warn "$p: $pdir/settings.json isn't valid JSON — set \"cleanupPeriodDays\": $keep in it yourself" ;;
+    set)      if (( DRY )); then say "[dry-run] $p: keep transcripts $keep days (cleanupPeriodDays)"
+              else
+                backup "$pdir/settings.json"
+                KEEP=$keep "$PY" - "$pdir/settings.json" <<'PY'
+import json, os, sys
+p = sys.argv[1]
+try:
+    d = json.load(open(p))
+except FileNotFoundError:
+    d = {}
+d["cleanupPeriodDays"] = int(os.environ["KEEP"])
+perm = os.stat(p).st_mode & 0o777 if os.path.exists(p) else 0o644
+open(p + ".tmp", "w").write(json.dumps(d, indent=2) + "\n")
+os.chmod(p + ".tmp", perm)
+os.replace(p + ".tmp", p)
+PY
+                say "$p: transcripts kept $keep days (was Claude Code's default, 30)"
+              fi ;;
+  esac
 done
 if [[ ! -e "$HOME/.claude" ]]; then link ".claude-$CWS_SHARED_PROFILE" "$HOME/.claude"
 else say "kept ~/.claude"; fi

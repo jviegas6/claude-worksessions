@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.12.0] — 2026-09-23
+
+- **Transcripts are kept.** Claude Code deletes transcripts after 30 days unless
+  `cleanupPeriodDays` says otherwise, and they are the audit trail: the audit, weekly
+  review, recap, search and sidebar all read them. `install.sh` now sets
+  `"cleanupPeriodDays": 3650` in each profile's `settings.json` when it isn't set
+  (backing the file up, keeping its permissions), and warns when a shorter value is set.
+
 ## [2.11.0] — 2026-09-23
 
 - **`claude-delete`**: move a session with no value to the Trash — one with no

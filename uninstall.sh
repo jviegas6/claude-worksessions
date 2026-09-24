@@ -5,7 +5,7 @@ emulate -L zsh
 REPO="${0:A:h}"
 say() { print -r -- "  $*"; }
 if [[ -x /usr/bin/python3 ]]; then PY=/usr/bin/python3; else PY="$(command -v python3)"; fi
-for b in claude-audit claude-search claude-sessions claude-vscode claude-md-email claude-delete claude-hook-notfound claude-retro; do
+for b in claude-audit claude-search claude-sessions claude-vscode claude-md-email claude-delete claude-hook-notfound claude-hook-vague claude-retro; do
   f="$HOME/.local/bin/$b"
   [[ -L "$f" && "$(readlink "$f")" == "$REPO/bin/$b" ]] && rm "$f" && say "removed $f"
 done
@@ -45,11 +45,12 @@ if command -v code >/dev/null 2>&1 &&
    code --list-extensions 2>/dev/null | grep -qix "jviegas6.claude-worksessions"; then
   code --uninstall-extension jviegas6.claude-worksessions >/dev/null 2>&1 && say "uninstalled the Work sessions sidebar"
 fi
-# The "does not exist" hook: take its entries out of each profile's settings.json
+# The prompt-quality hooks: take their entries out of each profile's settings.json
 for sfile in "$HOME"/.claude-*/settings.json(N); do
-  out=$(HOOK="$HOME/.local/bin/claude-hook-notfound" "$PY" - "$sfile" 2>&1 <<'PY'
+  out=$(BIN="$HOME/.local/bin" "$PY" - "$sfile" 2>&1 <<'PY'
 import json, os, sys
-p, hook = sys.argv[1], os.environ["HOOK"]
+p = sys.argv[1]
+ours = {os.path.join(os.environ["BIN"], n) for n in ("claude-hook-notfound", "claude-hook-vague")}
 try:
     d = json.load(open(p))
 except ValueError:
@@ -58,7 +59,7 @@ hooks, changed = d.get("hooks") or {}, False
 for event in list(hooks):
     groups = []
     for g in hooks[event]:
-        kept = [h for h in g.get("hooks", []) if h.get("command") != hook]
+        kept = [h for h in g.get("hooks", []) if h.get("command") not in ours]
         changed |= len(kept) != len(g.get("hooks", []))
         if kept:
             groups.append(dict(g, hooks=kept))
@@ -75,7 +76,7 @@ if changed:
     print("removed")
 PY
   )
-  [[ "$out" == removed ]] && say "removed the 'does not exist' hook from $sfile"
+  [[ "$out" == removed ]] && say "removed the prompt-quality hooks from $sfile"
 done
 L="$HOME/.config/claude-worksessions/config.env"
 [[ -L "$L" ]] && rm "$L" && say "removed $L (the config file itself is kept)"

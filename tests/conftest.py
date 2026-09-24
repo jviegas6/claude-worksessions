@@ -73,3 +73,8 @@ def hook(home):
 @pytest.fixture
 def retro(home):
     return load_script("claude-retro")
+
+
+@pytest.fixture
+def vaguehook(home):
+    return load_script("claude-hook-vague")

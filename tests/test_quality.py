@@ -275,3 +275,51 @@ def test_hook_quotes_the_error_line_as_text(hook, tmp_path, monkeypatch):
     assert "(Container logs does not exist)" in ctx(
         {"tool_response": [{"type": "text", "text": "Container logs does not exist"}, 3]}, "c")
     assert "(SCHEMA_NOT_FOUND)" in ctx({"tool_output": "SCHEMA_NOT_FOUND"}, "d")
+
+
+# --- claude-hook-vague ------------------------------------------------------------------
+@pytest.mark.parametrize("prompt,expected", [
+    ("can you check which users or SP are now without access?", True),
+    ("validate if permissions are there", True),
+    ("create a power point presentation with those findings", True),
+    ("check sales_prod.bronze.orders for duplicates", False),          # dotted / snake_case name
+    ("fix the job in ~/Repos/x", False),                                    # path
+    ("investigate PROJ-123 please", False),                                 # ticket
+    ("check the storage account in prod", False),                           # environment
+    ("look at https://example.com/x", False),                               # URL
+    ("check `the thing`", False),                                           # quoted
+    ("yes, check it", False),                                               # a reply
+    ("/weekly-review now", False),                                          # a command
+    ("what time is it", False),                                             # no action
+    ("fix it", False),                                                      # too short to judge
+    ("check " + "word " * 45, False),                                       # long: probably specified
+    ("", False),
+    (None, False),
+])
+def test_vague_prompts(vaguehook, prompt, expected):
+    assert vaguehook.vague(prompt) is expected
+
+
+def test_vague_hook_only_on_the_first_prompts(vaguehook, tmp_path, monkeypatch):
+    monkeypatch.setattr(vaguehook.tempfile, "gettempdir", lambda: str(tmp_path))
+    ask = lambda p, s="s1": vaguehook.react({"session_id": s, "prompt": p})
+    a = ask("validate if permissions are there")
+    assert a["hookSpecificOutput"]["hookEventName"] == "UserPromptSubmit"
+    assert "ask one or two short questions" in a["hookSpecificOutput"]["additionalContext"]
+    assert ask("check sales_prod.bronze.orders") is None                 # 2nd prompt, but specific
+    assert ask("validate if permissions are there") is None                  # 3rd prompt: not looked at
+    assert ask("validate if permissions are there", "s2") is not None        # a new session
+    open(tmp_path / "claude-hook-vague-bad.count", "w").write("x")
+    assert ask("validate if permissions are there", "bad") is not None
+    monkeypatch.setattr(vaguehook.tempfile, "gettempdir", lambda: str(tmp_path / "missing"))
+    assert ask("validate if permissions are there", "s3") is not None       # can't save the count: still works
+
+
+def test_vague_hook_main(vaguehook, tmp_path, monkeypatch):
+    monkeypatch.setattr(vaguehook.tempfile, "gettempdir", lambda: str(tmp_path))
+    out = io.StringIO()
+    assert vaguehook.main(io.StringIO(json.dumps({"session_id": "m", "prompt": "validate if permissions are there"})), out) == 0
+    assert json.loads(out.getvalue())["hookSpecificOutput"]["additionalContext"]
+    for bad in ("not json", "[1]", json.dumps({"session_id": "n", "prompt": "yes"})):
+        out = io.StringIO()
+        assert vaguehook.main(io.StringIO(bad), out) == 0 and out.getvalue() == ""

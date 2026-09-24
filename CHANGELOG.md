@@ -11,6 +11,9 @@
   profile: when a table, schema, group or Azure resource turns out not to exist, Claude is
   told to confirm with you before searching for alternatives. Existing hooks are kept;
   `uninstall.sh` removes it.
+- **A "vague request" hook** (`claude-hook-vague`): on a session's first two prompts, a
+  request that asks for an action but names no concrete target makes Claude ask one or two
+  short questions first — unless the context already answers them.
 
 ## [2.14.0] — 2026-09-23
 

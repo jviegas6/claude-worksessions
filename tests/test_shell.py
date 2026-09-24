@@ -543,7 +543,7 @@ def test_install_registers_the_notfound_hook_and_uninstall_removes_it(tmp_path):
     run = lambda *a: subprocess.run(["zsh", os.path.join(REPO, a[0]), *a[1:]], env=env, capture_output=True,
                                     text=True, stdin=subprocess.DEVNULL)
     r = run("install.sh", "--dry-run", "--yes", "--no-bootstrap")
-    assert "personal: [dry-run] added the 'does not exist' hook" in r.stdout
+    assert "personal: [dry-run] added the prompt-quality hooks" in r.stdout
     r = run("install.sh", "--yes", "--no-bootstrap")
     hook = str(tmp_path / ".local" / "bin" / "claude-hook-notfound")
     for p in ("personal", "work"):
@@ -554,12 +554,14 @@ def test_install_registers_the_notfound_hook_and_uninstall_removes_it(tmp_path):
             assert any(g.get("matcher") == "Bash|mcp__.*" for g in s["hooks"][event])
     assert json.loads((tmp_path / ".claude-personal" / "settings.json").read_text())["hooks"]["PostToolUse"][0]["hooks"] == [mine]
     r = run("install.sh", "--yes", "--no-bootstrap")                                   # again: not added twice
-    assert "personal: 'does not exist' hook in place" in r.stdout
+    assert "personal: prompt-quality hooks in place" in r.stdout
     s = json.loads((tmp_path / ".claude-work" / "settings.json").read_text())
     assert [h["command"] for g in s["hooks"]["PostToolUse"] for h in g["hooks"]] == [hook]
+    vague = str(tmp_path / ".local" / "bin" / "claude-hook-vague")
+    assert s["hooks"]["UserPromptSubmit"] == [{"hooks": [{"type": "command", "command": vague, "timeout": 10}]}]
     assert os.path.islink(hook) and os.path.islink(tmp_path / ".local" / "bin" / "claude-retro")
     r = run("uninstall.sh")
-    assert "removed the 'does not exist' hook from" in r.stdout
+    assert "removed the prompt-quality hooks from" in r.stdout
     assert json.loads((tmp_path / ".claude-personal" / "settings.json").read_text()) == {
         "hooks": {"PostToolUse": [{"matcher": "Write", "hooks": [mine]}]}, "cleanupPeriodDays": 3650}
     assert "hooks" not in json.loads((tmp_path / ".claude-work" / "settings.json").read_text())
@@ -570,4 +572,4 @@ def test_install_warns_on_a_broken_settings_file_for_the_hook(tmp_path):
     (tmp_path / ".claude-personal").mkdir()
     (tmp_path / ".claude-personal" / "settings.json").write_text("{broken")
     r = dry_install(tmp_path, "mac")
-    assert "the 'does not exist' hook wasn't added" in r.stderr
+    assert "the prompt-quality hooks weren't added" in r.stderr

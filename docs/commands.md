@@ -275,16 +275,26 @@ re-running a period doesn't call Claude again. The judge uses `claude -p --model
 Recurring habits are worth moving into `_config/context.md`, so Claude applies them
 without being told.
 
-## The "does not exist" hook
+## Prompt-quality hooks
 
-`install.sh` registers `claude-hook-notfound` in every profile's `settings.json`
-(`PostToolUse` and `PostToolUseFailure`, on commands and MCP tools). When a result says the
+`install.sh` registers two hooks in every profile's `settings.json`. Hooks you already have
+are kept; `uninstall.sh` removes only these. Review or disable them with `/hooks`.
+
+**Vague request → ask first** (`claude-hook-vague`, on `UserPromptSubmit`). On the first two
+prompts of a session — where vagueness costs most — a request that asks for an action
+(check, fix, investigate, create…) but names nothing concrete (no path, URL, ticket, dotted
+or snake_case name, environment, file, quoted text or number) gets a note: unless the
+context already makes the target, environment and outcome clear, ask one or two short
+questions first. Replies like "yes" or "go" are skipped. On past sessions this flagged about
+4% of prompts, mostly ones like "validate if permissions are there".
+
+**Doesn't exist → ask first** (`claude-hook-notfound`),
+on `PostToolUse` and `PostToolUseFailure`, for commands and MCP tools. When a result says the
 thing asked about doesn't exist — `TABLE_OR_VIEW_NOT_FOUND`, `SCHEMA_NOT_FOUND`,
 `PRINCIPAL_DOES_NOT_EXIST`, `ResourceNotFound`, "… does not exist" — it tells Claude to stop
 and confirm the name and environment with you before hunting for alternatives. Generic
 "not found" / 404 output from normal exploring doesn't trigger it, and it speaks at most
-three times per session. Hooks you already have are kept; `uninstall.sh` removes only this
-one. Review or disable it with `/hooks`.
+three times per session.
 
 ## claude-md-email
 

@@ -14,6 +14,7 @@ across past sessions, and daily/weekly review skills — all driven by one confi
 | `claude-search` | find past sessions by ticket or topic, with the command to resume each |
 | `claude-sessions` | the most recent sessions across all profiles: when, id, folder, first prompt |
 | `claude-delete` | move a session with no value (no artifacts, or started with `-n`) to a bin you can restore from, after saying what that means — also **Delete session…** in VS Code |
+| prompt-quality hooks | Claude asks first when a request is vague or something it was asked about doesn't exist |
 | `claude-retro` | a retrospective on your prompts: where work stalled (a resource that didn't exist, corrections, interruptions, clarifying questions), whether the prompt caused it, and a better version — with a trend from week to week |
 | `claude-md-email` | a Markdown file onto the clipboard, formatted for email (black on white, Calibri, bordered tables) — also **Copy for email** in VS Code |
 | `ws` / `y` | fuzzy-jump to a request folder; browse it in yazi |

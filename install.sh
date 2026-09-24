@@ -560,7 +560,7 @@ for item in $SHARED_ITEMS; do
   fi
 done
 # Declared once: a `local` inside the loop would print its value on the second pass
-local keep=3650 kstate=""
+local keep=3650 kstate="" hstate=""
 for p in $PROFILES; do
   pdir="$HOME/.claude-$p"
   [[ -d "$pdir" ]] || { run mkdir -p "$pdir"; say "created $pdir"; }
@@ -643,6 +643,37 @@ PY
                 say "$p: transcripts kept $keep days (was Claude Code's default, 30)"
               fi ;;
   esac
+  # The "doesn't exist → ask first" hook (bin/claude-hook-notfound), on commands and MCP tools
+  hstate=$(HOOK="$HOME/.local/bin/claude-hook-notfound" MODE=$(( DRY )) "$PY" - "$pdir/settings.json" <<'PY'
+import json, os, sys
+p, hook, dry = sys.argv[1], os.environ["HOOK"], os.environ["MODE"] == "1"
+try:
+    d = json.load(open(p))
+except FileNotFoundError:
+    d = {}
+except ValueError:
+    print("unparsed"); raise SystemExit
+hooks = d.setdefault("hooks", {})
+added = []
+for event in ("PostToolUse", "PostToolUseFailure"):
+    groups = hooks.setdefault(event, [])
+    if any(h.get("command") == hook for g in groups for h in g.get("hooks", [])):
+        continue
+    groups.append({"matcher": "Bash|mcp__.*", "hooks": [{"type": "command", "command": hook, "timeout": 10}]})
+    added.append(event)
+print("added" if added else "ok")
+if added and not dry:
+    perm = os.stat(p).st_mode & 0o777 if os.path.exists(p) else 0o644
+    open(p + ".tmp", "w").write(json.dumps(d, indent=2) + "\n")
+    os.chmod(p + ".tmp", perm)
+    os.replace(p + ".tmp", p)
+PY
+)
+  case $hstate in
+    ok)       say "$p: 'does not exist' hook in place" ;;
+    unparsed) warn "$p: $pdir/settings.json isn't valid JSON — the 'does not exist' hook wasn't added" ;;
+    added)    say "$p: ${${DRY:#0}:+[dry-run] }added the 'does not exist' hook (asks before hunting for alternatives)" ;;
+  esac
 done
 if [[ ! -e "$HOME/.claude" ]]; then link ".claude-$CWS_SHARED_PROFILE" "$HOME/.claude"
 else say "kept ~/.claude"; fi
@@ -679,7 +710,7 @@ done
 # --- 5. commands and skills -----------------------------------------------------------
 step "Commands"
 local b
-for b in claude-audit claude-search claude-sessions claude-vscode claude-md-email claude-delete; do link "$REPO/bin/$b" "$HOME/.local/bin/$b"; done
+for b in claude-audit claude-search claude-sessions claude-vscode claude-md-email claude-delete claude-hook-notfound claude-retro; do link "$REPO/bin/$b" "$HOME/.local/bin/$b"; done
 
 # --- 5a. VS Code ------------------------------------------------------------------------
 # The Claude extension's env setting is machine-wide, so it can't follow a session's profile.

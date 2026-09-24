@@ -1,0 +1,91 @@
+#!/usr/bin/env python3
+"""claude-hook-notfound: a Claude Code hook (PostToolUse / PostToolUseFailure) that notices
+when a command or MCP tool reports that the thing asked about does not exist, and tells
+Claude to stop and check with the user before hunting for alternatives.
+
+Registered by install.sh in each profile's settings.json. Reads the hook payload on stdin;
+prints a hookSpecificOutput with additionalContext, or nothing. Only clear "this resource
+does not exist" errors count -- generic "not found" / 404 noise from normal exploration
+does not -- and it speaks at most MAX_PER_SESSION times per session.
+"""
+
+import json
+import os
+import re
+import sys
+import tempfile
+
+MISSING = re.compile(
+    r"(TABLE_OR_VIEW_NOT_FOUND|SCHEMA_NOT_FOUND|CATALOG_NOT_FOUND|VOLUME_NOT_FOUND|FUNCTION_NOT_FOUND|"
+    r"PRINCIPAL_DOES_NOT_EXIST|RESOURCE_DOES_NOT_EXIST|ResourceNotFound|ResourceGroupNotFound|"
+    r"ContainerNotFound|BlobNotFound|PathNotFound|\bdoes not exist\b)")
+MAX_PER_SESSION = 3
+ADVICE = ("A resource you just used reported that it does not exist ({what}). Before searching for "
+          "alternatives or guessing other names, stop and confirm with the user: does it exist, "
+          "under which exact name, and in which environment? If they already confirmed it, carry on.")
+
+
+def state_path(session_id):
+    safe = re.sub(r"[^A-Za-z0-9_-]", "", session_id or "none")[:64]
+    return os.path.join(tempfile.gettempdir(), "claude-hook-notfound-{}.count".format(safe))
+
+
+def count_and_bump(session_id):
+    p = state_path(session_id)
+    try:
+        with open(p) as fh:
+            n = int(fh.read().strip() or 0)
+    except (OSError, ValueError):
+        n = 0
+    try:
+        with open(p, "w") as fh:
+            fh.write(str(n + 1))
+    except OSError:
+        pass
+    return n
+
+
+def strings(value):
+    """Every string inside a value (a tool result can be text, a dict of stdout/stderr, or a
+    list of content blocks), so errors are quoted as text, not as JSON."""
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for v in value.values():
+            yield from strings(v)
+    elif isinstance(value, (list, tuple)):
+        for v in value:
+            yield from strings(v)
+
+
+def react(payload):
+    """The hook's JSON answer for a payload, or None to stay quiet."""
+    text = "\n".join(strings([payload.get(k) for k in ("tool_response", "error", "tool_output")]))
+    m = MISSING.search(text)
+    if not m:
+        return None
+    if count_and_bump(payload.get("session_id")) >= MAX_PER_SESSION:
+        return None
+    # quote the error line itself (JSON-escaped newlines split lines too), trimmed
+    a, b = text.rfind("\n", 0, m.start()), text.rfind("\\n", 0, m.start())
+    start = max(a + 1 if a >= 0 else 0, b + 2 if b >= 0 else 0)
+    end = min(x for x in (text.find("\n", m.end()), text.find("\\n", m.end()), len(text)) if x >= 0)
+    line = re.sub(r"\s+", " ", text[start:end]).strip(' "')[:160]
+    return {"hookSpecificOutput": {"hookEventName": payload.get("hook_event_name") or "PostToolUse",
+                                   "additionalContext": ADVICE.format(what=line)}}
+
+
+def main(stdin=None, stdout=None):
+    stdin, stdout = stdin or sys.stdin, stdout or sys.stdout
+    try:
+        payload = json.load(stdin)
+    except ValueError:
+        return 0
+    answer = react(payload if isinstance(payload, dict) else {})
+    if answer:
+        stdout.write(json.dumps(answer))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

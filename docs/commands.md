@@ -247,6 +247,45 @@ qualify; it shows the same summary and asks. Deleted sessions are listed under *
 at the bottom of the panel: right-click → **Restore** (or the inline icon) or **Delete for
 good…**; right-click **Deleted** → **Empty the bin…**.
 
+## claude-retro
+
+```
+claude-retro                  # the last 7 days
+claude-retro --days 14        # the last 14 days
+claude-retro --week [DATE]    # the Monday–Sunday week containing DATE (default: last week)
+claude-retro --no-judge       # count the friction signals only, no Claude calls
+```
+
+A retrospective on how your prompts went. It finds **friction** in the transcripts — a
+resource that turned out not to exist, a correction ("no, I meant …"), an interruption, a
+rejected tool call, a reversal ("roll it back"), a clarifying question (asked with the
+question tool or at the end of a reply) — and ties each to the prompt that came before.
+Claude then judges each session's episodes: was the **prompt** the cause, and how —
+assumed something existed, left the target ambiguous, clashed with an earlier
+instruction, gave no clear outcome, changed scope — and writes a better prompt. Only
+high- and medium-confidence verdicts count; Claude exploring on its own, or making its
+own mistake, doesn't.
+
+The report — signals, causes, habits to keep, the worst episodes with your words and a
+rewrite, and the **trend** — goes to `<work root>/_audit/quality/<from>_<to>_retro.md`;
+`history.json` there keeps one line per period. Verdicts are cached in `judged.json`, so
+re-running a period doesn't call Claude again. The judge uses `claude -p --model sonnet`
+(`--model` to change) with the profile your shell is on.
+
+Recurring habits are worth moving into `_config/context.md`, so Claude applies them
+without being told.
+
+## The "does not exist" hook
+
+`install.sh` registers `claude-hook-notfound` in every profile's `settings.json`
+(`PostToolUse` and `PostToolUseFailure`, on commands and MCP tools). When a result says the
+thing asked about doesn't exist — `TABLE_OR_VIEW_NOT_FOUND`, `SCHEMA_NOT_FOUND`,
+`PRINCIPAL_DOES_NOT_EXIST`, `ResourceNotFound`, "… does not exist" — it tells Claude to stop
+and confirm the name and environment with you before hunting for alternatives. Generic
+"not found" / 404 output from normal exploring doesn't trigger it, and it speaks at most
+three times per session. Hooks you already have are kept; `uninstall.sh` removes only this
+one. Review or disable it with `/hooks`.
+
 ## claude-md-email
 
 ```

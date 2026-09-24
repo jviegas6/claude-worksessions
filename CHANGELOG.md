@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.15.0] — 2026-09-24
+
+- **`claude-retro`**: a retrospective on your prompts. Finds friction in the transcripts
+  (missing resources, corrections, interruptions, rejected tool calls, reversals, clarifying
+  questions — including ones asked in plain text), ties each to the prompt before it, and
+  has Claude judge whether the prompt caused it and write a better one. Reports go to
+  `_audit/quality/`, with a week-by-week trend; verdicts are cached.
+- **A "does not exist" hook** (`claude-hook-notfound`), registered by `install.sh` in every
+  profile: when a table, schema, group or Azure resource turns out not to exist, Claude is
+  told to confirm with you before searching for alternatives. Existing hooks are kept;
+  `uninstall.sh` removes it.
+- **A "vague request" hook** (`claude-hook-vague`): on a session's first two prompts, a
+  request that asks for an action but names no concrete target makes Claude ask one or two
+  short questions first — unless the context already answers them.
+
 ## [2.14.0] — 2026-09-23
 
 - **VS Code: filter the sessions** by **day** (today, yesterday, last 7 days, this or last

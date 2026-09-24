@@ -560,7 +560,7 @@ for item in $SHARED_ITEMS; do
   fi
 done
 # Declared once: a `local` inside the loop would print its value on the second pass
-local keep=3650 kstate=""
+local keep=3650 kstate="" hstate=""
 for p in $PROFILES; do
   pdir="$HOME/.claude-$p"
   [[ -d "$pdir" ]] || { run mkdir -p "$pdir"; say "created $pdir"; }
@@ -643,6 +643,44 @@ PY
                 say "$p: transcripts kept $keep days (was Claude Code's default, 30)"
               fi ;;
   esac
+  # Prompt-quality hooks: "doesn't exist → ask first" on commands and MCP tools, and
+  # "vague request → ask first" on a session's first prompts
+  hstate=$(BIN="$HOME/.local/bin" MODE=$(( DRY )) "$PY" - "$pdir/settings.json" <<'PY'
+import json, os, sys
+p, dry = sys.argv[1], os.environ["MODE"] == "1"
+notfound, vague = os.path.join(os.environ["BIN"], "claude-hook-notfound"), os.path.join(os.environ["BIN"], "claude-hook-vague")
+WANT = [("PostToolUse", "Bash|mcp__.*", notfound), ("PostToolUseFailure", "Bash|mcp__.*", notfound),
+        ("UserPromptSubmit", None, vague)]
+try:
+    d = json.load(open(p))
+except FileNotFoundError:
+    d = {}
+except ValueError:
+    print("unparsed"); raise SystemExit
+hooks = d.setdefault("hooks", {})
+added = []
+for event, matcher, hook in WANT:
+    groups = hooks.setdefault(event, [])
+    if any(h.get("command") == hook for g in groups for h in g.get("hooks", [])):
+        continue
+    group = {"hooks": [{"type": "command", "command": hook, "timeout": 10}]}
+    if matcher:
+        group["matcher"] = matcher
+    groups.append(group)
+    added.append(event)
+print("added" if added else "ok")
+if added and not dry:
+    perm = os.stat(p).st_mode & 0o777 if os.path.exists(p) else 0o644
+    open(p + ".tmp", "w").write(json.dumps(d, indent=2) + "\n")
+    os.chmod(p + ".tmp", perm)
+    os.replace(p + ".tmp", p)
+PY
+)
+  case $hstate in
+    ok)       say "$p: prompt-quality hooks in place" ;;
+    unparsed) warn "$p: $pdir/settings.json isn't valid JSON — the prompt-quality hooks weren't added" ;;
+    added)    say "$p: ${${DRY:#0}:+[dry-run] }added the prompt-quality hooks (ask first when something doesn't exist or a request is vague)" ;;
+  esac
 done
 if [[ ! -e "$HOME/.claude" ]]; then link ".claude-$CWS_SHARED_PROFILE" "$HOME/.claude"
 else say "kept ~/.claude"; fi
@@ -679,7 +717,7 @@ done
 # --- 5. commands and skills -----------------------------------------------------------
 step "Commands"
 local b
-for b in claude-audit claude-search claude-sessions claude-vscode claude-md-email claude-delete; do link "$REPO/bin/$b" "$HOME/.local/bin/$b"; done
+for b in claude-audit claude-search claude-sessions claude-vscode claude-md-email claude-delete claude-hook-notfound claude-hook-vague claude-retro; do link "$REPO/bin/$b" "$HOME/.local/bin/$b"; done
 
 # --- 5a. VS Code ------------------------------------------------------------------------
 # The Claude extension's env setting is machine-wide, so it can't follow a session's profile.

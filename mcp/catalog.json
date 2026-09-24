@@ -1,0 +1,358 @@
+{
+  "_about": "Questions install.sh asks (./install.sh --mcp) and the MCP servers each answer brings. Endpoints are vendor-documented (checked 2026-09-24). {{key}} placeholders are asked once and kept in config.env as CWS_MCP_<KEY>; {{secret:key}} values are asked when a server is first configured and kept only in the profile's .claude.json. {{repo}}, {{npx}} and {{python}} are filled in by the installer. Choices with a note are set up outside Claude Code (claude.ai connectors, vendor plugins) and are printed as instructions.",
+  "inputs": {
+    "azure_devops_org": "Azure DevOps organisation (the name in dev.azure.com/<name>)",
+    "gitlab_host": "GitLab host (gitlab.com, or your self-managed host)",
+    "github_token": "GitHub personal access token (GitHub's remote MCP server takes a PAT from Claude Code)",
+    "databricks_host": "Databricks workspace host (e.g. adb-1234567890123456.7.azuredatabricks.net)",
+    "aws_region": "AWS MCP Server region (us-east-1 or eu-central-1)",
+    "databricks_oauth_client_id": "Databricks OAuth app client id (Databricks has no automatic client registration: an account admin creates the app)"
+  },
+  "questions": [
+    {
+      "key": "CWS_MCP_EMAIL",
+      "ask": "What's your email provider?",
+      "choices": [
+        {
+          "id": "microsoft365",
+          "label": "Microsoft 365 / Outlook",
+          "connector": "Microsoft 365 (mail, calendar; the weekly review and daily recap read it)"
+        },
+        {
+          "id": "google",
+          "label": "Gmail / Google Workspace",
+          "connector": "Gmail and Google Calendar"
+        },
+        {
+          "id": "none",
+          "label": "None / not needed"
+        }
+      ]
+    },
+    {
+      "key": "CWS_MCP_CHAT",
+      "ask": "What's your communication channel?",
+      "choices": [
+        {
+          "id": "teams",
+          "label": "Microsoft Teams",
+          "connector": "Microsoft 365 (Teams chats and meetings)"
+        },
+        {
+          "id": "slack",
+          "label": "Slack",
+          "note": "Slack: run `claude plugin install slack` (Slack's own route; it handles sign-in). A workspace admin may need to approve it."
+        },
+        {
+          "id": "none",
+          "label": "None / not needed"
+        }
+      ]
+    },
+    {
+      "key": "CWS_MCP_GIT",
+      "ask": "Which Git provider?",
+      "choices": [
+        {
+          "id": "github",
+          "label": "GitHub",
+          "servers": [
+            "github"
+          ]
+        },
+        {
+          "id": "gitlab",
+          "label": "GitLab",
+          "servers": [
+            "gitlab"
+          ]
+        },
+        {
+          "id": "azure-devops",
+          "label": "Azure DevOps",
+          "servers": [
+            "azure-devops"
+          ]
+        },
+        {
+          "id": "bitbucket",
+          "label": "Bitbucket (via Atlassian)",
+          "servers": [
+            "atlassian"
+          ]
+        },
+        {
+          "id": "none",
+          "label": "None / not needed"
+        }
+      ]
+    },
+    {
+      "key": "CWS_MCP_DOCS",
+      "ask": "Where is your documentation?",
+      "multi": true,
+      "choices": [
+        {
+          "id": "confluence",
+          "label": "Confluence (Atlassian)",
+          "servers": [
+            "atlassian"
+          ]
+        },
+        {
+          "id": "notion",
+          "label": "Notion",
+          "servers": [
+            "notion"
+          ]
+        },
+        {
+          "id": "sharepoint",
+          "label": "SharePoint / OneDrive",
+          "connector": "Microsoft 365 (SharePoint and OneDrive files)"
+        },
+        {
+          "id": "google-drive",
+          "label": "Google Drive",
+          "connector": "Google Drive"
+        },
+        {
+          "id": "slack",
+          "label": "Slack (canvases, channels)",
+          "note": "Slack: run `claude plugin install slack` (Slack's own route; it handles sign-in). A workspace admin may need to approve it."
+        },
+        {
+          "id": "none",
+          "label": "None / not needed"
+        }
+      ]
+    },
+    {
+      "key": "CWS_MCP_TICKETS",
+      "ask": "Which ticketing system?",
+      "choices": [
+        {
+          "id": "jira",
+          "label": "Jira (Atlassian)",
+          "servers": [
+            "atlassian"
+          ]
+        },
+        {
+          "id": "azure-boards",
+          "label": "Azure DevOps Boards",
+          "servers": [
+            "azure-devops"
+          ]
+        },
+        {
+          "id": "github-issues",
+          "label": "GitHub Issues",
+          "servers": [
+            "github"
+          ]
+        },
+        {
+          "id": "linear",
+          "label": "Linear",
+          "servers": [
+            "linear"
+          ]
+        },
+        {
+          "id": "servicenow",
+          "label": "ServiceNow",
+          "note": "ServiceNow: its MCP server is built and hosted on your own instance (MCP Server Console); add it with `claude mcp add --transport http servicenow <its URL>` once your admins have set it up."
+        },
+        {
+          "id": "none",
+          "label": "None / not needed"
+        }
+      ]
+    },
+    {
+      "key": "CWS_MCP_CLOUD",
+      "ask": "Which cloud and data platforms?",
+      "multi": true,
+      "choices": [
+        {
+          "id": "azure",
+          "label": "Azure",
+          "servers": [
+            "azure"
+          ]
+        },
+        {
+          "id": "fabric",
+          "label": "Microsoft Fabric",
+          "servers": [
+            "fabric-core"
+          ]
+        },
+        {
+          "id": "databricks",
+          "label": "Databricks (SQL)",
+          "servers": [
+            "databricks-sql"
+          ]
+        },
+        {
+          "id": "aws",
+          "label": "AWS",
+          "servers": [
+            "aws"
+          ]
+        },
+        {
+          "id": "none",
+          "label": "None / not needed"
+        }
+      ]
+    },
+    {
+      "key": "CWS_MCP_LOOKUP",
+      "ask": "Which documentation should Claude be able to look up?",
+      "multi": true,
+      "choices": [
+        {
+          "id": "microsoft-learn",
+          "label": "Microsoft Learn",
+          "servers": [
+            "microsoft-learn"
+          ]
+        },
+        {
+          "id": "aws-knowledge",
+          "label": "AWS documentation",
+          "servers": [
+            "aws-knowledge"
+          ]
+        },
+        {
+          "id": "context7",
+          "label": "Context7 (library and framework docs)",
+          "servers": [
+            "context7"
+          ]
+        },
+        {
+          "id": "none",
+          "label": "None / not needed"
+        }
+      ]
+    }
+  ],
+  "servers": {
+    "atlassian": {
+      "about": "Jira, Confluence, Bitbucket. Sign in with /mcp the first time.",
+      "config": {
+        "type": "http",
+        "url": "https://mcp.atlassian.com/v2/mcp"
+      }
+    },
+    "github": {
+      "about": "Repos, issues, pull requests. GitHub's remote server takes a personal access token from Claude Code.",
+      "config": {
+        "type": "http",
+        "url": "https://api.githubcopilot.com/mcp/",
+        "headers": {
+          "Authorization": "Bearer {{secret:github_token}}"
+        }
+      }
+    },
+    "gitlab": {
+      "about": "Sign in with /mcp the first time.",
+      "config": {
+        "type": "http",
+        "url": "https://{{gitlab_host}}/api/v4/mcp"
+      }
+    },
+    "azure-devops": {
+      "about": "Repos, boards, pipelines. Signs in with your browser or Azure CLI.",
+      "config": {
+        "type": "stdio",
+        "command": "{{npx}}",
+        "args": [
+          "-y",
+          "@azure-devops/mcp",
+          "{{azure_devops_org}}"
+        ]
+      }
+    },
+    "notion": {
+      "about": "Sign in with /mcp the first time.",
+      "config": {
+        "type": "http",
+        "url": "https://mcp.notion.com/mcp"
+      }
+    },
+    "linear": {
+      "about": "Sign in with /mcp the first time.",
+      "config": {
+        "type": "http",
+        "url": "https://mcp.linear.app/mcp"
+      }
+    },
+    "azure": {
+      "about": "Uses your az login.",
+      "config": {
+        "type": "stdio",
+        "command": "{{npx}}",
+        "args": [
+          "-y",
+          "@azure/mcp@latest",
+          "server",
+          "start"
+        ]
+      }
+    },
+    "fabric-core": {
+      "about": "Fabric's endpoint has no client registration for Claude Code, so a small proxy in this repo uses your az login.",
+      "config": {
+        "type": "stdio",
+        "command": "{{python}}",
+        "args": [
+          "{{repo}}/mcp/fabric-core-proxy.py"
+        ]
+      }
+    },
+    "databricks-sql": {
+      "about": "Databricks managed MCP (SQL). Needs an account-level OAuth app's client id; sign in with /mcp.",
+      "config": {
+        "type": "http",
+        "url": "https://{{databricks_host}}/api/2.0/mcp/sql",
+        "oauth": {
+          "clientId": "{{databricks_oauth_client_id}}"
+        }
+      }
+    },
+    "aws": {
+      "about": "The AWS MCP Server. Sign in with /mcp (OAuth).",
+      "config": {
+        "type": "http",
+        "url": "https://aws-mcp.{{aws_region}}.api.aws/mcp"
+      }
+    },
+    "microsoft-learn": {
+      "about": "No sign-in.",
+      "config": {
+        "type": "http",
+        "url": "https://learn.microsoft.com/api/mcp"
+      }
+    },
+    "aws-knowledge": {
+      "about": "No sign-in.",
+      "config": {
+        "type": "http",
+        "url": "https://knowledge-mcp.global.api.aws"
+      }
+    },
+    "context7": {
+      "about": "No sign-in needed (an API key only raises rate limits).",
+      "config": {
+        "type": "http",
+        "url": "https://mcp.context7.com/mcp"
+      }
+    }
+  }
+}

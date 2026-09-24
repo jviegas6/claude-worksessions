@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.15.0] — 2026-09-24
+
+- **MCP servers are part of the install.** `./install.sh --mcp` (and the first run) asks
+  what you use — email, communication, Git, documentation, ticketing, cloud and data, docs
+  lookup — and `mcp/catalog.json` turns the answers into vendor-documented MCP servers,
+  given to every profile alike so they no longer drift. Company-specific values (an
+  organisation, a workspace host, an OAuth client id) go in `config.env`; secrets only in
+  each profile's private `.claude.json`. Services that connect only through your Claude
+  account (Microsoft 365, Gmail) are listed as claude.ai connectors to switch on.
+- Servers you added yourself, and settings the catalog doesn't manage on its servers, are
+  kept. `.claude.json` is backed up to `.claude.json.bak-mcp` before a change.
+- The Fabric Core proxy (`mcp/fabric-core-proxy.py`) now ships with the repo.
+
 ## [2.14.0] — 2026-09-23
 
 - **VS Code: filter the sessions** by **day** (today, yesterday, last 7 days, this or last

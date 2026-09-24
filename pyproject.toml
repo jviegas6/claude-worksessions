@@ -4,7 +4,7 @@ addopts = "--cov --cov-report=term-missing"
 
 [tool.coverage.run]
 # bin/ scripts have no .py suffix, so they are measured once the tests import them.
-include = ["bin/*", "vscode/*.py"]
+include = ["bin/*", "vscode/*.py", "mcp/configure.py"]
 branch = false
 
 [tool.coverage.report]

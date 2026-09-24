@@ -59,9 +59,11 @@ role, time zone (guessed from the system), example ticket key, and then your pro
 as many as you want, each either a **Claude subscription** (you sign in) or an
 **inference gateway** (base URL + token). `./install.sh --profiles` changes them later.
 
-Two things stay outside the package: **connectors** (Atlassian for the weekly review,
-Microsoft 365 for the recap) come with your Claude account once you sign in, and any
-**local MCP servers** you use are configured in Claude Code itself.
+**MCP servers** — the tools Claude connects to — are chosen by answering a few questions
+(email, chat, Git, documentation, tickets, cloud and data, docs lookup) on the first run or
+with `./install.sh --mcp`. Every profile then gets the same servers. Services that only
+connect through your Claude account (Microsoft 365, Gmail) are listed as claude.ai
+connectors to switch on. See [docs/configuration.md](docs/configuration.md#mcp-servers).
 
 ## Configure
 

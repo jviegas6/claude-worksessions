@@ -65,6 +65,41 @@ shared profile and re-run.
 
 `~/.claude` is linked to the shared profile if it doesn't exist yet.
 
+## MCP servers
+
+`./install.sh --mcp` (and the first run) asks what you use:
+
+| question | choices |
+|---|---|
+| email provider | Microsoft 365 / Outlook, Gmail / Google Workspace |
+| communication channel | Microsoft Teams, Slack |
+| Git provider | GitHub, GitLab, Azure DevOps, Bitbucket |
+| documentation | Confluence, Notion, SharePoint / OneDrive, Google Drive, Slack |
+| ticketing | Jira, Azure DevOps Boards, GitHub Issues, Linear, ServiceNow |
+| cloud and data | Azure, Microsoft Fabric, Databricks, AWS |
+| docs lookup | Microsoft Learn, AWS documentation, Context7 |
+
+`mcp/catalog.json` maps each answer to vendor-documented MCP servers — nothing
+company-specific is in it. The answers, and what the servers need to know about your
+company (Azure DevOps organisation, GitLab host, Databricks workspace host and OAuth client
+id, AWS region), are saved in `config.env` as `CWS_MCP_*`. **Secrets** (a GitHub token) are
+asked for when a server is first set up and kept only in the profile's own `.claude.json`
+(private, 0600) — never in `config.env` or the repo.
+
+Every install then gives **each profile the same servers**, so profiles don't drift. It only
+manages servers named in the catalog: it adds or updates the ones you chose and removes the
+ones you no longer choose. Servers you added yourself under other names are left alone, and
+so are settings it doesn't manage on its own servers (an OAuth client id, extra headers). It
+backs up `.claude.json` to `.claude.json.bak-mcp` before changing it.
+
+Some choices can't be set up as a local server — Microsoft 365 and Gmail sign in only through
+your company's app registration — so the installer tells you to switch on the **claude.ai
+connector** instead; Slack uses its own Claude plugin (`claude plugin install slack`), and
+ServiceNow a server your admins host. Servers that sign in through the browser (Atlassian,
+GitLab, Notion, Linear, Databricks, AWS) do it the first time you run `/mcp`.
+
+`python3 mcp/configure.py show <config.env>` prints what your answers select.
+
 ## Transcript retention
 
 Claude Code deletes transcripts it hasn't written to for `cleanupPeriodDays` days —

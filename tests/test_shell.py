@@ -255,11 +255,11 @@ def test_install_prints_no_stray_assignments(tmp_path):
     assert stray == []
 
 
-def dry_install(tmp_path, os_name, path=None, shell="/bin/zsh"):
+def dry_install(tmp_path, os_name, path=None, shell="/bin/zsh", extra=""):
     """install.sh --dry-run --yes as if on `os_name`, against a throwaway home."""
     conf = tmp_path / "ws" / "_config" / "config.env"
     conf.parent.mkdir(parents=True, exist_ok=True)
-    conf.write_text('CWS_WORK_ROOT="{}/ws"\nCWS_PROFILES="personal work"\n'.format(tmp_path))
+    conf.write_text('CWS_WORK_ROOT="{}/ws"\nCWS_PROFILES="personal work"\n'.format(tmp_path) + extra)
     link = tmp_path / ".config" / "claude-worksessions" / "config.env"
     link.parent.mkdir(parents=True, exist_ok=True)
     if not link.exists():
@@ -524,3 +524,16 @@ def test_install_writes_retention_keeping_other_settings(tmp_path):
     assert json.loads((prof / "settings.json").read_text()) == {"model": "opus", "cleanupPeriodDays": 3650}
     assert oct(os.stat(prof / "settings.json").st_mode & 0o777) == "0o600"
     assert list(prof.glob("settings.json.bak-*"))
+
+
+def test_install_mcp_step(tmp_path):
+    r = dry_install(tmp_path, "mac")
+    assert "▸ MCP servers" in r.stdout and "not set up yet -- run ./install.sh --mcp" in r.stdout
+    r = dry_install(tmp_path, "mac", extra='CWS_MCP_LOOKUP="microsoft-learn"\nCWS_MCP_EMAIL="google"\n')
+    assert "personal: [dry-run] added microsoft-learn" in r.stdout
+    assert "connect in claude.ai (Settings > Connectors): Gmail and Google Calendar" in r.stdout
+
+
+def test_install_accepts_the_mcp_flag():
+    src = open(os.path.join(REPO, "install.sh")).read()
+    assert "--mcp)     MCP_ASK=1" in src and "./install.sh --mcp" in src

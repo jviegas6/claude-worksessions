@@ -8,6 +8,7 @@
 #   ./install.sh --no-brew            don't install packages (Homebrew, apt, dnf, ...)
 #   ./install.sh --no-bootstrap       don't install anything missing, just report it
 #   ./install.sh --profiles           add/remove/rename profiles, then install
+#   ./install.sh --mcp                choose the tools Claude connects to (MCP servers), then install
 #   ./install.sh --update [vX.Y.Z]    move the checkout to the newest (or named) release
 #   ./install.sh --edge               move the checkout to main, then install
 #   ./install.sh --yes                don't prompt (tokens are then skipped)
@@ -18,7 +19,7 @@ setopt pipe_fail
 
 REPO="${0:A:h}"
 VERSION="$(<"$REPO/VERSION")"
-DRY=0 BREW=1 YES=0 NOBOOT=0 RECONF=0 UPDATE=0 EDGE=0 TARGET="" CONFIG=""
+DRY=0 BREW=1 YES=0 NOBOOT=0 RECONF=0 MCP_ASK=0 UPDATE=0 EDGE=0 TARGET="" CONFIG=""
 STAMP="$(date +%Y%m%d-%H%M%S)"
 
 while (( $# )); do
@@ -28,6 +29,7 @@ while (( $# )); do
     --no-brew) BREW=0; shift ;;
     --no-bootstrap) NOBOOT=1; BREW=0; shift ;;
     --profiles|--reconfigure) RECONF=1; shift ;;
+    --mcp)     MCP_ASK=1; shift ;;
     --update)  UPDATE=1; shift
                if [[ "$1" == v* ]]; then TARGET="$1"; shift; fi ;;
     --edge)    UPDATE=1; EDGE=1; shift ;;
@@ -675,6 +677,21 @@ for p in $PROFILES; do
     warn "$p: skipped — run later: CLAUDE_CONFIG_DIR=$pdir claude"
   fi
 done
+
+# --- 4c. MCP servers ----------------------------------------------------------------------
+# What you use (email, chat, git, docs, tickets, cloud) decides the servers; mcp/catalog.json
+# maps answers to servers, config.env keeps the answers, each profile gets the same servers.
+step "MCP servers"
+local mcp_q=0
+grep -q '^CWS_MCP_' "$CONFIG" 2>/dev/null || mcp_q=1
+if (( MCP_ASK || (mcp_q && FIRST_RUN) )) && (( ! DRY && ! YES )); then
+  "$PY" "$REPO/mcp/configure.py" ask "$CONFIG"
+fi
+local -a mcp_dirs=() mcp_flags=()
+for p in $PROFILES; do mcp_dirs+=("$HOME/.claude-$p"); done
+(( DRY )) && mcp_flags+=(--dry-run)
+(( YES )) && mcp_flags+=(--yes)
+"$PY" "$REPO/mcp/configure.py" apply "$CONFIG" $mcp_dirs $mcp_flags | sed 's/^/  /'
 
 # --- 5. commands and skills -----------------------------------------------------------
 step "Commands"

@@ -82,6 +82,8 @@ it. See [docs/configuration.md](docs/configuration.md).
 
 ## Docs
 
+- [User guide](docs/user-guide.md) — how to use it, task by task
+- [High-Level Design](docs/hld.md) and [Low-Level Design](docs/lld.md) — how it works
 - [Configuration](docs/configuration.md) — every setting, profiles, gateway tokens
 - [Commands](docs/commands.md) — `claude-new`, `claude-audit`, `claude-search`, `claude-sessions`, the VS Code sidebar, `ws`, `y`, yazi keys
 - [Folder layout](docs/folder-layout.md) — what goes where, and moving folders safely

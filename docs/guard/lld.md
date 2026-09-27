@@ -5,6 +5,7 @@
 | Component | `bin/claude-guard`, the `claude-new` / `claude-goal` changes in `shell/worksessions.zsh`, hook registration in `install.sh` / `uninstall.sh` |
 | Version | claude-worksessions 2.16.0 |
 | Companion documents | [High-Level Design](hld.md) · [User guide](user-guide.md) |
+| Part of | claude-worksessions: [HLD](../hld.md) · [LLD](../lld.md) |
 
 This document describes the implementation as it is. Names in `code` are the identifiers
 in `bin/claude-guard` unless stated otherwise.

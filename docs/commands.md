@@ -186,10 +186,15 @@ by side.
 | folder on a request | reveal it in the Explorer (right-click: in Finder, a new window, set task type) |
 | **Files** under a request | the request folder's files as a tree — click to open (Markdown in the preview), right-click to reveal in Finder or copy the path |
 
+Every request folder is listed, including one with no session yet (just created, closed
+before the first prompt, or only written to from another session): it shows with its
+**Files** and no sessions, sorted by when its files last changed.
+
 **Search box.** Above the tree: typing filters it to the sessions whose title, prompts,
-request name, ticket, task type, profile, folder or file names contain every word — and a
-request's **Files** narrow to the files that match, and opens every
-group so the matches show; `Esc` or the clear button in the title bar resets it. **Enter**
+request name, ticket, task type, profile, folder or file names contain every word, and
+opens every group so the matches show. A request's **Files** narrow only by the words that
+matched nothing but file names — a request found by its name, ticket or sessions keeps all
+its files — and then say so: **Files 1 of 4**; `Esc` or the clear button in the title bar resets it. **Enter**
 runs `claude-search` on the text, which also looks inside the conversations, and lists
 the hits to pick from. Drag the divider to resize the box; VS Code remembers it.
 

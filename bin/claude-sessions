@@ -6,7 +6,9 @@
   claude-sessions -a       all of them
   claude-sessions --json   the same as JSON, with each session's title, last prompt, the files
                            it wrote, and its request folder (ticket, task type, profile, files)
-                           -- for the VS Code sidebar
+                           -- for the VS Code sidebar. Its "requests" are the request folders
+                           no listed session with a prompt belongs to, so new and
+                           session-less requests show too
 
 One line per session: last activity, session id, the folder it ran in (where that
 folder lives now, if it was moved since) and the first prompt.
@@ -14,6 +16,7 @@ folder lives now, if it was moved since) and the first prompt.
 
 import argparse
 import datetime as dt
+import glob
 import importlib.machinery
 import importlib.util
 import json
@@ -410,7 +413,32 @@ def as_json(rows):
                     "first_prompt": None if first == "(no prompt)" else first,
                     "started": began, "written": written, "request": request})
     save_written_cache(cache)
-    return {"work_root": root, "sessions": value_check(out)}
+    return {"work_root": root, "sessions": value_check(out), "requests": idle_requests(out, listed)}
+
+
+def idle_requests(entries, listed):
+    """Request folders (YYYY/MM/DD/slug with a .session.json) that none of the listed sessions
+    with a prompt belongs to: just created, closed before the first prompt, or only written to
+    from another session. Each with the request fields, its files and the time it last changed."""
+    busy = {e["request"]["path"] for e in entries
+            if e["request"] and (e["title"] or e["first_prompt"] or e["last_prompt"])}
+    pattern = os.path.join(CA.DEFAULT_ROOT, "[0-9]" * 4, "[0-9][0-9]", "[0-9][0-9]", "*", ".session.json")
+    out = []
+    for meta in sorted(glob.glob(pattern)):
+        folder = os.path.dirname(meta)
+        if folder in busy:
+            continue
+        info = request_info(folder, None)
+        files, truncated = listed.get(folder) or folder_files(folder)
+        times = []
+        for p in [meta] + [os.path.join(folder, f) for f in files]:
+            try:
+                times.append(os.path.getmtime(p))
+            except OSError:
+                pass
+        info.update(files=files, files_truncated=truncated, mtime=max(times) if times else 0)
+        out.append(info)
+    return out
 
 
 def main():

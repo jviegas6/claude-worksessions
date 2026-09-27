@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.16.1] — 2026-09-27
+
+- **Sidebar: request folders with no session now show** (#23), with their files: a request
+  just created, closed before the first prompt, or only written to from another session.
+  `claude-sessions --json` lists them under `requests`; they follow the search, filters,
+  sort, grouping and pins like any other request.
+- **Sidebar: the search no longer hides files silently** (#24). A request's Files narrow
+  only by the words that matched nothing but file names, so a request found by its name,
+  ticket or sessions keeps all its files; when the list is narrowed the count says so
+  (`Files 1 of 4`).
+
 ## [2.16.0] — 2026-09-26
 
 - **`claude-guard`**: keeps a session on the request it was given. Three hooks, registered

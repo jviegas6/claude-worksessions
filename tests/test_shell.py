@@ -567,9 +567,11 @@ def test_install_registers_the_notfound_hook_and_uninstall_removes_it(tmp_path):
     sp = tmp_path / ".claude-personal" / "settings.json"
     d = json.loads(sp.read_text())
     d["hooks"]["PreToolUse"][0]["matcher"] = "Read|Glob|Grep|WebFetch|WebSearch|Bash|mcp__.*"
+    d["hooks"]["Stop"][0]["hooks"][0]["timeout"] = 10
     sp.write_text(json.dumps(d))
     r = run("install.sh", "--yes", "--no-bootstrap")
     assert "personal: added the prompt-quality hooks" in r.stdout
+    assert json.loads(sp.read_text())["hooks"]["Stop"][0]["hooks"][0]["timeout"] == 20
     pre = json.loads(sp.read_text())["hooks"]["PreToolUse"]
     assert len(pre) == 1 and pre[0]["matcher"] == "Read|Glob|Grep|WebFetch|WebSearch|Bash|Write|Edit|MultiEdit|NotebookEdit|mcp__.*"
     s = json.loads((tmp_path / ".claude-work" / "settings.json").read_text())
@@ -580,7 +582,7 @@ def test_install_registers_the_notfound_hook_and_uninstall_removes_it(tmp_path):
                                               {"hooks": [{"type": "command", "command": guard + " prompt", "timeout": 30}]}]
     assert s["hooks"]["PreToolUse"] == [{"matcher": "Read|Glob|Grep|WebFetch|WebSearch|Bash|Write|Edit|MultiEdit|NotebookEdit|mcp__.*",
                                          "hooks": [{"type": "command", "command": guard + " tool", "timeout": 5}]}]
-    assert s["hooks"]["Stop"] == [{"hooks": [{"type": "command", "command": guard + " stop", "timeout": 10}]}]
+    assert s["hooks"]["Stop"] == [{"hooks": [{"type": "command", "command": guard + " stop", "timeout": 20}]}]
     assert (tmp_path / "ws" / "_config" / "guard-rules.md").read_text().startswith("<!-- claude-guard")
     assert os.path.islink(hook) and os.path.islink(tmp_path / ".local" / "bin" / "claude-retro")
     r = run("uninstall.sh")

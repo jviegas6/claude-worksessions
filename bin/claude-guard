@@ -79,6 +79,12 @@ TEMP_ROOTS = ("/tmp", "/private/tmp")      # scratch space, besides the system t
 REACH_TOOLS = re.compile(r"^(Read|Glob|Grep|WebFetch|WebSearch|Bash|mcp__.*)$")
 WORDS = re.compile(r"[a-z0-9][a-z0-9._-]{2,}")
 LOOP_AFTER = 3                      # the same call this many times in one request is a loop
+INVESTIGATION = 3                   # reads in one request that make it an investigation (next steps expected)
+VERDICT_WAIT = 15.0                 # warn: how long the end of an answer waits for its prompt's verdict
+                                    # (under the Stop hook's 20 s timeout; the judge takes 5-12 s)
+VERDICT_STALE = 30.0                # ... never for a judge started longer ago than this
+BRIEF = re.compile(r"\b(just|only|one line|one-liner|briefly|in short|short answer|no explanation|"
+                   r"s[oó]|apenas|numa linha|resumidamente)\b", re.I)
 PROPOSALS = re.compile(r"(next (step|level)|could also|if you want|want me to|shall i|should i|would you like|"
                        r"deeper|próxim|posso |queres|quer que|se quiseres|aprofund|pr[oó]ximo passo)", re.I)
 
@@ -405,6 +411,8 @@ def apply_verdict(sdir, job, cfg, ans, err, ms):
     reason = "" if err else ans.get("reason", "")
     with scope(sdir, job["sid"]) as st:
         current = st.get("prompt_no") == job["no"]                     # not overtaken by a later prompt
+        if (st.get("judging") or {}).get("no") == job["no"]:
+            st.pop("judging")
         # drift: extensions add up. Past the allowance, one more is a new objective too
         widened = int(st.get("extensions") or 0)
         drift = verdict == "extension" and current and widened >= cfg["max_ext"]
@@ -545,13 +553,16 @@ def on_prompt(payload, cfg):
         if not trivial(prompt):                     # words that can name a repo: "claude-worksessions"
             st["words"] = sorted(set(st.get("words") or []) | set(WORDS.findall(prompt.lower())))[-400:]
         if FORCE.match(prompt):
-            st.update(open=True, turn=new_turn(), literal=FORCE.sub("", prompt)[:300])
+            st.update(open=True, turn=new_turn(), literal=FORCE.sub("", prompt)[:300], prompt=prompt[:300])
             log(sdir, dict(base, decision="allow", type="ok", override=True, reason="force: prefix"))
             return show(pending, cfg)
         if trivial(prompt):                        # a confirmation or a command: same request goes on
             st["turn"] = new_turn()
             return show(pending, cfg)
         st["turn"] = new_turn()
+        st["prompt"] = prompt[:300]
+        if cfg["mode"] in BACKGROUND:
+            st["judging"] = {"no": no, "at": time.time()}     # the end of the answer can wait for it
         widen, names = bool(WIDEN.search(prompt)), sorted(prompt_anchors(prompt))
         if cfg["mode"] in BACKGROUND:            # nothing is blocked: the new names count at once
             grow(st, names, widen)
@@ -686,6 +697,20 @@ def learn(sdir, sid, path, roots, base):
     return None
 
 
+def await_verdict(sdir, sid):
+    """Warn mode: the judge runs in the background and a short answer can finish first. Wait a
+    little for this prompt's verdict, so its notice shows with the answer rather than a prompt
+    later. Never for a judge that started too long ago (it may have died)."""
+    deadline = time.time() + VERDICT_WAIT
+    while True:
+        with scope(sdir, sid) as st:
+            judging = st.get("judging") or {}
+            waiting = judging.get("no") == st.get("prompt_no") and time.time() - judging.get("at", 0) < VERDICT_STALE
+        if not waiting or time.time() >= deadline:
+            return
+        time.sleep(0.25)
+
+
 def deny(cfg, reason, pending=()):
     """Enforce: deny the call. Warn: show what enforce would have denied. Shadow: nothing."""
     if cfg["mode"] != "enforce":
@@ -699,8 +724,11 @@ def on_stop(payload, cfg):
     if not sdir:
         return None
     sid = payload.get("session_id") or "none"
+    if cfg["mode"] == "warn" and not payload.get("stop_hook_active"):
+        await_verdict(sdir, sid)
     pending = notices(sdir, sid, cfg)
     with scope(sdir, sid) as st:
+        asked = st.get("prompt") or ""
         turn = st.get("turn") or new_turn()
         no = st.get("prompt_no")
         if not payload.get("stop_hook_active"):
@@ -708,7 +736,8 @@ def on_stop(payload, cfg):
     if turn.get("stopped") and not payload.get("stop_hook_active"):
         return show(pending, cfg)                       # nothing happened since the last stop
     text = payload.get("last_assistant_message") or ""
-    investigated = turn.get("reach", 0) >= 2
+    # next steps are expected after a real investigation, unless the prompt asked for brevity
+    investigated = (turn.get("reach", 0) >= INVESTIGATION or bool(turn.get("outside"))) and not BRIEF.search(asked)
     missing = investigated and not payload.get("stop_hook_active") and not (
         PROPOSALS.search(text[-800:]) or text.rstrip().endswith("?"))
     typ = "depth" if (turn.get("outside") or missing) else "ok"

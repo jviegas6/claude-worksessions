@@ -538,15 +538,29 @@ return None
 
 ```
 sdir none → return
-with scope: turn = st.turn or new; if not stop_hook_active: st.turn.stopped = True
+warn and not stop_hook_active → await_verdict()      # wait for this prompt's verdict, see below
+pending = notices()                                   # warn only
+with scope: asked = st.prompt; turn = st.turn or new; if not stop_hook_active: st.turn.stopped = True
 if turn.stopped (already before this call) and not stop_hook_active: return   # nothing new since last stop
-investigated = turn.reach >= 2
+investigated = (turn.reach >= INVESTIGATION (3) or turn.outside) and not BRIEF in asked
 missing = investigated and not stop_hook_active
           and not (PROPOSALS in last 800 chars of last_assistant_message or it ends with "?")
 type = depth if turn.outside or missing else ok
 log stop (decision block if missing, reason lists "went outside the targets: …" and/or "no next-level proposals at the end")
 enforce and missing → block JSON
+warn → systemMessage: pending notices, plus "the answer ended without proposing what to look at next" if missing
 ```
+
+**When next steps are expected:** after a real investigation, meaning 3 or more reading calls in
+the request, or any read outside it. Never when the prompt asked for brevity: `BRIEF` matches
+*just*, *only*, *one line*, *one-liner*, *briefly*, *in short*, *short answer*, *no explanation*,
+*só*, *apenas*, *numa linha*, *resumidamente*. `st.prompt` holds the request's text (first 300 chars).
+
+**Waiting for the verdict (warn):** `on_prompt` records `st.judging = {no, at}` when it starts the
+background judge; `apply_verdict` clears it for its prompt. `await_verdict` polls every 0.25 s
+while the current prompt's judge is still running, for at most `VERDICT_WAIT` (15 s), and never
+for one started more than `VERDICT_STALE` (30 s) ago. A short answer therefore carries its
+prompt's notice instead of the next prompt. The Stop hook's timeout is 20 s.
 
 `PROPOSALS` (case-insensitive): `next step`, `next level`, `could also`, `if you want`, `want me
 to`, `shall i`, `should i`, `would you like`, `deeper`, `próxim*`, `posso `, `queres`, `quer que`,
@@ -652,7 +666,7 @@ hook merge adds any missing entry, matched by exact `command`, and keeps the use
 | `UserPromptSubmit` | — | `~/.local/bin/claude-hook-vague` | 10 |
 | `UserPromptSubmit` | — | `~/.local/bin/claude-guard prompt` | 30 |
 | `PreToolUse` | `Read\|Glob\|Grep\|WebFetch\|WebSearch\|Bash\|Write\|Edit\|MultiEdit\|NotebookEdit\|mcp__.*` | `~/.local/bin/claude-guard tool` | 5 |
-| `Stop` | — | `~/.local/bin/claude-guard stop` | 10 |
+| `Stop` | — | `~/.local/bin/claude-guard stop` | 20 |
 
 It also:
 
@@ -761,7 +775,9 @@ at 99% (`claude-guard` 99%).
 | `CWS_GUARD_IGNORE_NAMES` | config | — | extra code-object first parts to ignore |
 | `_config/guard-rules.md` | work root | example | the judge's criteria |
 | `LOOP_AFTER` | code | 3 | identical calls per request that make a loop |
-| investigation threshold | code (`on_stop`) | 2 reading calls | when proposals are expected |
+| `INVESTIGATION` | code | 3 reading calls (or any read outside) | when proposals are expected |
+| `BRIEF` | code | just, only, one line, … | prompts that asked for brevity: no proposals expected |
+| `VERDICT_WAIT` / `VERDICT_STALE` | code | 15 s / 30 s | warn: how long the end of an answer waits for its prompt's verdict |
 | proposal window | code (`on_stop`) | last 800 chars | where proposals are looked for |
 | prompt sent to the judge | code | 4,000 chars | truncation |
 | logged prompt / literal / reason | code | 200 / 300 / 400 chars | log size |

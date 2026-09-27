@@ -656,7 +656,7 @@ WANT = [("PostToolUse", "Bash|mcp__.*", notfound, 10), ("PostToolUseFailure", "B
         ("UserPromptSubmit", None, vague, 10), ("UserPromptSubmit", None, guard + " prompt", 30),
         ("PreToolUse", "Read|Glob|Grep|WebFetch|WebSearch|Bash|Write|Edit|MultiEdit|NotebookEdit|mcp__.*",
          guard + " tool", 5),
-        ("Stop", None, guard + " stop", 10)]
+        ("Stop", None, guard + " stop", 20)]
 try:
     d = json.load(open(p))
 except FileNotFoundError:
@@ -669,10 +669,15 @@ for event, matcher, hook, timeout in WANT:
     groups = hooks.setdefault(event, [])
     mine = [g for g in groups if any(h.get("command") == hook for h in g.get("hooks", []))]
     if mine:
-        # ours already, perhaps with an older matcher: bring a group holding only our hook up to date
+        # ours already, perhaps from an older release: bring a group holding only our hook up to date
         for g in mine:
-            if matcher and g.get("matcher") != matcher and len(g.get("hooks", [])) == 1:
+            if len(g.get("hooks", [])) != 1:
+                continue
+            if matcher and g.get("matcher") != matcher:
                 g["matcher"] = matcher
+                added.append(event)
+            if g["hooks"][0].get("timeout") != timeout:
+                g["hooks"][0]["timeout"] = timeout
                 added.append(event)
         continue
     group = {"hooks": [{"type": "command", "command": hook, "timeout": timeout}]}

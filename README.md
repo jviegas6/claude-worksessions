@@ -14,6 +14,9 @@ across past sessions, and daily/weekly review skills — all driven by one confi
 | `claude-search` | find past sessions by ticket or topic, with the command to resume each |
 | `claude-sessions` | the most recent sessions across all profiles: when, id, folder, first prompt |
 | `claude-delete` | move a session with no value (no artifacts, or started with `-n`) to a bin you can restore from, after saying what that means — also **Delete session…** in VS Code |
+| prompt-quality hooks | Claude asks first when a request is vague or something it was asked about doesn't exist |
+| `claude-guard` | keeps a session on its goal: flags (or blocks) pivots to a new objective, reads outside the request's scope and repeated calls, and asks for next-level proposals instead of doing them; `claude-goal` re-anchors |
+| `claude-retro` | a retrospective on your prompts: where work stalled (a resource that didn't exist, corrections, interruptions, clarifying questions), whether the prompt caused it, and a better version — with a trend from week to week |
 | `claude-md-email` | a Markdown file onto the clipboard, formatted for email (black on white, Calibri, bordered tables) — also **Copy for email** in VS Code |
 | `ws` / `y` | fuzzy-jump to a request folder; browse it in yazi |
 | `weekly-review` skill | fills the weekly tracker, asking only about what's new |
@@ -72,6 +75,7 @@ Everything specific to you lives in `<work root>/_config/`, not in this repo:
 | `config.env` | work root, org, time zone, ticket format, Jira cloud id, profiles, gateway URL |
 | `context.md` | standing context every session starts with — tenants, subscriptions, workspaces, repos |
 | `review-rules.md` | your weekly-review house rules — default task, catch-all epics, tickets to ignore |
+| `guard-rules.md` | what `claude-guard`'s judge counts as a pivot |
 
 Put the work root in a synced folder (OneDrive, iCloud) and your config travels with
 it. See [docs/configuration.md](docs/configuration.md).
@@ -81,6 +85,7 @@ it. See [docs/configuration.md](docs/configuration.md).
 - [Configuration](docs/configuration.md) — every setting, profiles, gateway tokens
 - [Commands](docs/commands.md) — `claude-new`, `claude-audit`, `claude-search`, `claude-sessions`, the VS Code sidebar, `ws`, `y`, yazi keys
 - [Folder layout](docs/folder-layout.md) — what goes where, and moving folders safely
+- [claude-guard](docs/guard/user-guide.md) — keeping sessions on their goal: [user guide](docs/guard/user-guide.md), [HLD](docs/guard/hld.md), [LLD](docs/guard/lld.md)
 - [New computer](docs/new-computer.md) — moving the whole setup
 - [Releasing](docs/releasing.md) — versions, tags and GitHub releases
 - [Changelog](CHANGELOG.md)

@@ -1,0 +1,379 @@
+#!/usr/bin/env python3
+"""claude-retro: a retrospective on how your prompts went -- where work stalled, why, and
+what a better prompt would have been.
+
+  claude-retro                  the last 7 days
+  claude-retro --days 14        the last 14 days
+  claude-retro --week [DATE]    the Monday-Sunday week containing DATE (default: last week)
+  claude-retro --no-judge       only count the friction signals (no Claude calls)
+
+It finds friction in the transcripts -- a resource that turned out not to exist, a
+correction ("no, I meant ..."), an interruption, a rejected tool call, a reversal ("roll it
+back"), a clarifying question -- and ties each to the prompt that led to it. Claude then
+judges, per session, whether the prompt was the cause (assumed something existed, left the
+target ambiguous, clashed with an earlier instruction, gave no outcome, changed scope) and
+writes a better version. Only high- and medium-confidence verdicts count as prompt-caused.
+
+The report goes to <work root>/_audit/quality/<from>_<to>_retro.md, and each run adds a
+line to _audit/quality/history.json, so the trend shows from report to report. Verdicts
+are cached in _audit/quality/judged.json: re-running a period costs nothing new.
+"""
+
+import argparse
+import concurrent.futures as cf
+import datetime as dt
+import hashlib
+import importlib.machinery
+import importlib.util
+import json
+import os
+import re
+import subprocess
+import sys
+
+HOME = os.path.expanduser("~")
+
+
+def load_sessions():
+    path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "claude-sessions")
+    if not os.path.isfile(path):
+        path = os.path.join(HOME, ".local", "bin", "claude-sessions")
+    loader = importlib.machinery.SourceFileLoader("claude_sessions", path)
+    spec = importlib.util.spec_from_loader("claude_sessions", loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+CS = load_sessions()
+CA = CS.CA
+QUALITY = os.path.join(CA.DEFAULT_OUT_DIR, "quality")
+
+MISSING = re.compile(r"(does not exist|doesn'?t exist|not found|no such file|_NOT_FOUND|cannot find|could not find|"
+                     r"ResourceNotFound|NotFound|\b404\b|DOES_NOT_EXIST)", re.I)
+CORRECTION = re.compile(r"^\s*(no[,. !]|nope\b|that'?s not|wrong\b|i meant|not what i|actually,? i|"
+                        r"you (misunderstood|got it wrong)|that isn'?t)", re.I)
+REVERSAL = re.compile(r"\b(undo|revert|roll ?(it |that |this |everything )?back|revoke|abandon|scrap that|forget (it|that))\b", re.I)
+OFFER = re.compile(r"^\s*(shall i|should i|want me|do you want|would you like|ready to|can i|may i)\b", re.I)
+ASKS = re.compile(r"\b(which|what|where|do you mean|did you mean|clarify|confirm|is it|are they|or)\b", re.I)
+CAUSES = ["assumed-exists", "ambiguous-target", "conflicting-instructions", "missing-acceptance",
+          "scope-change", "claude-error", "normal"]
+
+
+def text_of(content):
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text")
+    return ""
+
+
+def clip(s, n=400):
+    s = re.sub(r"\s+", " ", s or "").strip()
+    return s if len(s) <= n else s[:n] + "…"
+
+
+def real_prompt(t):
+    t = (t or "").strip()
+    return bool(t) and not t.startswith(("<", "[Request interrupted", "Caveat:"))
+
+
+def asks_back(text):
+    """The clarifying question an assistant message ends on, or None. Offers ("Shall I ...?")
+    are not clarifications."""
+    last = [s for s in re.split(r"(?<=[.!?])\s+|\n+", (text or "").strip()) if s.strip()]
+    q = last[-1].strip() if last else ""
+    if not q.endswith("?") or OFFER.search(q) or not ASKS.search(q):
+        return None
+    return q
+
+
+def scan(path):
+    """(episodes, prompts) for one transcript. Each episode: kind, the prompt before it, a detail."""
+    episodes, prompt, calls, n, said = [], None, {}, 0, ""
+    with open(path, errors="replace") as fh:
+        for line in fh:
+            try:
+                m = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(m, dict) or m.get("isSidechain") or m.get("isMeta"):
+                continue
+            content = (m.get("message") or {}).get("content")
+            if m.get("type") == "assistant" and isinstance(content, list):
+                for b in content:
+                    if not isinstance(b, dict):
+                        continue
+                    if b.get("type") == "tool_use":
+                        calls[b.get("id")] = (b.get("name"), b.get("input") or {})
+                        if b.get("name") == "AskUserQuestion":
+                            qs = [q.get("question", "") for q in (b.get("input") or {}).get("questions", [])]
+                            episodes.append(("clarifying question", prompt, " | ".join(qs)))
+                    elif b.get("type") == "text" and b.get("text", "").strip():
+                        said = b["text"]
+                continue
+            if m.get("type") != "user":
+                continue
+            for b in content if isinstance(content, list) else []:
+                if isinstance(b, dict) and b.get("type") == "tool_result":
+                    raw = b.get("content")
+                    txt = raw if isinstance(raw, str) else json.dumps(raw)
+                    name, inp = calls.get(b.get("tool_use_id"), ("?", {}))
+                    if "doesn't want to proceed" in txt:
+                        episodes.append(("rejected tool call", prompt, "{}: {}".format(name, clip(json.dumps(inp), 300))))
+                    elif MISSING.search(txt[:3000]) and (b.get("is_error") or len(txt) < 2500):
+                        episodes.append(("missing data or resource", prompt,
+                                         "{}: {}\n-> {}".format(name, clip(json.dumps(inp), 300), clip(txt[:3000], 300))))
+            t = text_of(content).strip()
+            if t.startswith("[Request interrupted"):
+                episodes.append(("interrupted", prompt, ""))
+                continue
+            if not real_prompt(t):
+                continue
+            n += 1
+            q = asks_back(said)
+            if q and prompt is not None:
+                episodes.append(("clarifying question", prompt, q))
+            if prompt is not None and CORRECTION.match(t):
+                episodes.append(("correction", prompt, clip(t)))
+            elif prompt is not None and REVERSAL.search(t[:200]):
+                episodes.append(("reversal", prompt, clip(t)))
+            prompt, said = clip(t, 600), ""
+    return collapse(episodes), n
+
+
+def collapse(raw):
+    """One episode per (kind, prompt): a count and up to four details."""
+    out = {}
+    for kind, prompt, detail in raw:
+        e = out.setdefault((kind, prompt), {"kind": kind, "prompt": prompt, "count": 0, "details": []})
+        e["count"] += 1
+        if detail and len(e["details"]) < 4:
+            e["details"].append(detail)
+    return list(out.values())
+
+
+def period(args, today=None):
+    """(from date, to date) inclusive."""
+    today = today or dt.date.today()
+    if args.week is not None:
+        day = dt.date.fromisoformat(args.week) if args.week else today - dt.timedelta(days=7)
+        monday = day - dt.timedelta(days=day.weekday())
+        return monday, monday + dt.timedelta(days=6)
+    return today - dt.timedelta(days=args.days - 1), today
+
+
+def collect(start, end):
+    lo = dt.datetime.combine(start, dt.time()).timestamp()
+    hi = dt.datetime.combine(end + dt.timedelta(days=1), dt.time()).timestamp()
+    rows = [r for r in CS.sessions() if lo <= r[0] < hi + 86400 * 30]
+    info = {d["id"]: d for d in CS.as_json(rows)["sessions"]}
+    sessions, prompts = [], 0
+    for mtime, cwd, sid, first, path in rows:
+        d = info.get(sid, {})
+        began = d.get("started") or mtime
+        if not (lo <= began < hi or lo <= mtime < hi):
+            continue
+        try:
+            eps, n = scan(path)
+        except OSError:
+            continue
+        if not n:
+            continue
+        prompts += n
+        r = d.get("request") or {}
+        sessions.append({"id": sid, "title": d.get("title") or first, "request": r.get("name"), "ticket": r.get("ticket"),
+                         "day": dt.datetime.fromtimestamp(began).strftime("%Y-%m-%d"), "prompts": n, "episodes": eps})
+    return sessions, prompts
+
+
+JUDGE = """You are reviewing how {role} prompts Claude Code, to help them prompt better.
+Below are "friction episodes" from one session: moments where work stalled -- Claude hit data or a resource
+that didn't exist, the user corrected or interrupted Claude, rejected an action, reversed a decision, or
+Claude asked a clarifying question. Each has the user prompt that came before it.
+
+Session: {title} (request: {request}, ticket: {ticket}, day {day})
+
+Episodes (JSON):
+{episodes}
+
+For EACH episode decide whether the user's PROMPT was a real cause. Be strict: Claude probing a path that
+turns out absent while exploring is normal and NOT a prompt problem; a mistake Claude made on its own is
+"claude-error"; if you are not sure the prompt was at fault, say prompt_caused false.
+cause: "assumed-exists" (asked to work on something without confirming it exists), "ambiguous-target"
+(which environment/workspace/table/file/repo wasn't clear), "conflicting-instructions" (clashes with an
+earlier instruction or the standing context), "missing-acceptance" (no clear outcome or done-criteria),
+"scope-change" (the goal changed midway), "claude-error", "normal".
+
+Reply with ONLY a JSON array, one object per episode, in order:
+[{{"i": <episode index>, "prompt_caused": true|false, "confidence": "high"|"medium"|"low", "cause": "<cause>",
+  "why": "<one sentence>", "better_prompt": "<a concrete rewrite of the prompt, or empty>",
+  "habit": "<a short reusable habit, or empty>"}}]"""
+
+
+def key_of(session):
+    """A cache key: the session and exactly the episodes that were judged."""
+    blob = json.dumps([session["id"], session["episodes"]], sort_keys=True)
+    return hashlib.sha1(blob.encode()).hexdigest()
+
+
+def judge_one(session, role, model):
+    eps = [dict(e, i=i) for i, e in enumerate(session["episodes"])]
+    prompt = JUDGE.format(role=role, title=session["title"], request=session["request"], ticket=session["ticket"],
+                          day=session["day"], episodes=json.dumps(eps, indent=1)[:24000])
+    err = ""
+    for _ in range(2):
+        try:
+            r = subprocess.run(["claude", "-p", "--model", model, "--no-session-persistence"], input=prompt,
+                               capture_output=True, text=True, cwd=HOME, timeout=600)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            err = str(exc)
+            continue
+        m = re.search(r"\[.*\]", r.stdout or "", re.S)
+        if r.returncode == 0 and m:
+            try:
+                verdicts = json.loads(m.group(0))
+                if isinstance(verdicts, list):
+                    return verdicts
+            except ValueError:
+                pass
+        err = (r.stderr or r.stdout or "")[-300:]
+    return {"error": err}
+
+
+def load_json(path, default):
+    try:
+        with open(path) as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return default
+
+
+def save_json(path, data):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w") as fh:
+        json.dump(data, fh, indent=1)
+    os.replace(tmp, path)
+
+
+def judge(sessions, role, model, workers=5, progress=print):
+    """Verdicts per session id, from the cache or from Claude."""
+    cache_path = os.path.join(QUALITY, "judged.json")
+    cache = load_json(cache_path, {})
+    todo = [s for s in sessions if s["episodes"] and not isinstance(cache.get(key_of(s)), list)]
+    if todo:
+        progress("judging {} session(s) with Claude ({} cached)…".format(len(todo), len(sessions) - len(todo)))
+    with cf.ThreadPoolExecutor(max_workers=workers) as pool:
+        for s, verdicts in zip(todo, pool.map(lambda s: judge_one(s, role, model), todo)):
+            cache[key_of(s)] = verdicts
+            save_json(cache_path, cache)
+    return {s["id"]: cache.get(key_of(s)) for s in sessions}
+
+
+def rows_of(sessions, verdicts):
+    """(session, episode, verdict) for every judged episode."""
+    out = []
+    for s in sessions:
+        v = verdicts.get(s["id"]) if verdicts else None
+        for i, e in enumerate(s["episodes"]):
+            j = next((x for x in v if isinstance(x, dict) and x.get("i") == i), None) if isinstance(v, list) else None
+            out.append((s, e, j))
+    return out
+
+
+def counts(prompt_caused):
+    return {c: sum(1 for _, _, j in prompt_caused if j.get("cause") == c) for c in CAUSES
+            if any(j.get("cause") == c for _, _, j in prompt_caused)}
+
+
+def report(start, end, sessions, prompts, verdicts, history):
+    rows = rows_of(sessions, verdicts)
+    judged = verdicts is not None
+    caused = [r for r in rows if r[2] and r[2].get("prompt_caused") and r[2].get("confidence") in ("high", "medium")]
+    per100 = round(len(caused) / prompts * 100, 1) if prompts and judged else None
+    L = ["# Prompt retrospective — {} to {}".format(start, end), "",
+         "**{} sessions, {} prompts, {} friction episodes**".format(len(sessions), prompts, len(rows)) +
+         ("; **{} traced to the prompt** ({} per 100 prompts).".format(len(caused), per100) if judged else
+          " (not judged: run without --no-judge for causes and rewrites)."), ""]
+    kinds = {}
+    for s, e, j in rows:
+        k = kinds.setdefault(e["kind"], [0, 0])
+        k[0] += 1
+        k[1] += bool(j and j in [c[2] for c in caused])
+    L += ["| signal | episodes |" + (" caused by the prompt |" if judged else ""),
+          "|---|---|" + ("---|" if judged else "")]
+    for k, (n, c) in sorted(kinds.items(), key=lambda x: -x[1][0]):
+        L.append("| {} | {} |".format(k, n) + (" {} |".format(c) if judged else ""))
+    if judged and caused:
+        L += ["", "## Causes", "", "| cause | episodes |", "|---|---|"]
+        for c, n in sorted(counts(caused).items(), key=lambda x: -x[1]):
+            L.append("| {} | {} |".format(c, n))
+        habits = {}
+        for _, _, j in caused:
+            h = (j.get("habit") or "").strip()
+            if h:
+                habits[h] = habits.get(h, 0) + 1
+        if habits:
+            L += ["", "## Habits to keep", ""]
+            L += ["- {}{}".format(h, " *(×{})*".format(n) if n > 1 else "")
+                  for h, n in sorted(habits.items(), key=lambda x: -x[1])[:8]]
+        L += ["", "## Worst episodes", ""]
+        for s, e, j in sorted(caused, key=lambda r: (r[2].get("confidence") != "high", -r[1]["count"]))[:6]:
+            L += ["**{} · {}** — {} ({}, {})".format(s["day"], clip(s["title"], 70), e["kind"], j.get("cause"),
+                                                     j.get("confidence")), "",
+                  "> You: {}".format(clip(e["prompt"], 300)), ""]
+            if j.get("why"):
+                L += ["Why: {}".format(j["why"]), ""]
+            if j.get("better_prompt"):
+                L += ["Better: *{}*".format(clip(j["better_prompt"], 350)), ""]
+    failed = [s["title"] for s in sessions if judged and isinstance(verdicts.get(s["id"]), dict)]
+    if failed:
+        L += ["", "Not judged (Claude call failed): " + ", ".join(clip(t, 40) for t in failed)]
+    entry = {"from": str(start), "to": str(end), "sessions": len(sessions), "prompts": prompts, "episodes": len(rows),
+             "prompt_caused": len(caused) if judged else None, "per_100_prompts": per100,
+             "by_cause": counts(caused) if judged else {}}
+    trend = [h for h in history if (h.get("from"), h.get("to")) != (entry["from"], entry["to"])] + [entry]
+    trend = sorted(trend, key=lambda h: h["to"])[-8:]
+    if any(h.get("per_100_prompts") is not None for h in trend):
+        L += ["", "## Trend", "", "| period | prompts | prompt-caused per 100 prompts |", "|---|---|---|"]
+        for h in trend:
+            v = h.get("per_100_prompts")
+            L.append("| {} – {} | {} | {} |".format(h["from"], h["to"], h["prompts"], "–" if v is None else v))
+    return "\n".join(L) + "\n", entry
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(prog="claude-retro", description=__doc__.split("\n\n")[0].split(": ", 1)[1],
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    when = ap.add_mutually_exclusive_group()
+    when.add_argument("--days", type=int, default=7, help="the last N days (default 7)")
+    when.add_argument("--week", nargs="?", const="", metavar="DATE", help="the week containing DATE (default: last week)")
+    ap.add_argument("--no-judge", action="store_true", help="count the signals only; no Claude calls")
+    ap.add_argument("--model", default="sonnet", help="model for the judge (default: sonnet)")
+    ap.add_argument("--out", help="write the report here instead of _audit/quality/")
+    args = ap.parse_args(argv)
+
+    start, end = period(args)
+    sessions, prompts = collect(start, end)
+    role = CA.CONFIG.get("CWS_USER_ROLE") or "an engineer"
+    verdicts = None if args.no_judge else judge(sessions, "a " + role if not role.startswith(("a ", "an ")) else role,
+                                                args.model, progress=lambda m: print(m, file=sys.stderr))
+    history_path = os.path.join(QUALITY, "history.json")
+    history = load_json(history_path, [])
+    text, entry = report(start, end, sessions, prompts, verdicts, history if isinstance(history, list) else [])
+    out = args.out or os.path.join(QUALITY, "{}_{}_retro.md".format(start, end))
+    os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
+    with open(out, "w") as fh:
+        fh.write(text)
+    if verdicts is not None:
+        keep = [h for h in (history if isinstance(history, list) else [])
+                if (h.get("from"), h.get("to")) != (entry["from"], entry["to"])]
+        save_json(history_path, sorted(keep + [entry], key=lambda h: h["to"]))
+    print(text.split("\n")[2])
+    print("report: " + out)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

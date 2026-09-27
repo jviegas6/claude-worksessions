@@ -1,0 +1,76 @@
+#!/usr/bin/env python3
+"""claude-hook-vague: a Claude Code UserPromptSubmit hook that notices when a piece of work
+starts with an underspecified request, and asks Claude to get the missing target, environment
+or outcome before doing substantial work -- unless the context already makes them clear.
+
+Registered by install.sh in each profile's settings.json. Only the first FIRST_PROMPTS prompts
+of a session are looked at: that is where vagueness costs the most, before any context exists.
+A prompt counts as vague when it asks for an action (check, fix, investigate, create, ...) and
+names nothing concrete: no path, URL, ticket, dotted or snake_case name, environment, file,
+quoted text or number. Short replies ("yes", "go", "merged") are skipped.
+"""
+
+import json
+import os
+import re
+import sys
+import tempfile
+
+FIRST_PROMPTS = 2
+CONFIRM = re.compile(r"^\s*(yes|yep|y|no|ok|okay|sure|go|go ahead|do it|done|merged|thanks|thank you|continue|"
+                     r"proceed|approved?|perfect|great|nice|cool)\b", re.I)
+ACTION = re.compile(r"\b(check|fix|investigate|look|validate|create|build|update|move|delete|change|add|remove|"
+                    r"find|review|analy[sz]e|debug|set ?up|continue|migrate|deploy|grant|revoke)\b", re.I)
+ANCHOR = re.compile(r"(`|\"|'[^']+'|https?://|~/|/\w|\b[A-Z][A-Z0-9]+-\d+\b|\b\w+\.\w+\.\w+\b|\b\w+_\w+\b|"
+                    r"\b\w+-\w+-\w+\b|\b(prod|dev|test|uat|staging|production|development)\b|\.\w{2,4}\b|\d{3,})", re.I)
+ADVICE = ("This request may be underspecified: it asks for an action but names no concrete target (table, "
+          "job, file, repo, environment) or outcome. If the conversation and the standing context don't "
+          "already make the target, environment and expected result clear, ask one or two short questions "
+          "before doing substantial work. If they do, carry on without asking.")
+
+
+def vague(prompt):
+    t = (prompt or "").strip()
+    if not t or t.startswith(("/", "<", "[")) or CONFIRM.match(t):
+        return False
+    words = t.split()
+    return 3 <= len(words) <= 40 and bool(ACTION.search(t)) and not ANCHOR.search(t)
+
+
+def prompt_number(session_id):
+    """How many prompts this session had before this one (and count this one)."""
+    safe = re.sub(r"[^A-Za-z0-9_-]", "", session_id or "none")[:64]
+    p = os.path.join(tempfile.gettempdir(), "claude-hook-vague-{}.count".format(safe))
+    try:
+        with open(p) as fh:
+            n = int(fh.read().strip() or 0)
+    except (OSError, ValueError):
+        n = 0
+    try:
+        with open(p, "w") as fh:
+            fh.write(str(n + 1))
+    except OSError:
+        pass
+    return n
+
+
+def react(payload):
+    if prompt_number(payload.get("session_id")) >= FIRST_PROMPTS or not vague(payload.get("prompt")):
+        return None
+    return {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": ADVICE}}
+
+
+def main(stdin=None, stdout=None):
+    stdin, stdout = stdin or sys.stdin, stdout or sys.stdout
+    try:
+        payload = json.load(stdin)
+    except ValueError:
+        return 0
+    answer = react(payload if isinstance(payload, dict) else {})
+    if answer:
+        stdout.write(json.dumps(answer))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

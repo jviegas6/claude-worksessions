@@ -443,11 +443,19 @@ def run_new_tty(root, args, typed):
 ])
 def test_claude_new_asks_about_the_review(tmp_path, args, typed, audit):
     (tmp_path / ".claude-personal").mkdir()
-    r = run_new_tty(tmp_path, args + " -t Other -T tooling demo", typed)
+    r = run_new_tty(tmp_path, args + " -t Other -T tooling demo", "\n\n" + typed)   # Enter for goal, done-when
     assert r.returncode == 0, r.stderr
     meta = json.loads(next(tmp_path.glob("[0-9]*/*/*/*/.session.json")).read_text())
-    assert meta["audit"] is audit
+    assert meta["audit"] is audit and meta["goal"] == "demo" and meta["done_when"] == ""
     assert ("(no-audit)" in r.stdout) is (not audit)
+
+
+def test_claude_new_asks_for_goal_and_done_when(tmp_path):
+    (tmp_path / ".claude-personal").mkdir()
+    r = run_new_tty(tmp_path, "-a -t Other -T tooling demo", "list the sources\na table of them\n")
+    assert r.returncode == 0, r.stderr
+    meta = json.loads(next(tmp_path.glob("[0-9]*/*/*/*/.session.json")).read_text())
+    assert (meta["goal"], meta["done_when"]) == ("list the sources", "a table of them")
 
 
 def test_claude_new_without_a_terminal_counts_the_session(tmp_path):
@@ -521,6 +529,101 @@ def test_install_writes_retention_keeping_other_settings(tmp_path):
     r = subprocess.run(["zsh", os.path.join(REPO, "install.sh"), "--yes", "--no-bootstrap"], env=env,
                        capture_output=True, text=True, stdin=subprocess.DEVNULL)
     assert "personal: transcripts kept 3650 days (was Claude Code's default, 30)" in r.stdout, r.stdout + r.stderr
-    assert json.loads((prof / "settings.json").read_text()) == {"model": "opus", "cleanupPeriodDays": 3650}
+    got = json.loads((prof / "settings.json").read_text())
+    assert (got["model"], got["cleanupPeriodDays"]) == ("opus", 3650)
     assert oct(os.stat(prof / "settings.json").st_mode & 0o777) == "0o600"
     assert list(prof.glob("settings.json.bak-*"))
+
+
+def test_install_registers_the_notfound_hook_and_uninstall_removes_it(tmp_path):
+    conf = tmp_path / "ws" / "_config" / "config.env"
+    conf.parent.mkdir(parents=True)
+    conf.write_text('CWS_WORK_ROOT="{}/ws"\nCWS_PROFILES="personal work"\nCWS_INSTALL_YAZI="0"\n'.format(tmp_path))
+    link = tmp_path / ".config" / "claude-worksessions" / "config.env"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(conf)
+    mine = {"type": "command", "command": "my-formatter"}
+    (tmp_path / ".claude-personal").mkdir()
+    (tmp_path / ".claude-personal" / "settings.json").write_text(json.dumps(
+        {"hooks": {"PostToolUse": [{"matcher": "Write", "hooks": [mine]}]}}))
+    env = {k: v for k, v in os.environ.items() if not k.startswith("CWS_")}
+    env.update(HOME=str(tmp_path), ZDOTDIR=str(tmp_path), CWS_OS="mac", PATH="/usr/bin:/bin")
+    run = lambda *a: subprocess.run(["zsh", os.path.join(REPO, a[0]), *a[1:]], env=env, capture_output=True,
+                                    text=True, stdin=subprocess.DEVNULL)
+    r = run("install.sh", "--dry-run", "--yes", "--no-bootstrap")
+    assert "personal: [dry-run] added the prompt-quality hooks" in r.stdout
+    r = run("install.sh", "--yes", "--no-bootstrap")
+    hook = str(tmp_path / ".local" / "bin" / "claude-hook-notfound")
+    for p in ("personal", "work"):
+        s = json.loads((tmp_path / (".claude-" + p) / "settings.json").read_text())
+        for event in ("PostToolUse", "PostToolUseFailure"):
+            cmds = [h["command"] for g in s["hooks"][event] for h in g["hooks"]]
+            assert cmds.count(hook) == 1, (p, event)
+            assert any(g.get("matcher") == "Bash|mcp__.*" for g in s["hooks"][event])
+    assert json.loads((tmp_path / ".claude-personal" / "settings.json").read_text())["hooks"]["PostToolUse"][0]["hooks"] == [mine]
+    r = run("install.sh", "--yes", "--no-bootstrap")                                   # again: not added twice
+    assert "personal: prompt-quality hooks in place" in r.stdout
+    s = json.loads((tmp_path / ".claude-work" / "settings.json").read_text())
+    assert [h["command"] for g in s["hooks"]["PostToolUse"] for h in g["hooks"]] == [hook]
+    vague = str(tmp_path / ".local" / "bin" / "claude-hook-vague")
+    guard = str(tmp_path / ".local" / "bin" / "claude-guard")
+    assert s["hooks"]["UserPromptSubmit"] == [{"hooks": [{"type": "command", "command": vague, "timeout": 10}]},
+                                              {"hooks": [{"type": "command", "command": guard + " prompt", "timeout": 30}]}]
+    assert s["hooks"]["PreToolUse"] == [{"matcher": "Read|Glob|Grep|WebFetch|WebSearch|Bash|mcp__.*",
+                                         "hooks": [{"type": "command", "command": guard + " tool", "timeout": 5}]}]
+    assert s["hooks"]["Stop"] == [{"hooks": [{"type": "command", "command": guard + " stop", "timeout": 10}]}]
+    assert (tmp_path / "ws" / "_config" / "guard-rules.md").read_text().startswith("<!-- claude-guard")
+    assert os.path.islink(hook) and os.path.islink(tmp_path / ".local" / "bin" / "claude-retro")
+    r = run("uninstall.sh")
+    assert "removed the prompt-quality hooks from" in r.stdout
+    assert json.loads((tmp_path / ".claude-personal" / "settings.json").read_text()) == {
+        "hooks": {"PostToolUse": [{"matcher": "Write", "hooks": [mine]}]}, "cleanupPeriodDays": 3650}
+    assert "hooks" not in json.loads((tmp_path / ".claude-work" / "settings.json").read_text())
+    assert not os.path.lexists(hook)
+
+
+def test_install_warns_on_a_broken_settings_file_for_the_hook(tmp_path):
+    (tmp_path / ".claude-personal").mkdir()
+    (tmp_path / ".claude-personal" / "settings.json").write_text("{broken")
+    r = dry_install(tmp_path, "mac")
+    assert "the prompt-quality hooks weren't added" in r.stderr
+
+
+# --- goal / done_when and claude-goal -----------------------------------------------------
+def test_claude_new_records_goal_and_done_when(tmp_path):
+    (tmp_path / ".claude-personal").mkdir()
+    stub = tmp_path / "bin"
+    stub.mkdir()
+    (stub / "claude").write_text("#!/bin/sh\nexit 0\n")
+    (stub / "claude").chmod(0o755)
+    path = str(stub) + os.pathsep + os.environ["PATH"]
+    r = run_new(tmp_path, "-p personal -t Other -T tooling -g 'list the sources' --done 'a table of sources' demo",
+                PATH=path)
+    assert r.returncode == 0, r.stderr
+    d = json.loads(next(tmp_path.glob("[0-9]*/*/*/*/.session.json")).read_text())
+    assert (d["goal"], d["done_when"]) == ("list the sources", "a table of sources")
+    shutil.rmtree(next(tmp_path.glob("[0-9]*")))
+    r = run_new(tmp_path, "-p personal -t Other -T tooling other thing", PATH=path)   # not a terminal: the name
+    d = json.loads(next(tmp_path.glob("[0-9]*/*/*/*/.session.json")).read_text())
+    assert (d["goal"], d["done_when"]) == ("other thing", "")
+
+
+def test_claude_goal_shows_and_reanchors(tmp_path):
+    d = tmp_path / "2026" / "09" / "26" / "10-00-00_x"
+    (d / "sub").mkdir(parents=True)
+    (d / ".session.json").write_text(json.dumps({"name": "x", "goal": "fix the filter"}))
+    (d / ".scope.json").write_text(json.dumps({"sessions": {"s1": {"literal": "L", "targets": ["t"], "prompt_no": 4}}}))
+    goal = lambda args, cwd=d: zsh('cd "{}" && claude-goal {}'.format(cwd, args), tmp_path)
+    assert goal("") == "goal: fix the filter\ndone when: (not stated)\n"
+    out = goal("survey the access methods --done 'a comparison table'", d / "sub")
+    assert out == "goal: fix the filter -> survey the access methods\ndone when: a comparison table\n"
+    meta = json.loads((d / ".session.json").read_text())
+    assert meta["goal"] == "survey the access methods" and meta["goal_history"][0]["goal"] == "fix the filter"
+    assert json.loads((d / ".scope.json").read_text())["sessions"]["s1"] == {"prompt_no": 4}
+    rec = json.loads((d / ".quality.jsonl").read_text())
+    assert rec["event"] == "goal" and rec["previous"] == "fix the filter" and rec["initiated_by"] == "user"
+    assert goal("--done ''").endswith("done when: (not stated)\n")
+    assert json.loads((d / ".session.json").read_text())["goal"] == "survey the access methods"
+    with pytest.raises(subprocess.CalledProcessError) as e:
+        zsh('cd "{}" && claude-goal x'.format(tmp_path), tmp_path)
+    assert "no .session.json here" in e.value.stderr

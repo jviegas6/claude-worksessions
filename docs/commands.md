@@ -3,13 +3,13 @@
 ## claude-new
 
 ```
-claude-new [-p PROFILE] [-n|-a] [-c] [-t TICKET] [-T TYPE] [--prompt TEXT] [name]
+claude-new [-p PROFILE] [-n|-a] [-c] [-t TICKET] [-T TYPE] [-g GOAL] [--done TEXT] [--prompt TEXT] [name]
 claude-new -l
 claude-new -L
 ```
 
 Creates `<work root>/YYYY/MM/DD/HH-mm-ss_slug/`, writes `.session.json` (name, slug,
-profile, ticket, audit flag, start/end, host, path), cd's in and starts Claude with
+profile, ticket, goal, done-when, audit flag, start/end, host, path), cd's in and starts Claude with
 that profile. `ended_at` is filled in when Claude exits.
 
 - **Ticket is mandatory**: `PREFIX-123` or `Other`. A ticket-shaped first word is taken
@@ -27,6 +27,10 @@ that profile. `ended_at` is filled in when Claude exits.
   in the name matches there is no default — it asks you to pick.
   The type is the **trigger**, not the detours: a job error that needs investigation, a
   permission change and a doc update is `job errors`.
+- `-g goal` / `--goal` is what the session should deliver, `--done text` how you will know
+  it did. Left out, `claude-new` asks for both: Enter keeps the name as the goal and leaves
+  done-when empty (and without a terminal that is what it does). [`claude-guard`](#claude-guard)
+  judges each new prompt against them; [`claude-goal`](#claude-goal) changes them.
 - `-c` / `--code` opens the new folder in a new VS Code window instead of starting
   Claude in the terminal. Start Claude from the extension there; it runs with the
   session's profile through [`claude-vscode`](#claude-vscode). `ended_at` stays empty,
@@ -37,6 +41,19 @@ that profile. `ended_at` is filled in when Claude exits.
 - `-L` / `--profiles` lists the configured profiles: which is the default and which is
   shared, the description, the gateway URL if any, and a warning if `~/.claude-<name>`
   is missing.
+
+## claude-goal
+
+```
+claude-goal                              show the session folder's goal and done-when
+claude-goal "survey the access methods"  re-anchor: a new goal (run anywhere inside the folder)
+claude-goal --done "a comparison table"  change only done-when
+```
+
+For when the objective changes **on purpose**. The old goal goes to `goal_history` in
+`.session.json`, the guard's scope for the folder's sessions is cleared (the next prompt
+defines it again), and the change is logged to `.quality.jsonl`. If the new objective is
+a separate piece of work, start a new session with `claude-new` instead.
 
 ## claude-resume
 
@@ -246,6 +263,105 @@ In VS Code: right-click a session → **Delete session…**, offered only on ses
 qualify; it shows the same summary and asks. Deleted sessions are listed under **Deleted**
 at the bottom of the panel: right-click → **Restore** (or the inline icon) or **Delete for
 good…**; right-click **Deleted** → **Empty the bin…**.
+
+## claude-retro
+
+```
+claude-retro                  # the last 7 days
+claude-retro --days 14        # the last 14 days
+claude-retro --week [DATE]    # the Monday–Sunday week containing DATE (default: last week)
+claude-retro --no-judge       # count the friction signals only, no Claude calls
+```
+
+A retrospective on how your prompts went. It finds **friction** in the transcripts — a
+resource that turned out not to exist, a correction ("no, I meant …"), an interruption, a
+rejected tool call, a reversal ("roll it back"), a clarifying question (asked with the
+question tool or at the end of a reply) — and ties each to the prompt that came before.
+Claude then judges each session's episodes: was the **prompt** the cause, and how —
+assumed something existed, left the target ambiguous, clashed with an earlier
+instruction, gave no clear outcome, changed scope — and writes a better prompt. Only
+high- and medium-confidence verdicts count; Claude exploring on its own, or making its
+own mistake, doesn't.
+
+The report — signals, causes, habits to keep, the worst episodes with your words and a
+rewrite, and the **trend** — goes to `<work root>/_audit/quality/<from>_<to>_retro.md`;
+`history.json` there keeps one line per period. Verdicts are cached in `judged.json`, so
+re-running a period doesn't call Claude again. The judge uses `claude -p --model sonnet`
+(`--model` to change) with the profile your shell is on.
+
+Recurring habits are worth moving into `_config/context.md`, so Claude applies them
+without being told.
+
+## Prompt-quality hooks
+
+`install.sh` registers two hooks in every profile's `settings.json`. Hooks you already have
+are kept; `uninstall.sh` removes only these. Review or disable them with `/hooks`.
+
+**Vague request → ask first** (`claude-hook-vague`, on `UserPromptSubmit`). On the first two
+prompts of a session — where vagueness costs most — a request that asks for an action
+(check, fix, investigate, create…) but names nothing concrete (no path, URL, ticket, dotted
+or snake_case name, environment, file, quoted text or number) gets a note: unless the
+context already makes the target, environment and outcome clear, ask one or two short
+questions first. Replies like "yes" or "go" are skipped. On past sessions this flagged about
+4% of prompts, mostly ones like "validate if permissions are there".
+
+**Doesn't exist → ask first** (`claude-hook-notfound`),
+on `PostToolUse` and `PostToolUseFailure`, for commands and MCP tools. When a result says the
+thing asked about doesn't exist — `TABLE_OR_VIEW_NOT_FOUND`, `SCHEMA_NOT_FOUND`,
+`PRINCIPAL_DOES_NOT_EXIST`, `ResourceNotFound`, "… does not exist" — it tells Claude to stop
+and confirm the name and environment with you before hunting for alternatives. Generic
+"not found" / 404 output from normal exploring doesn't trigger it, nor does the output of a
+Bash command that succeeded (only its stderr counts, so `git log` or a file that happens to
+say "does not exist" is ignored), and it speaks at most three times per session.
+
+[`claude-guard`](#claude-guard) is registered alongside them.
+
+## claude-guard
+
+How to use it: [the user guide](guard/user-guide.md). Design: [HLD](guard/hld.md) ·
+[LLD](guard/lld.md).
+
+Keeps a session on the request it was given: doing the literal scope and proposing the next
+level instead of opening everything around it, and noticing when a prompt is really a new
+objective. Three hooks, registered by `install.sh`, that do nothing until
+`CWS_GUARD_MODE` is `shadow` or `enforce`:
+
+| hook | checks | enforce |
+|---|---|---|
+| `claude-guard prompt` (`UserPromptSubmit`) | a judge — a clean `claude -p` on `CWS_GUARD_MODEL` that sees only the goal, done-when, the current scope and the new prompt — calls it *continuation*, *extension* or *pivot*, and gives its literal scope and targets. Paths, URLs and dotted names in the prompt are targets too | a pivot is blocked with the options: a new session, `claude-goal`, or resend with `force:`. Otherwise Claude is told the literal scope |
+| `claude-guard tool` (`PreToolUse`: reads, web, Bash, MCP) | does the call reach something outside the targets (the session folder, scratchpad and temp dirs are always fine)? The same call a third time in one request is a loop | the call is denied, and Claude is told to list it as a next step |
+| `claude-guard stop` (`Stop`) | after an investigation (two or more reads), does the answer end by proposing the next level? | Claude is asked once to add them |
+
+- `force:` at the start of a prompt skips the checks for that request, logged as an override.
+  (Not `!force` — a leading `!` runs a shell command in Claude Code.)
+- Asking to go deeper — *aprofunda*, *go deeper*, *dig into*, *explore*… — lifts the target
+  check until the next request.
+- **Shadow** decides and logs everything but never blocks, and runs the judge in the
+  background, so prompts are not held up. **Enforce** waits for the judge (about 10 s,
+  up to `CWS_GUARD_JUDGE_TIMEOUT`). Any error or timeout lets the action through, logged.
+- Each decision is a line in `.quality.jsonl` in the session folder: `ts`, `event`,
+  `decision` (what enforce does), `type` (`ok` / `depth` / `pivot` / `loop`),
+  `initiated_by` (`user` / `agent`), `reason`, and for prompts the judge's verdict and time.
+  `.scope.json` holds each session's current scope.
+- The judge's criteria are `_config/guard-rules.md` — tune them there.
+
+```
+claude-guard report                 what the guard saw in the last 14 days, across the work root
+claude-guard report --days 7 PATH   a shorter window, or one folder
+claude-guard review                 the judge's pivots, extensions and failures you haven't reviewed
+claude-guard review --all           every decision, with your marks
+claude-guard review ID right|wrong [NOTE]   mark one (an id prefix is enough)
+```
+
+Every judge decision — goal, done-when, scope before, prompt, verdict, reason, model, profile,
+time — is kept in `<work root>/_audit/guard/judge.jsonl`, and your marks in `reviews.jsonl`
+next to it. The report shows how many were reviewed and the wrong ones with your notes: the
+material for tuning `guard-rules.md`. `CWS_GUARD_PROFILE` picks the profile the judge runs
+under.
+
+Counts by event, type and decision, the judge's median and p90 time and failures,
+overrides, and the latest pivots, out-of-scope calls and loops with their reasons — the
+basis for tuning the rules and deciding when to switch to `enforce`.
 
 ## claude-md-email
 

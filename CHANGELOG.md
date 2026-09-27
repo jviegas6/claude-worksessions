@@ -1,5 +1,41 @@
 # Changelog
 
+## [2.16.0] — 2026-09-26
+
+- **`claude-guard`**: keeps a session on the request it was given. Three hooks, registered
+  in every profile: on each prompt a separate judge (`claude -p` on a small model, which
+  sees only the goal, the current scope and the new prompt) tells a continuation or
+  extension from a **pivot** to a new objective and records the request's literal scope
+  and targets; before each read, web, Bash or MCP call, a check for reaching **outside
+  those targets** and for **loops**; at the end of an investigation, a check that the
+  answer **proposes the next level** instead of doing it. `CWS_GUARD_MODE=shadow` logs every
+  decision to `.quality.jsonl` without blocking (the judge runs in the background);
+  `enforce` blocks. `force:` overrides, "go deeper" widens, errors fail open. The judge's
+  criteria are `_config/guard-rules.md`; `claude-guard report` summarises what it saw.
+  Every judge decision is journaled in `_audit/guard/judge.jsonl` with what it saw and
+  said; `claude-guard review` lists them and records your right/wrong marks, and the report
+  shows agreement and the wrong cases. `CWS_GUARD_PROFILE` picks the judge's profile.
+  Documented in `docs/guard/`: a user guide, a high-level and a low-level design.
+- **Session goal**: `claude-new` records `goal` and `done_when` (`-g`, `--done`, or asked);
+  **`claude-goal`** shows or re-anchors them when the objective changes on purpose.
+- `claude-hook-notfound` no longer reacts to the output of a Bash command that succeeded —
+  only its stderr — so a commit message or source file that says "does not exist" is ignored.
+
+## [2.15.0] — 2026-09-24
+
+- **`claude-retro`**: a retrospective on your prompts. Finds friction in the transcripts
+  (missing resources, corrections, interruptions, rejected tool calls, reversals, clarifying
+  questions — including ones asked in plain text), ties each to the prompt before it, and
+  has Claude judge whether the prompt caused it and write a better one. Reports go to
+  `_audit/quality/`, with a week-by-week trend; verdicts are cached.
+- **A "does not exist" hook** (`claude-hook-notfound`), registered by `install.sh` in every
+  profile: when a table, schema, group or Azure resource turns out not to exist, Claude is
+  told to confirm with you before searching for alternatives. Existing hooks are kept;
+  `uninstall.sh` removes it.
+- **A "vague request" hook** (`claude-hook-vague`): on a session's first two prompts, a
+  request that asks for an action but names no concrete target makes Claude ask one or two
+  short questions first — unless the context already answers them.
+
 ## [2.14.0] — 2026-09-23
 
 - **VS Code: filter the sessions** by **day** (today, yesterday, last 7 days, this or last

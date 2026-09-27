@@ -63,3 +63,18 @@ def sessions(home):
 @pytest.fixture
 def deleter(home):
     return load_script("claude-delete")
+
+
+@pytest.fixture
+def hook(home):
+    return load_script("claude-hook-notfound")
+
+
+@pytest.fixture
+def retro(home):
+    return load_script("claude-retro")
+
+
+@pytest.fixture
+def vaguehook(home):
+    return load_script("claude-hook-vague")

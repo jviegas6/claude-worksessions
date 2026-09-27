@@ -2,6 +2,7 @@
 #
 #   claude-<profile>      Claude Code with that profile's config dir (~/.claude-<profile>)
 #   claude-new            create a YYYY/MM/DD/HH-mm-ss_slug request folder and start Claude in it
+#   claude-goal           show or re-anchor the session goal claude-guard holds the session to
 #   ws [-o|-c|-y]         fuzzy-pick a request folder and cd into it (Finder / VS Code / yazi)
 #   y                     yazi, and cd to wherever you quit it
 
@@ -211,6 +212,61 @@ print("task type ({}): {} -> {}".format(where, current or "(none)", new))
 PYEOF
 }
 
+# claude-goal ["GOAL"] [--done "TEXT"]   show or re-anchor the session folder's goal
+# Use it when the objective changes on purpose; claude-guard then judges new prompts
+# against the new goal, from a fresh scope. The old goal is kept in goal_history.
+claude-goal() {
+  emulate -L zsh
+  local dir="$PWD" meta="" goal="" done_when="" has_done=0
+  while (( $# )); do
+    case "$1" in
+      --done) done_when="$2"; has_done=1; shift 2 ;;
+      -h|--help) print -r -- 'claude-goal ["GOAL"] [--done "TEXT"]   show or change the session goal'; return 0 ;;
+      *) goal="${goal:+$goal }$1"; shift ;;
+    esac
+  done
+  while [[ "$dir" == "$CLAUDE_WORK_ROOT"/* ]]; do
+    if [[ -f "$dir/.session.json" ]]; then meta="$dir/.session.json"; break; fi
+    dir="${dir:h}"
+  done
+  if [[ -z "$meta" ]]; then
+    print -u2 -- "claude-goal: no .session.json here (not inside a session folder)"; return 1
+  fi
+  WS_GOAL="$goal" WS_DONE="$done_when" WS_HAS_DONE="$has_done" "$CWS_PYTHON" - "$meta" <<'PYEOF'
+import datetime, json, os, sys
+p = sys.argv[1]
+d = json.load(open(p))
+old, old_done = d.get("goal") or d.get("name") or "", d.get("done_when") or ""
+goal, has_done = os.environ["WS_GOAL"].strip(), os.environ["WS_HAS_DONE"] == "1"
+if not goal and not has_done:
+    print("goal: {}\ndone when: {}".format(old or "(none)", old_done or "(not stated)"))
+    raise SystemExit(0)
+ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+d.setdefault("goal_history", []).append({"goal": old, "done_when": old_done, "until": ts})
+d["goal"] = goal or old
+if has_done:
+    d["done_when"] = os.environ["WS_DONE"].strip()
+json.dump(d, open(p, "w"), indent=2)
+folder = os.path.dirname(p)
+# a new goal starts a fresh scope: the next prompt defines it again
+sp = os.path.join(folder, ".scope.json")
+try:
+    s = json.load(open(sp))
+    for st in (s.get("sessions") or {}).values():
+        for k in ("literal", "targets", "open"):
+            st.pop(k, None)
+    json.dump(s, open(sp, "w"), indent=1)
+except (OSError, ValueError, AttributeError):
+    pass
+with open(os.path.join(folder, ".quality.jsonl"), "a") as fh:
+    fh.write(json.dumps({"ts": ts, "event": "goal", "initiated_by": "user", "decision": "allow", "type": "ok",
+                         "reason": "re-anchored", "goal": d["goal"], "previous": old}, ensure_ascii=False) + "\n")
+print("goal: {} -> {}".format(old or "(none)", d["goal"]))
+if has_done:
+    print("done when: {}".format(d["done_when"] or "(not stated)"))
+PYEOF
+}
+
 # --- claude-new --------------------------------------------------------------------
 _claude_new_ticket() {
   # Normalise a ticket to PREFIX-123 or Other; non-zero if it is neither.
@@ -228,6 +284,7 @@ claude-new() {
   setopt local_options no_nomatch
 
   local profile="" name="" ticket="" canon="" dir slug cfg started ended audit=1 ask_audit=1 ttype="" vscode=0 prompt=""
+  local goal="" done_when="" goal_set=0
   local -a profiles=(${=CWS_PROFILES})
 
   while [[ "$1" == -* ]]; do
@@ -251,6 +308,8 @@ claude-new() {
         if [[ -z "$2" ]]; then print -u2 -- "claude-new: --prompt needs the text to start Claude with"; return 1; fi
         prompt="$2"; shift 2 ;;
       -T|--type)     ttype="$2";       shift 2 ;;
+      -g|--goal)     goal="$2"; goal_set=1; shift 2 ;;
+      --done)        done_when="$2";   shift 2 ;;
       -t|--ticket)
         if [[ -z "$2" ]]; then
           print -u2 -- "claude-new: -t needs a ticket (e.g. $CWS_TICKET_EXAMPLE, or Other)"
@@ -271,13 +330,15 @@ print("{:<10} {:<14} {:<16} {:<9}".format("[" + (d.get("profile") or "?") + "]",
         done
         return 0 ;;
       -h|--help)
-        print -r -- 'claude-new [-p PROFILE] [-n|-a] [-c] [-t TICKET] [-T TYPE] [--prompt TEXT] [name]'
+        print -r -- 'claude-new [-p PROFILE] [-n|-a] [-c] [-t TICKET] [-T TYPE] [-g GOAL] [--done TEXT] [--prompt TEXT] [name]'
         print -r -- '    create a YYYY/MM/DD/HH-mm-ss_slug folder and start Claude in it'
         print -r -- '    -c / --code opens the folder in VS Code instead; the Claude extension there'
         print -r -- '    picks up the profile through claude-vscode'
         print -r -- '    --prompt TEXT starts Claude with TEXT as the first prompt, e.g. --prompt /weekly-review'
         print -r -- "    TICKET is mandatory: PREFIX-123 (e.g. $CWS_TICKET_EXAMPLE), or Other"
         print -r -- '    -T / --type is the kind of work (permissions, job errors, ...); asked if omitted'
+        print -r -- '    -g / --goal is what the session should deliver, --done how you will know it did;'
+        print -r -- '    both asked if omitted (Enter: the name / nothing). claude-guard keeps work on them'
         print -r -- '    -n / --no-audit keeps the session out of claude-audit and the weekly review'
         print -r -- '    (claude-search still finds it); -a / --audit keeps it in; asked if neither'
         print -r -- "    -p / --profile picks the profile (${profiles[*]}); asked if omitted"
@@ -396,6 +457,14 @@ print("{:<10} {:<14} {:<16} {:<9}".format("[" + (d.get("profile") or "?") + "]",
   fi
   [[ "$ttype" == "-" ]] && ttype=""
 
+  # Goal and done-when: the contract claude-guard holds the session to. Enter keeps the
+  # name as the goal and leaves done-when empty; claude-goal changes them later.
+  if (( ! goal_set )) && [[ -t 0 ]]; then
+    read "goal?Goal — what should this session deliver? [$name]: " || return 1
+    [[ -z "$done_when" ]] && { read "done_when?Done when (Enter to skip): " || return 1; }
+  fi
+  [[ -z "${goal//[[:space:]]/}" ]] && goal="$name"
+
   # Audit: whether the weekly review and daily recap count this session. Asked unless
   # -n or -a said; Enter keeps it in, as does running without a terminal.
   if (( audit && ask_audit )) && [[ -t 0 ]]; then
@@ -427,7 +496,7 @@ print("{:<10} {:<14} {:<16} {:<9}".format("[" + (d.get("profile") or "?") + "]",
 
   started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   WS_NAME="$name" WS_PROFILE="$profile" WS_TICKET="$ticket" WS_SLUG="$slug" WS_TYPE="$ttype" \
-  WS_STARTED="$started" WS_DIR="$dir" WS_AUDIT="$audit" \
+  WS_STARTED="$started" WS_DIR="$dir" WS_AUDIT="$audit" WS_GOAL="$goal" WS_DONE="$done_when" \
     "$CWS_PYTHON" -c '
 import json, os, socket
 p = os.path.join(os.environ["WS_DIR"], ".session.json")
@@ -437,6 +506,8 @@ json.dump({
     "profile":    os.environ["WS_PROFILE"],
     "ticket":     os.environ["WS_TICKET"],
     "task_type":  os.environ.get("WS_TYPE", ""),
+    "goal":       os.environ["WS_GOAL"],
+    "done_when":  os.environ["WS_DONE"],
     "audit":      os.environ["WS_AUDIT"] == "1",
     "started_at": os.environ["WS_STARTED"],
     "ended_at":   None,

@@ -11,7 +11,7 @@ claude-guard keeps a Claude session on the job you gave it:
 It works in the background through Claude Code hooks. You don't call it during a session.
 You set a goal when you start, and optionally review what it saw.
 
-Technical details: [High-Level Design](hld.md) · [Low-Level Design](lld.md).
+Technical details: [High-Level Design](hld.md) · [Low-Level Design](lld.md). For claude-worksessions as a whole: [user guide](../user-guide.md).
 
 ---
 

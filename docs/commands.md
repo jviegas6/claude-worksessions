@@ -1,5 +1,7 @@
 # Commands
 
+The flag-by-flag reference. For how to use them together see the [user guide](user-guide.md); for how they work, the [HLD](hld.md) and [LLD](lld.md).
+
 ## claude-new
 
 ```

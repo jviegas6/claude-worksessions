@@ -5,6 +5,7 @@
 | Component | `claude-guard` (claude-worksessions 2.16.0) |
 | Status | Phase 1: implemented, shadow mode |
 | Companion documents | [Low-Level Design](lld.md) · [User guide](user-guide.md) |
+| Part of | claude-worksessions: [HLD](../hld.md) · [LLD](../lld.md) |
 
 ## 1. Problem
 

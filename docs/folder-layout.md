@@ -10,6 +10,7 @@
 │   └── .quality.jsonl             claude-guard: one line per decision
 ├── _config/                       config.env, context.md, review-rules.md, guard-rules.md, pinned.json (VS Code pins)
 ├── _audit/
+│   ├── guard/judge.jsonl          every claude-guard judge decision; reviews.jsonl: your marks
 │   ├── activity/YYYY-MM-DD.json   meetings/mail/chats per day, written by the skills
 │   ├── review/ledger.json         weekly-review decisions — change only via claude-audit --apply
 │   ├── no-audit.txt               session ids to keep out of the audit (one per line)

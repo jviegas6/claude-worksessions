@@ -68,6 +68,8 @@ flowchart LR
   G -->|claude -p, isolated| J[Judge<br/>small model]
   G <--> S[(Request folder<br/>.session.json<br/>.scope.json<br/>.quality.jsonl)]
   G --> C[(_config/<br/>config.env<br/>guard-rules.md)]
+  G --> JL[(_audit/guard/<br/>judge.jsonl<br/>reviews.jsonl)]
+  V[claude-guard review] <--> JL
   N[claude-new / claude-goal] --> S
   R[claude-guard report] --> S
 ```
@@ -88,8 +90,9 @@ JSON payload on stdin and answer with JSON on stdout (spec: https://code.claude.
 | `bin/claude-guard tool` | `PreToolUse` hook on reading tools (`Read`, `Glob`, `Grep`, `WebFetch`, `WebSearch`, `Bash`, `mcp__*`). Extracts what the call reaches, compares it with the targets, counts repeats. In enforce, denies out-of-scope calls and loops. |
 | `bin/claude-guard stop` | `Stop` hook. After an investigation, checks that the answer ends with next-level proposals. In enforce, asks once for them. |
 | `bin/claude-guard judge` | Internal. The background half of a prompt check in shadow mode. |
-| `bin/claude-guard report` | Summary of `.quality.jsonl` across the work root, for review and tuning. |
-| Judge | `claude -p` on `CWS_GUARD_MODEL` (default `haiku`), with a JSON schema for its output. Verdict: `continuation`, `extension` or `pivot`, plus literal scope and targets. |
+| `bin/claude-guard report` | Summary of `.quality.jsonl` across the work root, for review and tuning, plus how many judge decisions were reviewed and which were wrong. |
+| `bin/claude-guard review` | Lists the judge's decisions from the central journal and records the user's `right`/`wrong` mark and note on each. The learning loop for `guard-rules.md`. |
+| Judge | `claude -p` on `CWS_GUARD_MODEL` (default `haiku`) under `CWS_GUARD_PROFILE` (default: the session's profile), with a JSON schema for its output. Verdict: `continuation`, `extension` or `pivot`, plus literal scope and targets. |
 | `claude-new` (shell) | Records `goal` and `done_when` in `.session.json`. |
 | `claude-goal` (shell) | Re-anchors a folder's goal: history, scope reset, log line. |
 | `install.sh` / `uninstall.sh` | Register and remove the hooks in every profile's `settings.json`; seed `_config/guard-rules.md`. |
@@ -160,8 +163,10 @@ the stop is logged as `depth`. In enforce, Claude is asked once to add them.
 | `.session.json` | `claude-new`, `claude-goal` | adds `goal`, `done_when`, `goal_history[]` |
 | `.scope.json` | `claude-guard` | per session id: prompt counter, literal scope, targets, go-deeper flag, current request's counters |
 | `.quality.jsonl` | `claude-guard`, `claude-goal` | one JSON line per decision: `ts`, `event`, `decision`, `type`, `initiated_by`, `reason`, event-specific fields |
+| `_audit/guard/judge.jsonl` | `claude-guard` | every judge decision across the work root, complete: what the judge saw (goal, done-when, scope before, prompt) and said (verdict, literal, targets, reason), with model, profile, time and whether it was enforced |
+| `_audit/guard/reviews.jsonl` | `claude-guard review` | the user's `right`/`wrong` mark and note per decision id; the latest mark wins |
 | `_config/guard-rules.md` | user | the judge's system prompt |
-| `_config/config.env` | user | `CWS_GUARD_MODE`, `CWS_GUARD_MODEL`, `CWS_GUARD_JUDGE_TIMEOUT`, `CWS_GUARD_IGNORE_NAMES` |
+| `_config/config.env` | user | `CWS_GUARD_MODE`, `CWS_GUARD_MODEL`, `CWS_GUARD_PROFILE`, `CWS_GUARD_JUDGE_TIMEOUT`, `CWS_GUARD_IGNORE_NAMES` |
 
 All state lives in the request folder, which is usually in a synced folder (OneDrive, iCloud) along with the rest of the
 work, so the audit trail stays next to the work it describes.
@@ -184,12 +189,14 @@ data shows directly what enforcement would have blocked.
 | D1 | Override prefix `force:` | `!force` (handoff) | A leading `!` runs a shell command in Claude Code and never reaches the hook. |
 | D2 | Judge runs detached in shadow | synchronous always; hook `async: true` | Measured at 7–11 s per call. Shadow must not cost the user time. Doing it in the script keeps one hook registration for both modes; switching mode is just a config change. |
 | D3 | Three verdicts (`continuation`, `extension`, `pivot`) | two | With two, "apply it to one more schema" was classified as a pivot. Extension is allowed and grows the targets. |
-| D4 | Judge isolation: `--setting-sources ""`, `--strict-mcp-config`, `--tools ""`, `--no-session-persistence`, custom system prompt, cwd = temp dir, env `CWS_GUARD_JUDGE=1` | `--bare` | `--bare` does not use the OAuth login of subscription profiles. The flags give a clean context without hooks (no recursion), tools or MCP, and leave no transcript in the audit trail. The env var is a second recursion guard. |
+| D4 | Judge isolation: `--settings '{"disableAllHooks": true}'`, `--strict-mcp-config`, `--tools ""`, `--no-session-persistence`, custom system prompt, cwd = temp dir, env `CWS_GUARD_JUDGE=1` | `--bare`; `--setting-sources ""` | `--bare` does not use the OAuth login of subscription profiles; `--setting-sources ""` drops the gateway URL and token a gateway profile keeps in its settings. Loading the profile's settings with all hooks disabled keeps authentication working on both, with no hooks (no recursion), tools, MCP or transcript. The env var is a second recursion guard. |
 | D5 | No LLM on tool calls | judge each call | Tool calls are frequent. 10 s each is unacceptable, and the question (is X among the targets?) is mechanical once the targets are known. |
 | D6 | Loose matching (substring either way, same last segment) | exact | False positives erode trust faster than false negatives. Shadow data will show where to tighten. |
 | D7 | State keyed by session id in one `.scope.json`, with `flock` | one file per session | Several sessions can share a request folder, and the handoff named `.scope.json`. The lock makes the background judge and the tool hook safe to interleave. |
 | D8 | In enforce, the prompt's names join the targets only after the verdict | immediately | A blocked pivot must not widen the scope it was blocked from. |
 | D9 | `CWS_` prefix for config keys | `GUARD_MODE` | Matches every other claude-worksessions setting; environment overrides work the same way. |
+| D10 | A central judge journal in `_audit/guard/`, besides the per-folder log | per-folder log only | Reviewing and learning happen across sessions. One file holding the judge's full input and output makes each decision reviewable on its own and gives a labelled set for tuning the rules. `_audit/` is already the infrastructure folder for audit data. |
+| D11 | Configurable judge profile (`CWS_GUARD_PROFILE`) | always the session's profile | Keeps the judge's authentication, endpoint and cost under the user's control, for example judging every session on one profile's subscription. The session's profile stays the default. |
 
 ## 10. Non-functional characteristics
 
@@ -217,9 +224,10 @@ data shows directly what enforcement would have blocked.
 
 ## 12. Rollout
 
-1. **Phase 1 — shadow (1–2 weeks).** `CWS_GUARD_MODE=shadow`. Review with
-   `claude-guard report`: pivot precision, out-of-scope false-positive rate, loop count,
-   judge latency and failures. Tune `guard-rules.md` and `CWS_GUARD_IGNORE_NAMES`.
+1. **Phase 1 — shadow (1–2 weeks).** `CWS_GUARD_MODE=shadow`. Mark the judge's decisions
+   with `claude-guard review`, and read `claude-guard report`: judge agreement, pivot precision,
+   out-of-scope false-positive rate, loop count, judge latency and failures. Tune
+   `guard-rules.md` from the decisions marked wrong, and `CWS_GUARD_IGNORE_NAMES`.
 2. **Enforce.** `CWS_GUARD_MODE=enforce` once the flags are mostly right.
 3. **Phase 2.** Blocks, pivots and overrides in `claude-audit` / weekly review. `claude-branch`
    to open a child session with a hand-off (conclusions, discarded paths and why, open

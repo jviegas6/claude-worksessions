@@ -12,6 +12,12 @@ by install.sh in each profile's settings.json, plus a report for reviewing what 
                             the next level instead of having done it?
     claude-guard report [--days N] [PATH]
                             what the guard saw, from every .quality.jsonl under the work root
+    claude-guard review [--days N] [--all]  |  review ID right|wrong [NOTE]
+                            go through the judge's decisions and mark them, to tune the rules
+
+Every judge decision -- what it saw and what it said -- is also kept in
+<work root>/_audit/guard/judge.jsonl; your review marks go to reviews.jsonl next to it.
+CWS_GUARD_PROFILE picks the profile the judge runs under (default: the session's own).
 
 The rules are plain and deterministic; only the prompt check asks a judge -- a separate,
 clean `claude -p` on a small model that sees the goal, the current scope and the new prompt,
@@ -116,7 +122,7 @@ def settings(conf):
     root = conf.get("CWS_WORK_ROOT") or os.environ.get("CLAUDE_WORK_ROOT") or os.path.join(HOME, "work_sessions")
     ignore = CODE_NAMES | set((conf.get("CWS_GUARD_IGNORE_NAMES") or "").lower().split())
     return {"mode": mode if mode in MODES else "off", "model": conf.get("CWS_GUARD_MODEL") or "haiku", "ignore": ignore,
-            "timeout": timeout, "root": os.path.realpath(root)}
+            "timeout": timeout, "root": os.path.realpath(root), "profile": (conf.get("CWS_GUARD_PROFILE") or "").strip()}
 
 
 def now():
@@ -280,20 +286,39 @@ def rules_text(root):
         return DEFAULT_RULES
 
 
+def judge_profile(cfg):
+    """The profile the judge runs under, and its environment: CWS_GUARD_PROFILE when set, else
+    the session's own (inherited CLAUDE_CONFIG_DIR). Returns (name, env, error)."""
+    env = dict(os.environ, **{JUDGE_ENV: "1"})
+    if cfg.get("profile"):
+        d = os.path.join(HOME, ".claude-" + cfg["profile"])
+        if not os.path.isdir(d):
+            return cfg["profile"], env, "judge profile dir {} not found".format(d)
+        env["CLAUDE_CONFIG_DIR"] = d
+        return cfg["profile"], env, None
+    name = os.path.basename(os.environ.get("CLAUDE_CONFIG_DIR") or "").replace(".claude-", "", 1)
+    return name or "default", env, None
+
+
 def judge(job, cfg):
     """Ask the judge about one prompt. Returns (answer dict or None, error or None, ms)."""
+    profile, env, perr = judge_profile(cfg)
+    if perr:
+        return None, perr, 0
     first = not job.get("literal")
     msg = "GOAL: {}\nDONE_WHEN: {}\nCURRENT SCOPE: {}\nNEW PROMPT: {}\n{}".format(
         job.get("goal") or "(none)", job.get("done_when") or "(not stated)",
         job.get("literal") or "(none -- this is the first request)", job["prompt"][:4000],
         "This is the session's first request: it defines the scope, so the verdict is continuation." if first else "")
-    cmd = ["claude", "-p", "--setting-sources", "", "--strict-mcp-config", "--model", cfg["model"], "--tools", "",
+    # The profile's settings are loaded (a gateway profile keeps its URL and token there) with every
+    # hook switched off, so the judge never runs the guard or any other hook
+    cmd = ["claude", "-p", "--settings", json.dumps({"disableAllHooks": True}), "--strict-mcp-config", "--model", cfg["model"], "--tools", "",
            "--no-session-persistence", "--system-prompt", rules_text(cfg["root"]) + "\nAnswer only via the JSON schema.",
            "--output-format", "json", "--json-schema", json.dumps(SCHEMA), msg]
     t = time.time()
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=cfg["timeout"], cwd=tempfile.gettempdir(),
-                           env=dict(os.environ, **{JUDGE_ENV: "1"}))
+                           env=env)
         out = json.loads(r.stdout or "{}")
         ans = out.get("structured_output")
         if out.get("is_error") or not isinstance(ans, dict) or ans.get("verdict") not in SCHEMA["properties"]["verdict"]["enum"]:
@@ -329,15 +354,107 @@ def apply_verdict(sdir, job, cfg, ans, err, ms):
         if not err and current and not blocked:
             st["literal"] = ans.get("literal") or st.get("literal") or job["prompt"][:300]
             grow(st, ans.get("targets") or [], st.get("open", False))
+    rec["judge_id"] = decision_id(job)
     if err:
         rec.update(decision="allow", type="ok", reason="judge failed, let through: " + err, judge_error=True)
-        log(sdir, rec)
-        return rec
-    rec.update(decision="block" if verdict == "pivot" else "allow", type="pivot" if verdict == "pivot" else "ok",
-               verdict=verdict, reason=ans.get("reason", "")[:400], literal=ans.get("literal", "")[:300],
-               targets=ans.get("targets") or [])
+    else:
+        rec.update(decision="block" if verdict == "pivot" else "allow", type="pivot" if verdict == "pivot" else "ok",
+                   verdict=verdict, reason=ans.get("reason", "")[:400], literal=ans.get("literal", "")[:300],
+                   targets=ans.get("targets") or [])
     log(sdir, rec)
+    journal(sdir, job, cfg, ans, err, ms, blocked)
     return rec
+
+
+# --- the judge's journal: every decision, in the work root, for review and learning ---------
+def journal_dir(root):
+    return os.path.join(root, "_audit", "guard")
+
+
+def decision_id(job):
+    return hashlib.sha1("{}|{}|{}".format(job["sid"], job["no"], job["prompt"]).encode()).hexdigest()[:10]
+
+
+def journal(sdir, job, cfg, ans, err, ms, blocked):
+    """Append the full decision -- what the judge saw and what it said -- to
+    _audit/guard/judge.jsonl, so decisions can be reviewed (claude-guard review) and the rules
+    tuned from them."""
+    entry = {"id": decision_id(job), "ts": now(), "folder": os.path.relpath(sdir, cfg["root"]),
+             "session_id": job["sid"], "prompt_no": job["no"], "mode": cfg["mode"], "model": cfg["model"],
+             "profile": judge_profile(cfg)[0], "judge_ms": ms, "goal": job.get("goal", ""),
+             "done_when": job.get("done_when", ""), "scope_before": job.get("literal", ""),
+             "prompt": job["prompt"][:4000], "enforced": blocked}
+    if err:
+        entry["error"] = err
+    else:
+        entry.update(verdict=ans["verdict"], literal=ans.get("literal", ""), targets=ans.get("targets") or [],
+                     reason=ans.get("reason", ""))
+    try:
+        os.makedirs(journal_dir(cfg["root"]), exist_ok=True)
+        with open(os.path.join(journal_dir(cfg["root"]), "judge.jsonl"), "a") as fh:
+            fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except OSError as e:
+        print("claude-guard: can't write the judge journal: {}".format(e), file=sys.stderr)
+
+
+def read_jsonl(path):
+    try:
+        with open(path) as fh:
+            lines = fh.readlines()
+    except OSError:
+        return []
+    out = []
+    for line in lines:
+        try:
+            r = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(r, dict):
+            out.append(r)
+    return out
+
+
+def reviews(root):
+    """The latest review of each decision id: {id: {"label", "note", "ts"}}."""
+    return {r["id"]: r for r in read_jsonl(os.path.join(journal_dir(root), "reviews.jsonl")) if r.get("id")}
+
+
+def review(args, cfg, out):
+    """claude-guard review [--days N] [--all]         list decisions to review (pivots and
+                                                       failures not yet reviewed, by default)
+       claude-guard review ID right|wrong [NOTE...]   record your verdict on one decision"""
+    decisions = read_jsonl(os.path.join(journal_dir(cfg["root"]), "judge.jsonl"))
+    done = reviews(cfg["root"])
+    if args and args[0] not in ("--days", "--all"):
+        if len(args) < 2 or args[1] not in ("right", "wrong"):
+            out.write("usage: claude-guard review ID right|wrong [NOTE...]\n")
+            return 1
+        hits = sorted({d["id"] for d in decisions if d.get("id", "").startswith(args[0])})
+        if len(hits) != 1:
+            out.write("claude-guard review: {} decisions match '{}'\n".format(len(hits), args[0]))
+            return 1
+        rec = {"id": hits[0], "ts": now(), "label": args[1], "note": " ".join(args[2:])}
+        os.makedirs(journal_dir(cfg["root"]), exist_ok=True)
+        with open(os.path.join(journal_dir(cfg["root"]), "reviews.jsonl"), "a") as fh:
+            fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        out.write("recorded: {} is {}\n".format(hits[0], args[1]))
+        return 0
+    days, show_all = 14, "--all" in args
+    if "--days" in args:
+        days = int(args[args.index("--days") + 1])
+    since = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    rows = [d for d in decisions if d.get("ts", "") >= since and d.get("id")
+            and (show_all or (d["id"] not in done and (d.get("verdict") in ("pivot", "extension") or d.get("error"))))]
+    out.write("claude-guard review: {} decision(s){}\n".format(len(rows), "" if show_all else " to review"))
+    for d in rows:
+        mark = done.get(d["id"], {}).get("label", "")
+        out.write("\n  {}  {}  {}{}\n".format(d["id"], d["ts"][:16], d.get("verdict") or "failed",
+                                                "  [" + mark + "]" if mark else ""))
+        out.write("    goal:   {}\n    prompt: {}\n    why:    {}\n".format(
+            d.get("goal", "")[:110], d.get("prompt", "").replace("\n", " ")[:110], (d.get("reason") or d.get("error") or "")[:160]))
+    if rows:
+        out.write("\n  record a verdict: claude-guard review ID right|wrong [note]\n")
+    return 0
 
 
 # --- the hooks ------------------------------------------------------------------------------
@@ -506,6 +623,18 @@ def report(args, cfg, out):
     if ms or errs:
         out.write("\n  judge: {} calls, median {:.1f}s, p90 {:.1f}s, {} failed\n".format(
             len(ms), ms[len(ms) // 2] / 1000 if ms else 0, ms[int(len(ms) * 0.9)] / 1000 if ms else 0, errs))
+    done = reviews(cfg["root"])
+    judged = {d["id"]: d for d in read_jsonl(os.path.join(journal_dir(cfg["root"]), "judge.jsonl"))
+              if d.get("id") and d.get("ts", "") >= since}
+    labels = [done[i] for i in judged if i in done]
+    if labels:
+        wrong = [l for l in labels if l.get("label") == "wrong"]
+        out.write("  judge reviewed: {} of {}, {} right, {} wrong\n".format(
+            len(labels), len(judged), len(labels) - len(wrong), len(wrong)))
+        for l in wrong[-5:]:
+            d = judged[l["id"]]
+            out.write("    wrong {}: {} -> {}{}\n".format(l["id"], d.get("prompt", "")[:70], d.get("verdict"),
+                                                        " (" + l["note"] + ")" if l.get("note") else ""))
     over = sum(1 for r in recs if r.get("override"))
     if over:
         out.write("  overrides (force:): {}\n".format(over))
@@ -531,13 +660,16 @@ def main(argv=None, stdin=None, stdout=None):
     cfg = settings(load_config())
     if cmd == "report":
         return report(argv[1:], cfg, stdout)
+    if cmd == "review":
+        return review(argv[1:], cfg, stdout)
     if cmd == "judge":                             # the background half of a shadow prompt check
         job = json.loads(argv[2])
         apply_verdict(argv[1], job, cfg, *judge(job, cfg))
         return 0
     if cmd not in HOOKS:
         print("usage: claude-guard prompt|tool|stop  (hooks, JSON on stdin)\n"
-              "       claude-guard report [--days N] [PATH]", file=sys.stderr)
+              "       claude-guard report [--days N] [PATH]\n"
+              "       claude-guard review [--days N] [--all] | review ID right|wrong [NOTE]", file=sys.stderr)
         return 0 if cmd in ("-h", "--help") else 1
     if os.environ.get(JUDGE_ENV) or cfg["mode"] == "off":
         return 0

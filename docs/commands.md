@@ -348,7 +348,16 @@ objective. Three hooks, registered by `install.sh`, that do nothing until
 ```
 claude-guard report                 what the guard saw in the last 14 days, across the work root
 claude-guard report --days 7 PATH   a shorter window, or one folder
+claude-guard review                 the judge's pivots, extensions and failures you haven't reviewed
+claude-guard review --all           every decision, with your marks
+claude-guard review ID right|wrong [NOTE]   mark one (an id prefix is enough)
 ```
+
+Every judge decision — goal, done-when, scope before, prompt, verdict, reason, model, profile,
+time — is kept in `<work root>/_audit/guard/judge.jsonl`, and your marks in `reviews.jsonl`
+next to it. The report shows how many were reviewed and the wrong ones with your notes: the
+material for tuning `guard-rules.md`. `CWS_GUARD_PROFILE` picks the profile the judge runs
+under.
 
 Counts by event, type and decision, the judge's median and p90 time and failures,
 overrides, and the latest pivots, out-of-scope calls and loops with their reasons — the

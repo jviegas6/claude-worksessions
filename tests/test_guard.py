@@ -157,7 +157,7 @@ def test_enforce_blocks_a_pivot_and_keeps_the_scope(guard, sdir, monkeypatch):
     out = prompt(guard, sdir, "fix the row filter function", cfg(guard, "enforce"))
     assert "Fix the filter." in out["hookSpecificOutput"]["additionalContext"]
     cmd, kw = calls[0]
-    assert cmd[:4] == ["claude", "-p", "--setting-sources", ""] and kw["env"]["CWS_GUARD_JUDGE"] == "1"
+    assert cmd[:4] == ["claude", "-p", "--settings", '{"disableAllHooks": true}'] and kw["env"]["CWS_GUARD_JUDGE"] == "1"
     assert "first request" in cmd[-1]
     fake_judge(monkeypatch, guard, {"verdict": "pivot", "literal": "Survey methods.", "targets": ["everything"],
                                     "reason": "broader survey"}, calls=calls)
@@ -364,3 +364,58 @@ def test_report(guard, sdir, home):
     assert "6 records" in text and "judge: 2 calls, median 9.0s" in text and "1 failed" in text
     assert "overrides (force:): 1" in text and "survey everything" in text and "a.b.c" in text and "Loops" in text
     assert "prompt   pivot   block        1" in text
+
+
+# --- judge profile, journal and review ------------------------------------------------------
+def test_judge_profile(guard, home, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(home / ".claude-work"))
+    name, env, err = guard.judge_profile(cfg(guard))
+    assert (name, err) == ("work", None) and env["CWS_GUARD_JUDGE"] == "1"
+    (home / ".claude-personal").mkdir()
+    name, env, err = guard.judge_profile(cfg(guard, profile="personal"))
+    assert name == "personal" and env["CLAUDE_CONFIG_DIR"] == str(home / ".claude-personal") and err is None
+    name, env, err = guard.judge_profile(cfg(guard, profile="nope"))
+    assert "not found" in err
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR")
+    assert guard.judge_profile(cfg(guard))[0] == "default"
+
+
+def test_a_missing_judge_profile_fails_open(guard, sdir, monkeypatch):
+    calls = []
+    fake_judge(monkeypatch, guard, {}, calls=calls)
+    assert prompt(guard, sdir, "fix the row filter function", cfg(guard, "enforce", profile="nope")) is None
+    assert calls == [] and "judge profile dir" in records(sdir)[-1]["reason"]
+
+
+def test_journal_and_review(guard, sdir, home, monkeypatch):
+    root = home / "work_sessions"
+    c = cfg(guard, "enforce")
+    fake_judge(monkeypatch, guard, {"verdict": "continuation", "literal": "Fix it.", "targets": [], "reason": "first"})
+    prompt(guard, sdir, "fix the row filter function", c)
+    fake_judge(monkeypatch, guard, {"verdict": "pivot", "literal": "Survey.", "targets": [], "reason": "broader"})
+    prompt(guard, sdir, "survey every access method", c)
+    fake_judge(monkeypatch, guard, exc=OSError("no claude"))
+    prompt(guard, sdir, "then document the result", c)
+    j = [json.loads(l) for l in (root / "_audit" / "guard" / "judge.jsonl").read_text().splitlines()]
+    assert [d.get("verdict") for d in j] == ["continuation", "pivot", None] and j[2]["error"] == "no claude"
+    assert j[1]["goal"] == "fix the row filter on core" and j[1]["scope_before"] == "Fix it." and j[1]["enforced"]
+    assert j[1]["folder"].endswith("10-00-00_access-policy") and j[1]["model"] == "haiku"
+    assert records(sdir)[1]["judge_id"] == j[1]["id"]
+    run = lambda *a: (lambda o: (guard.main(["review", *a], stdout=o), o.getvalue())[1])(io.StringIO())
+    listing = run()
+    assert "2 decision(s) to review" in listing and j[1]["id"] in listing and j[0]["id"] not in listing
+    assert j[0]["id"] in run("--all", "--days", "3")
+    assert run(j[1]["id"][:6], "wrong", "a", "follow-up") == "recorded: {} is wrong\n".format(j[1]["id"])
+    assert run(j[2]["id"], "right") and "1 decision(s) to review" not in run()
+    assert "[wrong]" in run("--all")
+    assert "usage" in run(j[1]["id"], "maybe") and "0 decisions match" in run("zzz", "right")
+    out = io.StringIO()
+    guard.main(["report"], stdout=out)
+    assert "judge reviewed: 2 of 3, 1 right, 1 wrong" in out.getvalue() and "(a follow-up)" in out.getvalue()
+
+
+def test_journal_write_failure_is_reported(guard, sdir, home, capsys):
+    (home / "work_sessions" / "_audit").write_text("a file, not a folder")
+    guard.apply_verdict(str(sdir), {"sid": "s1", "no": 1, "prompt": "p"}, cfg(guard), None, "x", 1)
+    assert "judge journal" in capsys.readouterr().err
+    assert guard.read_jsonl(str(home / "missing.jsonl")) == []

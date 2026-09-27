@@ -138,6 +138,9 @@ examined next, it's asked, once, to add a short list of proposals. It doesn't ca
 | `claude-guard report` | what the guard saw in the last 14 days, across all sessions |
 | `claude-guard report --days 7` | a different window |
 | `claude-guard report <folder>` | one request folder, or one day (`<work root>/2026/09/26`) |
+| `claude-guard review` | the judge's decisions you haven't reviewed yet (new objectives, extensions, failures) |
+| `claude-guard review --all` | every decision, with your marks |
+| `claude-guard review ID right\|wrong [note]` | mark a decision as right or wrong, with an optional note |
 
 Inside a prompt:
 
@@ -160,6 +163,13 @@ In each request folder:
 | `.quality.jsonl` | one line per guard decision: time, what happened, the decision, and why |
 | `.scope.json` | the guard's working state: the current request's scope and targets |
 
+And for all sessions together, in `<work root>/_audit/guard/`:
+
+| File | Holds |
+|---|---|
+| `judge.jsonl` | every decision of the judge, complete: the goal, done-when and scope it was shown, the prompt, its verdict and reason, the model, profile and time |
+| `reviews.jsonl` | your marks on those decisions (`claude-guard review`) |
+
 A line in `.quality.jsonl` looks like this:
 
 ```json
@@ -175,6 +185,40 @@ A line in `.quality.jsonl` looks like this:
 ---
 
 ## 6. Reviewing shadow mode
+
+### 6.1 Mark the judge's decisions
+
+Every few days, go through what the judge decided:
+
+```sh
+claude-guard review
+```
+
+```
+claude-guard review: 2 decision(s) to review
+
+  3fa9c1d2e0  2026-09-26T21:57  pivot
+    goal:   fix the access policy on the orders table
+    prompt: what access-control mechanisms does the platform offer overall?
+    why:    a platform-wide survey is a different deliverable from fixing one policy
+
+  a81c07b5f2  2026-09-27T09:12  pivot
+    goal:   find why the nightly load fails
+    prompt: and the permissions on the target folder?
+    why:    permissions are a separate topic
+```
+
+Mark each one. The id can be shortened, and a note says why:
+
+```sh
+claude-guard review 3fa9 right
+claude-guard review a81c wrong "permissions were the cause of the failure: a follow-up"
+```
+
+The wrong ones, with your notes, are exactly what to fix in `guard-rules.md` (§7.1). Changed
+your mind? Mark it again; the latest mark counts.
+
+### 6.2 The overall picture
 
 After a week or two, run:
 
@@ -194,6 +238,8 @@ claude-guard: last 14 days, 212 records, mode now shadow
   tool     loop    deny         4
 
   judge: 130 calls, median 8.4s, p90 11.2s, 0 failed
+  judge reviewed: 12 of 130, 10 right, 2 wrong
+    wrong a81c07b5f2: and the permissions on the target folder? -> pivot (permissions were the cause…)
 
   Pivots (latest 8):
     2026-09-26T21:57  2026/09/26/10-00-00_access-policy
@@ -206,6 +252,7 @@ Check these before switching to enforce:
 
 | Look at | Healthy | If not |
 |---|---|---|
+| **judge reviewed**: how many marked wrong? | few | adjust `_config/guard-rules.md` from the wrong ones and their notes (§7) |
 | **Pivots**: were they really new objectives? | mostly yes | adjust `_config/guard-rules.md` (§7) |
 | **Out of scope**: were those reads really unnecessary? | mostly yes | see §7: ignore names, or accept that "go deeper" will be needed more |
 | **Loops** | few | — |
@@ -237,10 +284,11 @@ SDK objects that look like that (for example `client.jobs.list`), list their fir
 CWS_GUARD_IGNORE_NAMES="client sdk"
 ```
 
-### 7.3 Judge model and patience
+### 7.3 Judge model, profile and patience
 
 ```sh
 CWS_GUARD_MODEL="haiku"          # any model alias or name your profile can use
+CWS_GUARD_PROFILE=""             # the profile the judge runs under (e.g. "personal"); empty = the session's own
 CWS_GUARD_JUDGE_TIMEOUT="15"     # seconds; if the judge is slower, the prompt goes through (keep under 30)
 ```
 
@@ -251,8 +299,9 @@ CWS_GUARD_JUDGE_TIMEOUT="15"     # seconds; if the judge is slower, the prompt g
 | Symptom | Cause / fix |
 |---|---|
 | `claude-guard report` shows no records | mode is `off`; or the sessions didn't run inside a request folder; or no hooks (run `./install.sh`, then check `/hooks` in Claude Code) |
-| `judge failed … Not logged in` | the profile the session runs under isn't signed in for `claude -p`. Run `claude` once with that profile |
-| `judge failed …` on the gateway profile | the gateway may not offer the configured model. Set `CWS_GUARD_MODEL` to one it has |
+| `judge failed … Not logged in` | the judge's profile (the session's, or `CWS_GUARD_PROFILE`) isn't signed in. Run `claude` once with that profile, or set `CWS_GUARD_PROFILE` to one that is |
+| `judge failed … judge profile dir … not found` | `CWS_GUARD_PROFILE` names a profile that doesn't exist; use a name from `claude-new -L` |
+| `judge failed …` on the gateway profile | the gateway may not offer the configured model. Set `CWS_GUARD_MODEL` to one it has, or `CWS_GUARD_PROFILE` to another profile |
 | `judge failed … timeout` | raise `CWS_GUARD_JUDGE_TIMEOUT` (below 30), or use a faster model |
 | A read you needed was denied | say "go deeper" in the prompt, or name the thing in the prompt; if it keeps happening, tune §7 |
 | A follow-up was blocked as a new objective | resend with `force:`; add the case to `guard-rules.md` |

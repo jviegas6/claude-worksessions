@@ -12,6 +12,9 @@
   decision to `.quality.jsonl` without blocking (the judge runs in the background);
   `enforce` blocks. `force:` overrides, "go deeper" widens, errors fail open. The judge's
   criteria are `_config/guard-rules.md`; `claude-guard report` summarises what it saw.
+  Every judge decision is journaled in `_audit/guard/judge.jsonl` with what it saw and
+  said; `claude-guard review` lists them and records your right/wrong marks, and the report
+  shows agreement and the wrong cases. `CWS_GUARD_PROFILE` picks the judge's profile.
   Documented in `docs/guard/`: a user guide, a high-level and a low-level design.
 - **Session goal**: `claude-new` records `goal` and `done_when` (`-g`, `--done`, or asked);
   **`claude-goal`** shows or re-anchors them when the objective changes on purpose.

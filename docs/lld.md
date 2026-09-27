@@ -94,7 +94,7 @@ A missing file leaves the defaults.
 | `CWS_PROFILE_<name>_DESC` | — | `claude-new` menu and `-L` |
 | `CWS_PROFILE_<name>_BASE_URL` | — | installer (gateway env; no sign-in), `claude-new -L` |
 | `CWS_INSTALL_YAZI` | `1` | installer |
-| `CWS_GUARD_MODE`, `CWS_GUARD_MODEL`, `CWS_GUARD_PROFILE`, `CWS_GUARD_JUDGE_TIMEOUT`, `CWS_GUARD_IGNORE_NAMES` | `off`, `haiku`, —, `25`, — | `claude-guard` ([LLD §2](guard/lld.md#2-configuration)) |
+| `CWS_GUARD_MODE`, `CWS_GUARD_MODEL`, `CWS_GUARD_PROFILE`, `CWS_GUARD_JUDGE_TIMEOUT`, `CWS_GUARD_IGNORE_NAMES`, `CWS_GUARD_MAX_EXTENSIONS` | `off` (`off`/`shadow`/`warn`/`enforce`), `haiku`, —, `25`, —, `2` | `claude-guard` ([LLD §2](guard/lld.md#2-configuration)) |
 
 Environment-only: `CWS_CONFIG`, `CWS_PYTHON` (interpreter for shell JSON helpers), `CWS_OS`
 (OS override), `CWS_CACHE_DIR`, `CWS_TRASH_DIR`, `XDG_CACHE_HOME`, `XDG_DATA_HOME`,

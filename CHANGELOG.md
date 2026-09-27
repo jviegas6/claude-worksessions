@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.18.0] — 2026-09-27
+
+- **claude-guard `warn` mode**, between shadow and enforce. It never blocks and adds no delay,
+  but shows you a one-line notice wherever enforce would act: a new objective, a read outside
+  the request, a loop, an answer without next steps. The judge still runs in the background, so
+  its verdict on a prompt appears at Claude's next step, at the end of the answer, or with your
+  next prompt. `CWS_GUARD_MODE=warn`.
+- **Drift:** extensions of a session's goal add up. After `CWS_GUARD_MAX_EXTENSIONS` (default 2),
+  the next one counts as a new objective. `claude-goal` resets the count.
+- **The judge's rules:** a different product, platform or system is a new objective, not an
+  extension. Before, "Databricks API" → Snowflake → SQL Server passed as three extensions.
+- **Fix:** `claude-hook-vague` was committed without its executable bit, so it failed with
+  "Permission denied" once a checkout rewrote it. A test now checks every command in `bin/` is
+  executable.
+
 ## [2.17.0] — 2026-09-27
 
 - **claude-guard knows where the work is.** A request's scope is its folder, plus:

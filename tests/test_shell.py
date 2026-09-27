@@ -652,7 +652,8 @@ def test_claude_goal_shows_and_reanchors(tmp_path):
     d = tmp_path / "2026" / "09" / "26" / "10-00-00_x"
     (d / "sub").mkdir(parents=True)
     (d / ".session.json").write_text(json.dumps({"name": "x", "goal": "fix the filter"}))
-    (d / ".scope.json").write_text(json.dumps({"sessions": {"s1": {"literal": "L", "targets": ["t"], "prompt_no": 4}}}))
+    (d / ".scope.json").write_text(json.dumps({"sessions": {"s1": {"literal": "L", "targets": ["t"], "prompt_no": 4,
+                                                                 "extensions": 2}}}))
     goal = lambda args, cwd=d: zsh('cd "{}" && claude-goal {}'.format(cwd, args), tmp_path)
     assert goal("") == "goal: fix the filter\ndone when: (not stated)\n"
     out = goal("survey the access methods --done 'a comparison table'", d / "sub")

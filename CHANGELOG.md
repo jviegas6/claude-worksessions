@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.18.1] — 2026-09-28
+
+- **Warn notices arrive with the answer.** The judge runs in the background and takes 5–12 s,
+  so a short answer used to finish first, and its notice waited for your next prompt. The end
+  of the answer now waits up to 15 s for that prompt's verdict (only when one is still pending).
+  The Stop hook's timeout is 20 s; `install.sh` updates it on existing installs.
+- **Fewer "no next steps" notices.** Next steps are expected only after a real investigation (3
+  or more reads, or a read outside the request), and never when the prompt asked for brevity
+  ("just the SQL", "one line").
+
 ## [2.18.0] — 2026-09-27
 
 - **claude-guard `warn` mode**, between shadow and enforce. It never blocks and adds no delay,

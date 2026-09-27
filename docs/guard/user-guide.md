@@ -28,7 +28,7 @@ CWS_GUARD_MODE="shadow"     # off | shadow | enforce
 |---|---|
 | `off` | nothing; the guard does nothing |
 | `shadow` | **nothing**. It decides everything and writes it to a log, but never blocks or slows you down |
-| `warn` | a one-line **notice** from `claude-guard` where enforce would act: a new objective, a read outside the request, a loop, missing next steps. Never blocks, never slows prompts; a verdict on your prompt appears at Claude's next step or at the end of its answer |
+| `warn` | a one-line **notice** from `claude-guard` where enforce would act: a new objective, a read outside the request, a loop, missing next steps. Never blocks, never slows prompts; a verdict on your prompt appears with Claude's answer (the end of a short answer can take a few seconds more while the judge finishes) |
 | `enforce` | it blocks new objectives, stops Claude reading things outside the request, and asks Claude for next-step proposals. Prompts take a few seconds longer while the judge decides |
 
 The mode is read on every hook call, so changing it takes effect on the next prompt with no

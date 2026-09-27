@@ -340,7 +340,7 @@ objective. Three hooks, registered by `install.sh`, that do nothing until
 |---|---|---|
 | `claude-guard prompt` (`UserPromptSubmit`) | a judge — a clean `claude -p` on `CWS_GUARD_MODEL` that sees only the goal, done-when, the current scope and the new prompt — calls it *continuation*, *extension* or *pivot*, and gives its literal scope and targets. Paths, URLs and dotted names in the prompt are targets too | a pivot is blocked with the options: a new session, `claude-goal`, or resend with `force:`. Otherwise Claude is told the literal scope |
 | `claude-guard tool` (`PreToolUse`: reads, web, Bash, MCP) | does the call reach something outside the targets (the session folder, scratchpad and temp dirs are always fine)? The same call a third time in one request is a loop | the call is denied, and Claude is told to list it as a next step |
-| `claude-guard stop` (`Stop`) | after an investigation (two or more reads), does the answer end by proposing the next level? | Claude is asked once to add them |
+| `claude-guard stop` (`Stop`) | after an investigation (three or more reads, or a read outside the request), unless the prompt asked for brevity, does the answer end by proposing the next level? | Claude is asked once to add them |
 
 - `force:` at the start of a prompt skips the checks for that request, logged as an override.
   (Not `!force` — a leading `!` runs a shell command in Claude Code.)

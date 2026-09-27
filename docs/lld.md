@@ -203,7 +203,7 @@ and warned about.
 | `UserPromptSubmit` | — | `~/.local/bin/claude-hook-vague` | 10 |
 | `UserPromptSubmit` | — | `~/.local/bin/claude-guard prompt` | 30 |
 | `PreToolUse` | `Read\|Glob\|Grep\|WebFetch\|WebSearch\|Bash\|Write\|Edit\|MultiEdit\|NotebookEdit\|mcp__.*` | `~/.local/bin/claude-guard tool` | 5 |
-| `Stop` | — | `~/.local/bin/claude-guard stop` | 10 |
+| `Stop` | — | `~/.local/bin/claude-guard stop` | 20 |
 
 Added only when no hook in that event has the same `command`; the user's own hooks are kept. An
 existing group holding only our hook gets its matcher updated when it differs.

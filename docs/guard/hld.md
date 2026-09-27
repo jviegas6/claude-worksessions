@@ -155,7 +155,8 @@ tells the agent to list it as a next step.
 
 ### 6.4 Stop
 
-If the request made two or more reading calls and the last answer does not end with
+If the request was an investigation (3 or more reading calls, or a read outside the request),
+the prompt didn't ask for brevity ("just the SQL"), and the last answer does not end with
 next-level proposals (a phrase such as "next step", "want me to", or a closing question),
 the stop is logged as `depth`. In enforce, Claude is asked once to add them.
 `stop_hook_active` prevents a second block.
@@ -181,7 +182,7 @@ work, so the audit trail stays next to the work it describes.
 |---|---|---|---|---|
 | `off` | — | — | — | not called |
 | `shadow` | log only | log only | log only | background, no delay to the user |
-| `warn` | log; a one-line notice to the user on a pivot | log; a notice on a new out-of-scope read or a loop (the call goes ahead) | log; a notice when next steps are missing | background, no delay; its verdict is shown at the next tool call, end of answer or prompt |
+| `warn` | log; a one-line notice to the user on a pivot | log; a notice on a new out-of-scope read or a loop (the call goes ahead) | log; a notice when next steps are missing; waits up to 15 s for the prompt's verdict | background, no delay to the prompt; its verdict is shown with the answer (or at the next tool call or prompt) |
 | `enforce` | blocks pivots; injects the literal scope | denies out-of-scope calls and loops | asks once for proposals | synchronous, bounded by the timeout |
 
 In every mode, `decision` in the log is what **enforce** does (or would do), so shadow

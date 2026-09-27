@@ -282,8 +282,8 @@ def test_stop_asks_once_for_next_level_proposals(guard, sdir, monkeypatch):
     monkeypatch.setattr(guard.subprocess, "Popen", lambda *a, **k: None)
     c = cfg(guard, "enforce")
     prompt(guard, sdir, "list the sources of the orders_daily model", c | {"mode": "shadow"})
-    tool(guard, sdir, "Read", {"file_path": str(sdir / "a")}, c)
-    tool(guard, sdir, "Read", {"file_path": str(sdir / "b")}, c)
+    for f in "abc":
+        tool(guard, sdir, "Read", {"file_path": str(sdir / f)}, c)
     out = stop(guard, sdir, c, "The sources are A and B.")
     assert out["decision"] == "block" and "next level" in out["reason"]
     assert stop(guard, sdir, c, "The sources are A and B. Next step: open A.", active=True) is None
@@ -587,3 +587,60 @@ def test_shadow_never_shows_anything(guard, sdir):
         st["notices"] = ["kept for warn only"]
     assert tool(guard, sdir, "Read", {"file_path": "/etc/q"}, s) is None
     assert guard.show(["x"], s) is None and guard.show([], cfg(guard, "warn")) is None
+
+
+
+# --- when next steps are expected; waiting for the verdict (warn) ---------------------------
+def test_next_steps_only_after_an_investigation_and_not_when_brief(guard, sdir, monkeypatch):
+    monkeypatch.setattr(guard.subprocess, "Popen", lambda *a, **k: None)
+    c = cfg(guard, "enforce")
+    ask = lambda text: prompt(guard, sdir, text, cfg(guard))
+    ask("list the sources of the orders model")
+    for f in "ab":
+        tool(guard, sdir, "Read", {"file_path": str(sdir / f)}, c)
+    assert stop(guard, sdir, c, "A and B.") is None                               # two reads: not yet
+    ask("write the row filter for sales_db.core.orders, EU only. Just the SQL.")
+    for f in "abc":
+        tool(guard, sdir, "Read", {"file_path": str(sdir / f)}, c)
+    assert stop(guard, sdir, c, "SELECT 1") is None                                # asked for brevity
+    ask("what feeds the orders model?")
+    tool(guard, sdir, "Read", {"file_path": "/etc/elsewhere.md"}, cfg(guard))       # one read, but outside
+    assert stop(guard, sdir, c, "It's X.")["decision"] == "block"
+    assert guard.BRIEF.search("responde só com o SQL") and not guard.BRIEF.search("explain the lineage")
+
+
+def test_warn_waits_for_the_verdict_at_the_end_of_the_answer(guard, sdir, monkeypatch):
+    monkeypatch.setattr(guard.subprocess, "Popen", lambda *a, **k: None)
+    w = cfg(guard, "warn")
+    prompt(guard, sdir, "understand the jobs API", w)
+    assert state(sdir)["judging"]["no"] == 1
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(guard.time, "time", lambda: clock["t"])
+    job = {"sid": "s1", "no": 1, "prompt": "what about snowflake?", "goal": "jobs API", "literal": "Jobs."}
+    def sleep(_):                                   # the judge answers while the stop hook waits
+        clock["t"] += 0.25
+        if clock["t"] >= 1002:
+            guard.apply_verdict(str(sdir), job, w, {"verdict": "pivot", "literal": "", "targets": [],
+                                                     "reason": "another platform"}, None, 5)
+    monkeypatch.setattr(guard.time, "sleep", sleep)
+    with guard.scope(str(sdir), "s1") as st:
+        st["judging"]["at"] = clock["t"]
+    out = stop(guard, sdir, w, "Snowflake's API is ...")
+    assert "looks like a new objective" in out["systemMessage"] and "judging" not in state(sdir)
+    # a judge that never answers: waits at most VERDICT_WAIT, then goes on
+    with guard.scope(str(sdir), "s1") as st:
+        st.update(prompt_no=2, judging={"no": 2, "at": clock["t"]}, turn=guard.new_turn())
+    start = clock["t"]
+    monkeypatch.setattr(guard.time, "sleep", lambda _: clock.__setitem__("t", clock["t"] + 0.25))
+    assert stop(guard, sdir, w, "ok") is None and clock["t"] - start <= guard.VERDICT_WAIT + 0.5
+    # a stale one (started long ago) or another prompt's: no wait
+    with guard.scope(str(sdir), "s1") as st:
+        st.update(prompt_no=3, judging={"no": 3, "at": clock["t"] - 60}, turn=guard.new_turn())
+    start = clock["t"]
+    stop(guard, sdir, w, "ok")
+    assert clock["t"] == start
+    # shadow never waits
+    with guard.scope(str(sdir), "s1") as st:
+        st.update(prompt_no=4, judging={"no": 4, "at": clock["t"]}, turn=guard.new_turn())
+    stop(guard, sdir, cfg(guard, "shadow"), "ok")
+    assert clock["t"] == start

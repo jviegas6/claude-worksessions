@@ -563,13 +563,22 @@ def test_install_registers_the_notfound_hook_and_uninstall_removes_it(tmp_path):
     assert json.loads((tmp_path / ".claude-personal" / "settings.json").read_text())["hooks"]["PostToolUse"][0]["hooks"] == [mine]
     r = run("install.sh", "--yes", "--no-bootstrap")                                   # again: not added twice
     assert "personal: prompt-quality hooks in place" in r.stdout
+    # an older install's guard matcher (no Write/Edit) is brought up to date, in place
+    sp = tmp_path / ".claude-personal" / "settings.json"
+    d = json.loads(sp.read_text())
+    d["hooks"]["PreToolUse"][0]["matcher"] = "Read|Glob|Grep|WebFetch|WebSearch|Bash|mcp__.*"
+    sp.write_text(json.dumps(d))
+    r = run("install.sh", "--yes", "--no-bootstrap")
+    assert "personal: added the prompt-quality hooks" in r.stdout
+    pre = json.loads(sp.read_text())["hooks"]["PreToolUse"]
+    assert len(pre) == 1 and pre[0]["matcher"] == "Read|Glob|Grep|WebFetch|WebSearch|Bash|Write|Edit|MultiEdit|NotebookEdit|mcp__.*"
     s = json.loads((tmp_path / ".claude-work" / "settings.json").read_text())
     assert [h["command"] for g in s["hooks"]["PostToolUse"] for h in g["hooks"]] == [hook]
     vague = str(tmp_path / ".local" / "bin" / "claude-hook-vague")
     guard = str(tmp_path / ".local" / "bin" / "claude-guard")
     assert s["hooks"]["UserPromptSubmit"] == [{"hooks": [{"type": "command", "command": vague, "timeout": 10}]},
                                               {"hooks": [{"type": "command", "command": guard + " prompt", "timeout": 30}]}]
-    assert s["hooks"]["PreToolUse"] == [{"matcher": "Read|Glob|Grep|WebFetch|WebSearch|Bash|mcp__.*",
+    assert s["hooks"]["PreToolUse"] == [{"matcher": "Read|Glob|Grep|WebFetch|WebSearch|Bash|Write|Edit|MultiEdit|NotebookEdit|mcp__.*",
                                          "hooks": [{"type": "command", "command": guard + " tool", "timeout": 5}]}]
     assert s["hooks"]["Stop"] == [{"hooks": [{"type": "command", "command": guard + " stop", "timeout": 10}]}]
     assert (tmp_path / "ws" / "_config" / "guard-rules.md").read_text().startswith("<!-- claude-guard")
@@ -606,6 +615,37 @@ def test_claude_new_records_goal_and_done_when(tmp_path):
     r = run_new(tmp_path, "-p personal -t Other -T tooling other thing", PATH=path)   # not a terminal: the name
     d = json.loads(next(tmp_path.glob("[0-9]*/*/*/*/.session.json")).read_text())
     assert (d["goal"], d["done_when"]) == ("other thing", "")
+
+
+def test_path_declares_scope(tmp_path):
+    (tmp_path / ".claude-personal").mkdir()
+    stub = tmp_path / "bin"
+    stub.mkdir()
+    (stub / "claude").write_text("#!/bin/sh\nexit 0\n")
+    (stub / "claude").chmod(0o755)
+    (tmp_path / "repo one").mkdir()
+    (tmp_path / "docs").mkdir()
+    path = str(stub) + os.pathsep + os.environ["PATH"]
+    r = run_new(tmp_path, "-p personal -t Other -T tooling --path '{}' --path ~/docs demo".format(tmp_path / "repo one"),
+                PATH=path)
+    assert r.returncode == 0, r.stderr
+    meta = next(tmp_path.glob("[0-9]*/*/*/*/.session.json"))
+    d = json.loads(meta.read_text())
+    assert d["paths"] == [str(tmp_path / "repo one"), str(tmp_path / "docs")]
+    r = run_new(tmp_path, "-p personal -t Other -T tooling --path /no/such/dir x", PATH=path)
+    assert r.returncode == 1 and "--path needs an existing folder" in r.stderr
+    # claude-goal adds paths without re-anchoring, and shows them
+    goal = lambda args: zsh('cd "{}" && claude-goal {}'.format(meta.parent, args), tmp_path)
+    (tmp_path / "more").mkdir()
+    assert goal("--path '{}' --path '{}'".format(tmp_path / "more", tmp_path / "docs")).startswith("paths: ")
+    d = json.loads(meta.read_text())
+    assert d["paths"][-1] == str(tmp_path / "more") and len(d["paths"]) == 3 and "goal_history" not in d
+    assert "paths: " in goal("")
+    out = goal("'new goal' --path '{}'".format(tmp_path / "more"))
+    assert "goal: demo -> new goal" in out
+    with pytest.raises(subprocess.CalledProcessError) as e:
+        goal("--path /no/such/dir")
+    assert "--path needs an existing folder" in e.value.stderr
 
 
 def test_claude_goal_shows_and_reanchors(tmp_path):

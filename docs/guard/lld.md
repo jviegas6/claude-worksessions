@@ -77,7 +77,7 @@ treats every guard failure (a crash, a timeout, a non-zero exit) as non-blocking
 |---|---|---|---|
 | `mode` | `CWS_GUARD_MODE` | `off` | lower-cased; anything outside `off`/`shadow`/`enforce` becomes `off` |
 | `model` | `CWS_GUARD_MODEL` | `haiku` | passed as is to `claude --model` |
-| `timeout` | `CWS_GUARD_JUDGE_TIMEOUT` | `15` | float; unparsable → 15.0 |
+| `timeout` | `CWS_GUARD_JUDGE_TIMEOUT` | `25` | float; unparsable → 25.0 |
 | `root` | `CWS_WORK_ROOT` → `$CLAUDE_WORK_ROOT` → `~/work_sessions` | — | `realpath` |
 | `ignore` | `CODE_NAMES` ∪ `CWS_GUARD_IGNORE_NAMES` (space-separated, lower-cased) | `CODE_NAMES` | — |
 | `profile` | `CWS_GUARD_PROFILE` | `""` (the session's own) | stripped; checked when the judge runs (§7.1) |
@@ -115,9 +115,9 @@ really changed, or resend it starting with force: to go ahead here.
 
 ### 3.2 `PreToolUse` → `claude-guard tool`
 
-Registered with matcher `Read|Glob|Grep|WebFetch|WebSearch|Bash|mcp__.*`. The code checks the
-tool name again against `REACH_TOOLS` (`^(Read|Glob|Grep|WebFetch|WebSearch|Bash|mcp__.*)$`),
-so a broader registration is harmless.
+Registered with matcher `Read|Glob|Grep|WebFetch|WebSearch|Bash|Write|Edit|MultiEdit|NotebookEdit|mcp__.*`.
+Reads are checked (`REACH_TOOLS`); writes (`WRITE_TOOLS`) only teach the scope (§9). `install.sh`
+updates the matcher of an existing guard hook in place.
 
 Input used: `session_id`, `cwd`, `scratchpad_dir` (optional), `tool_name`, `tool_input`.
 
@@ -180,6 +180,8 @@ stripped. A missing or corrupt file gives `("", "")`.
    "literal": "List the sources of the orders model.",
    "targets": ["db.core.orders", "orders_model"],
    "open": false,
+   "words": ["claude-worksessions", "installer", "orders"],
+   "paths": ["/users/me/repos/sales-etl"],
    "turn": {
     "reach": 4,
     "outside": ["db.staging.orders_raw"],
@@ -197,6 +199,8 @@ stripped. A missing or corrupt file gives `("", "")`.
 | `literal` | one-sentence literal scope of the current request | judge result (`apply_verdict`); the text after `force:` |
 | `targets` | sorted, lower-cased, de-duplicated names the session's requests are about. They **accumulate** over the session and are reset only by `claude-goal` | `grow` |
 | `open` | "go deeper" was asked: target checks are off until the next non-trivial prompt | `grow`, `force:` |
+| `words` | lower-cased words (`[a-z0-9][a-z0-9._-]{2,}`) from the session's non-trivial prompts, the last 400 kept. A git repo whose folder name is one of them, or in the goal, is in scope | `on_prompt` |
+| `paths` | git repos **learned** from writes (real path, lower-cased). Added to the paths declared in `.session.json` | `learn` |
 | `turn.reach` | reading-tool calls in the current request (safe ones included) | `on_tool` |
 | `turn.outside` | identifiers already flagged in this request (for de-duplication and the stop summary) | `on_tool` |
 | `turn.calls` | `sha1(tool_name + json(tool_input, sort_keys))[:12]` → count | `on_tool` |
@@ -431,14 +435,17 @@ Everything is lower-cased.
 names and snake_case words. The asymmetry is deliberate: too many targets costs little (a
 missed flag), while too many identifiers on the tool side costs false flags.
 
-### 8.3 `reached(tool, tool_input, ignore)`
+### 8.3 `reached(tool, tool_input, ignore, cwd)`
+
+Paths keep their letter case (so `git_root` works on case-sensitive file systems); comparisons
+lower-case them.
 
 | Tool | Identifiers |
 |---|---|
-| `Read`, `Glob`, `Grep` | `file_path` or `path`, expanded and lower-cased; none if absent (e.g. a Grep in the cwd) |
+| `Read`, `Glob`, `Grep` | `file_path` or `path`, through `resolve` (`~` expanded; a relative path joined to the session's `cwd`; normalised); none if absent |
 | `WebFetch` | `url` |
 | `WebSearch` | `"search: " + query` |
-| `Bash` | `anchors(command)` |
+| `Bash` | `anchors(command_text(command))`, plus every `./x` or `../x` token (`RELATIVE`) resolved against `cwd`. `command_text` first removes heredoc bodies and the values of `-m`, `--message`, `--body`, `--title`, `--notes`, `--description`: a commit message or PR body can name anything without reaching it |
 | `mcp__*` | `anchors` of every string anywhere in `tool_input` (recursive over dicts and lists) |
 
 ### 8.4 Safe places — `safe_roots` / `safe`
@@ -470,15 +477,17 @@ target if **any** target `t` with `len(t) ≥ 3` satisfies one of:
 ## 9. Tool pipeline — `on_tool`
 
 ```
-tool not in REACH_TOOLS → return
+tool not in WRITE_TOOLS and not in REACH_TOOLS → return
 sdir none → return
+Write/Edit/MultiEdit/NotebookEdit → learn(...) and return None        # writes are never checked
 key = sha1(tool + json(tool_input, sort_keys))[:12]
 with scope(sdir, sid) as st:
     turn = st.turn (created if missing)
     turn.reach += 1
     turn.calls[key] += 1 → repeats
-    idents = {i in reached(...) if not safe(i)}
-    off = sorted(i not matching st.targets)   only if targets non-empty and not st.open
+    area = declared paths (.session.json) + learned paths; words from prompts + the goal
+    idents = {i in reached(..., cwd) if not safe(i)}
+    off = sorted(i for i in idents if outside(i, targets, area))    unless st.open
     new_off = off minus turn.outside;  turn.outside += new_off
 if repeats >= LOOP_AFTER (3):
     log loop once (at exactly 3); return deny(...)       # enforce denies every repeat from 3 on
@@ -488,8 +497,16 @@ if off:
 return None
 ```
 
-- **No targets means no check.** Until a request names something (or the judge returns
-  targets), nothing is out of scope.
+- **`outside(ident, targets, area)`.** A **path** is inside the request when it is under a
+  declared or learned path, in a git repo (`git_root`: the nearest folder with a `.git`) whose
+  folder name is in `area.words`, or on a target. Otherwise it is outside, **even with no
+  targets**: the request's folder is its scope. Anything that is not a path (a table name, a URL,
+  a search) can only be judged against targets, so with none it passes.
+- **`learn(sdir, sid, path, …)`.** A write to a file inside a git repo that isn't already a safe
+  place adds the repo to `paths` and logs an `allow`/`ok` tool record with `learned` (once per
+  repo). That's where the work is, so its reads are in scope from then on.
+- Sub-agent calls (payloads with `agent_id`) are logged with `initiated_by: "subagent"` and
+  `agent_type`.
 - An identifier is **logged** once per request, but in enforce **every** call that reaches it
   is denied, so retrying a denied call does not get it through.
 - `deny(cfg, reason)` returns the deny JSON only in enforce, and `None` otherwise.
@@ -613,7 +630,7 @@ hook merge adds any missing entry, matched by exact `command`, and keeps the use
 | `PostToolUseFailure` | `Bash\|mcp__.*` | `~/.local/bin/claude-hook-notfound` | 10 |
 | `UserPromptSubmit` | — | `~/.local/bin/claude-hook-vague` | 10 |
 | `UserPromptSubmit` | — | `~/.local/bin/claude-guard prompt` | 30 |
-| `PreToolUse` | `Read\|Glob\|Grep\|WebFetch\|WebSearch\|Bash\|mcp__.*` | `~/.local/bin/claude-guard tool` | 5 |
+| `PreToolUse` | `Read\|Glob\|Grep\|WebFetch\|WebSearch\|Bash\|Write\|Edit\|MultiEdit\|NotebookEdit\|mcp__.*` | `~/.local/bin/claude-guard tool` | 5 |
 | `Stop` | — | `~/.local/bin/claude-guard stop` | 10 |
 
 It also:
@@ -717,7 +734,7 @@ at 99% (`claude-guard` 99%).
 |---|---|---|---|
 | `CWS_GUARD_MODE` | config | `off` | mode |
 | `CWS_GUARD_MODEL` | config | `haiku` | judge model |
-| `CWS_GUARD_JUDGE_TIMEOUT` | config | `15` | seconds (enforce and background) |
+| `CWS_GUARD_JUDGE_TIMEOUT` | config | `25` | seconds (enforce and background) |
 | `CWS_GUARD_PROFILE` | config | — | profile the judge runs under |
 | `CWS_GUARD_IGNORE_NAMES` | config | — | extra code-object first parts to ignore |
 | `_config/guard-rules.md` | work root | example | the judge's criteria |

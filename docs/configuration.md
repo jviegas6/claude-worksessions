@@ -36,7 +36,7 @@ just as well — re-run `install.sh` afterwards so the skills and `CLAUDE.md` ca
 | `CWS_GUARD_MODE` | `off` | [`claude-guard`](commands.md#claude-guard): `off`, `shadow` (log only) or `enforce` (block) |
 | `CWS_GUARD_MODEL` | `haiku` | the model of the guard's judge |
 | `CWS_GUARD_PROFILE` | — (the session's own) | the profile the guard's judge runs under — its login or gateway, and its cost |
-| `CWS_GUARD_JUDGE_TIMEOUT` | `15` | seconds to wait for the judge in `enforce` before letting the prompt through |
+| `CWS_GUARD_JUDGE_TIMEOUT` | `25` | seconds to wait for the judge in `enforce` before letting the prompt through |
 | `CWS_GUARD_IGNORE_NAMES` | — | first parts of dotted names that are code, not data, in your commands (SDK objects), space-separated |
 | `CWS_INSTALL_YAZI` | `1` | install yazi, glow, pandoc and the Markdown extras |
 

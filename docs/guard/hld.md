@@ -144,9 +144,12 @@ sequenceDiagram
 ### 6.3 Tool call
 
 The call is hashed; a third identical call in one request is a **loop**. The identifiers the
-call reaches (paths, URLs, three-part dotted names, search queries) are extracted. Those in
-safe places (the session folder, the scratchpad, temp dirs, Claude's config dirs) are
-ignored, and the rest are matched loosely against the targets. Unmatched ones are
+call reaches (paths, including `./` and `../` ones, URLs, three-part dotted names, search
+queries; not the text of commit or PR messages) are extracted. Those in safe places (the
+session folder, the scratchpad, temp dirs, Claude's config dirs) are ignored. A path is also in
+scope when it's in a folder the request declares (`--path`), in a git repo Claude has edited in
+this session, or in a git repo named in the goal or a prompt. The rest are matched loosely
+against the targets; a path matching nothing is outside even before the judge has answered. Unmatched ones are
 **out of scope**, logged once per request. In enforce, the call is denied with a reason that
 tells the agent to list it as a next step.
 
@@ -197,6 +200,7 @@ data shows directly what enforcement would have blocked.
 | D8 | In enforce, the prompt's names join the targets only after the verdict | immediately | A blocked pivot must not widen the scope it was blocked from. |
 | D9 | `CWS_` prefix for config keys | `GUARD_MODE` | Matches every other claude-worksessions setting; environment overrides work the same way. |
 | D10 | A central judge journal in `_audit/guard/`, besides the per-folder log | per-folder log only | Reviewing and learning happen across sessions. One file holding the judge's full input and output makes each decision reviewable on its own and gives a labelled set for tuning the rules. `_audit/` is already the infrastructure folder for audit data. |
+| D12 | The request's scope is its folder, plus repos it **edits**, repos it **names** and folders it **declares** | a global list of allowed folders; any git repo | Measured in shadow: most false flags were reads of the repo the work was in. Edits and names follow the work itself; a declaration covers the rest; a global list would let every session read everywhere |
 | D11 | Configurable judge profile (`CWS_GUARD_PROFILE`) | always the session's profile | Keeps the judge's authentication, endpoint and cost under the user's control, for example judging every session on one profile's subscription. The session's profile stays the default. |
 
 ## 10. Non-functional characteristics
@@ -205,7 +209,7 @@ data shows directly what enforcement would have blocked.
 |---|---|
 | Latency — tool hook | ~36 ms per call (local, no network) |
 | Latency — prompt hook, shadow | a few ms (spawns and returns) |
-| Latency — prompt hook, enforce | judge time, measured 7–11 s; bounded by `CWS_GUARD_JUDGE_TIMEOUT` (default 15 s) under the hook timeout (30 s) |
+| Latency — prompt hook, enforce | judge time, measured 7–11 s; bounded by `CWS_GUARD_JUDGE_TIMEOUT` (default 25 s) under the hook timeout (30 s) |
 | Cost | ~$0.004 per judged prompt on Haiku with the default rules |
 | Reliability | fail open on every path; the process always exits 0; stderr gets diagnostics |
 | Concurrency | `flock` on `.scope.json`; `.quality.jsonl` is append-only, one line per write; late verdicts are applied only if their prompt is still current |

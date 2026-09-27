@@ -75,7 +75,7 @@ def test_anchors_and_matching(guard):
 
 
 def test_reached_by_tool(guard):
-    assert guard.reached("Read", {"file_path": "/A/b.py"}) == {"/a/b.py"}
+    assert guard.reached("Read", {"file_path": "/A/b.py"}) == {"/A/b.py"}                   # case kept (git_root)
     assert guard.reached("Grep", {"pattern": "x"}) == set()
     assert guard.reached("WebFetch", {"url": "https://X"}) == {"https://x"}
     assert guard.reached("WebSearch", {"query": " Access Rules "}) == {"search: access rules"} and guard.reached("WebSearch", {}) == set()
@@ -98,7 +98,7 @@ def test_session_dir_and_settings(guard, sdir, home, tmp_path):
     assert guard.session_dir(str(home / "work_sessions"), root) is None
     assert guard.session_dir(str(tmp_path), root) is None
     s = guard.settings({"CWS_GUARD_MODE": "Loud", "CWS_GUARD_JUDGE_TIMEOUT": "x", "CWS_WORK_ROOT": str(tmp_path)})
-    assert s["mode"] == "off" and s["timeout"] == 15.0 and s["model"] == "haiku"
+    assert s["mode"] == "off" and s["timeout"] == 25.0 and s["model"] == "haiku"
     assert guard.session_goal(str(sdir)) == ("fix the row filter on core", "verified with an test user")
     (sdir / ".session.json").write_text(json.dumps({"name": "access policy"}))
     assert guard.session_goal(str(sdir)) == ("access policy", "")
@@ -196,7 +196,7 @@ def test_a_late_verdict_does_not_overwrite_a_newer_request(guard, sdir):
 @pytest.mark.parametrize("kw,err", [
     ({"stdout": json.dumps({"is_error": True, "result": "Not logged in"})}, "Not logged in"),
     ({"stdout": "garbage"}, "Expecting value"),
-    ({"exc": subprocess.TimeoutExpired("claude", 15)}, "timeout after 15s"),
+    ({"exc": subprocess.TimeoutExpired("claude", 25)}, "timeout after 25s"),
     ({"exc": OSError("no claude")}, "no claude"),
 ])
 def test_judge_failures_let_the_prompt_through(guard, sdir, monkeypatch, kw, err):
@@ -250,10 +250,14 @@ def test_tool_flags_calls_outside_the_targets(guard, sdir, monkeypatch):
 
 def test_tool_is_open_without_targets_or_after_go_deeper(guard, sdir, monkeypatch):
     monkeypatch.setattr(guard.subprocess, "Popen", lambda *a, **k: None)
-    assert tool(guard, sdir, "Read", {"file_path": "/etc/a"}, cfg(guard, "enforce")) is None     # no contract yet
+    c = cfg(guard, "enforce")
+    # no targets yet: a table or URL can't be judged and passes; a path outside the folder can
+    assert tool(guard, sdir, "Bash", {"command": "dbcli get other_db.x.y"}, c) is None
+    assert tool(guard, sdir, "WebFetch", {"url": "https://example.com/x"}, c) is None
+    assert tool(guard, sdir, "Read", {"file_path": "/etc/a"}, c)["hookSpecificOutput"]["permissionDecision"] == "deny"
     prompt(guard, sdir, "go deeper into sales_db.core lineage", cfg(guard))
     assert tool(guard, sdir, "Read", {"file_path": "/etc/a"}, cfg(guard, "enforce")) is None
-    assert [r.get("widened") for r in records(sdir)] == [True]
+    assert [r.get("widened") for r in records(sdir) if r["event"] == "prompt"] == [True]
 
 
 def test_tool_catches_a_loop(guard, sdir):
@@ -419,3 +423,93 @@ def test_journal_write_failure_is_reported(guard, sdir, home, capsys):
     guard.apply_verdict(str(sdir), {"sid": "s1", "no": 1, "prompt": "p"}, cfg(guard), None, "x", 1)
     assert "judge journal" in capsys.readouterr().err
     assert guard.read_jsonl(str(home / "missing.jsonl")) == []
+
+
+
+# --- scope: the folder, the repos it works in, what it names ------------------------------
+@pytest.fixture(autouse=True)
+def own_tmp(guard, tmp_path, monkeypatch):
+    """pytest's tmp_path sits in the system temp dir, which the guard treats as always safe."""
+    monkeypatch.setattr(guard.tempfile, "gettempdir", lambda: str(tmp_path / "sys-tmp"))
+
+
+def repo(tmp_path, name="proj"):
+    r = tmp_path / "Repos" / name
+    (r / ".git").mkdir(parents=True)
+    (r / "src").mkdir()
+    return r
+
+
+def test_relative_paths_are_resolved(guard, sdir, tmp_path):
+    c = cfg(guard, "enforce")
+    (tmp_path / "elsewhere").mkdir()
+    esc = os.path.relpath(tmp_path / "elsewhere" / "x.md", sdir)
+    out = tool(guard, sdir, "Bash", {"command": "cat " + esc}, c)
+    assert out and str(tmp_path / "elsewhere" / "x.md").lower() in out["hookSpecificOutput"]["permissionDecisionReason"].lower()
+    assert tool(guard, sdir, "Bash", {"command": "cat ./notes.md ../" + sdir.name + "/a.md"}, c) is None   # still inside
+    assert tool(guard, sdir, "Glob", {"pattern": "*", "path": esc.rsplit("/", 1)[0]}, c) is not None
+    assert guard.resolve("~/x", "/w") == os.path.expanduser("~/x") and guard.resolve("a/../b", "/w") == "/w/b"
+
+
+def test_messages_in_commands_are_not_reached(guard, sdir, tmp_path):
+    c = cfg(guard, "enforce")
+    cmd = ('git commit -m "see /etc/passwd and https://x.io/a" && gh pr create --title \'t /etc/t\' '
+           "--body \"$(cat <<'EOF'\nreads /etc/shadow\nEOF\n)\"")
+    assert guard.command_text(cmd).count("/etc/") == 0
+    assert tool(guard, sdir, "Bash", {"command": cmd}, c) is None
+    assert guard.anchors("python3 -c 'import importlib.machinery.sourcefileloader'") == set()
+
+
+def test_editing_a_repo_puts_it_in_scope(guard, sdir, tmp_path):
+    c = cfg(guard, "enforce")
+    r = repo(tmp_path)
+    assert tool(guard, sdir, "Read", {"file_path": str(r / "src" / "a.py")}, c) is not None    # not yet
+    assert tool(guard, sdir, "Edit", {"file_path": str(r / "src" / "a.py")}, c) is None
+    assert tool(guard, sdir, "Read", {"file_path": str(r / "README.md")}, c) is None           # now in scope
+    assert tool(guard, sdir, "Bash", {"command": "ls " + str(r / "src")}, c) is None
+    assert tool(guard, sdir, "Write", {"file_path": str(r / "b.py")}, c) is None               # learned once
+    assert tool(guard, sdir, "Write", {"file_path": str(sdir / "notes.md")}, c) is None        # own folder: nothing
+    assert tool(guard, sdir, "Write", {"file_path": str(tmp_path / "loose.txt")}, c) is None   # no repo: nothing
+    assert tool(guard, sdir, "NotebookEdit", {}, c) is None
+    learned = [x for x in records(sdir) if x.get("learned")]
+    assert len(learned) == 1 and learned[0]["learned"] == str(r) and learned[0]["decision"] == "allow"
+    assert state(sdir)["paths"] == [os.path.realpath(str(r)).lower()]
+    assert tool(guard, sdir, "Read", {"file_path": str(tmp_path / "Repos" / "other" / "x")}, c) is not None
+
+
+def test_a_named_repo_is_in_scope(guard, sdir, tmp_path, monkeypatch):
+    monkeypatch.setattr(guard.subprocess, "Popen", lambda *a, **k: None)
+    c = cfg(guard, "enforce")
+    r = repo(tmp_path, "claude-worksessions")
+    assert tool(guard, sdir, "Read", {"file_path": str(r / "src" / "a.py")}, c) is not None
+    prompt(guard, sdir, "fix the installer in claude-worksessions", cfg(guard))
+    assert "claude-worksessions" in state(sdir)["words"]
+    assert tool(guard, sdir, "Read", {"file_path": str(r / "src" / "a.py")}, c) is None
+    # named in the goal works too
+    other = repo(tmp_path, "sales-etl")
+    (sdir / ".session.json").write_text(json.dumps({"name": "x", "goal": "speed up the sales-etl job"}))
+    assert tool(guard, sdir, "Read", {"file_path": str(other / "src" / "job.py")}, c) is None
+
+
+def test_declared_paths_are_in_scope(guard, sdir, tmp_path):
+    c = cfg(guard, "enforce")
+    d = tmp_path / "shared-docs"
+    d.mkdir()
+    assert tool(guard, sdir, "Read", {"file_path": str(d / "a.md")}, c) is not None
+    (sdir / ".session.json").write_text(json.dumps({"name": "x", "paths": [str(d), 7, " "]}))
+    assert tool(guard, sdir, "Read", {"file_path": str(d / "b.md")}, c) is None
+    assert guard.declared_paths(str(sdir)) == [os.path.realpath(str(d)).lower()]
+    (sdir / ".session.json").write_text(json.dumps({"name": "x", "paths": "not a list"}))
+    assert guard.declared_paths(str(sdir)) == []
+
+
+def test_subagent_calls_are_labelled(guard, sdir):
+    guard.on_tool({"session_id": "s1", "cwd": str(sdir), "tool_name": "Read", "tool_input": {"file_path": "/etc/q"},
+                   "agent_id": "a1", "agent_type": "Explore"}, cfg(guard))
+    r = records(sdir)[-1]
+    assert (r["initiated_by"], r["agent_type"], r["type"]) == ("subagent", "Explore", "depth")
+
+
+def test_rules_say_questions_about_the_answer_continue(guard):
+    assert "previous answer" in guard.DEFAULT_RULES
+    assert guard.git_root("/") is None

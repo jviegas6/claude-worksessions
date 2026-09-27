@@ -5,7 +5,7 @@ The flag-by-flag reference. For how to use them together see the [user guide](us
 ## claude-new
 
 ```
-claude-new [-p PROFILE] [-n|-a] [-c] [-t TICKET] [-T TYPE] [-g GOAL] [--done TEXT] [--prompt TEXT] [name]
+claude-new [-p PROFILE] [-n|-a] [-c] [-t TICKET] [-T TYPE] [-g GOAL] [--done TEXT] [--path DIR]... [--prompt TEXT] [name]
 claude-new -l
 claude-new -L
 ```
@@ -33,6 +33,8 @@ that profile. `ended_at` is filled in when Claude exits.
   it did. Left out, `claude-new` asks for both: Enter keeps the name as the goal and leaves
   done-when empty (and without a terminal that is what it does). [`claude-guard`](#claude-guard)
   judges each new prompt against them; [`claude-goal`](#claude-goal) changes them.
+- `--path DIR` (repeatable) declares a folder or repo outside the request as part of the work,
+  so [`claude-guard`](#claude-guard) treats reads there as in scope. Stored in `.session.json`.
 - `-c` / `--code` opens the new folder in a new VS Code window instead of starting
   Claude in the terminal. Start Claude from the extension there; it runs with the
   session's profile through [`claude-vscode`](#claude-vscode). `ended_at` stays empty,
@@ -50,6 +52,7 @@ that profile. `ended_at` is filled in when Claude exits.
 claude-goal                              show the session folder's goal and done-when
 claude-goal "survey the access methods"  re-anchor: a new goal (run anywhere inside the folder)
 claude-goal --done "a comparison table"  change only done-when
+claude-goal --path ~/Repos/sales-etl     add a folder to the request's scope (goal unchanged)
 ```
 
 For when the objective changes **on purpose**. The old goal goes to `goal_history` in

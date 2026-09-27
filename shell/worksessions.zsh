@@ -218,10 +218,14 @@ PYEOF
 claude-goal() {
   emulate -L zsh
   local dir="$PWD" meta="" goal="" done_when="" has_done=0
+  local -a paths=()
   while (( $# )); do
     case "$1" in
       --done) done_when="$2"; has_done=1; shift 2 ;;
-      -h|--help) print -r -- 'claude-goal ["GOAL"] [--done "TEXT"]   show or change the session goal'; return 0 ;;
+      --path)
+        if [[ -z "$2" || ! -d "${~2}" ]]; then print -u2 -- "claude-goal: --path needs an existing folder"; return 1; fi
+        paths+=("${${~2}:A}"); shift 2 ;;
+      -h|--help) print -r -- 'claude-goal ["GOAL"] [--done "TEXT"] [--path DIR]...   show or change the session goal and scope'; return 0 ;;
       *) goal="${goal:+$goal }$1"; shift ;;
     esac
   done
@@ -232,14 +236,24 @@ claude-goal() {
   if [[ -z "$meta" ]]; then
     print -u2 -- "claude-goal: no .session.json here (not inside a session folder)"; return 1
   fi
-  WS_GOAL="$goal" WS_DONE="$done_when" WS_HAS_DONE="$has_done" "$CWS_PYTHON" - "$meta" <<'PYEOF'
+  WS_GOAL="$goal" WS_DONE="$done_when" WS_HAS_DONE="$has_done" WS_PATHS="${(pj:\n:)paths}" "$CWS_PYTHON" - "$meta" <<'PYEOF'
 import datetime, json, os, sys
 p = sys.argv[1]
 d = json.load(open(p))
 old, old_done = d.get("goal") or d.get("name") or "", d.get("done_when") or ""
 goal, has_done = os.environ["WS_GOAL"].strip(), os.environ["WS_HAS_DONE"] == "1"
+new_paths = [p for p in os.environ["WS_PATHS"].split("\n") if p]
+if new_paths:                                 # more scope, same goal: no re-anchoring
+    have = d.get("paths") if isinstance(d.get("paths"), list) else []
+    d["paths"] = have + [p for p in new_paths if p not in have]
+    json.dump(d, open(p, "w"), indent=2)
+    print("paths: " + ", ".join(d["paths"]))
+    if not goal and not has_done:
+        raise SystemExit(0)
 if not goal and not has_done:
     print("goal: {}\ndone when: {}".format(old or "(none)", old_done or "(not stated)"))
+    if d.get("paths"):
+        print("paths: " + ", ".join(d["paths"]))
     raise SystemExit(0)
 ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 d.setdefault("goal_history", []).append({"goal": old, "done_when": old_done, "until": ts})
@@ -285,6 +299,7 @@ claude-new() {
 
   local profile="" name="" ticket="" canon="" dir slug cfg started ended audit=1 ask_audit=1 ttype="" vscode=0 prompt=""
   local goal="" done_when="" goal_set=0
+  local -a paths=()
   local -a profiles=(${=CWS_PROFILES})
 
   while [[ "$1" == -* ]]; do
@@ -310,6 +325,9 @@ claude-new() {
       -T|--type)     ttype="$2";       shift 2 ;;
       -g|--goal)     goal="$2"; goal_set=1; shift 2 ;;
       --done)        done_when="$2";   shift 2 ;;
+      --path)
+        if [[ -z "$2" || ! -d "${~2}" ]]; then print -u2 -- "claude-new: --path needs an existing folder"; return 1; fi
+        paths+=("${${~2}:A}"); shift 2 ;;
       -t|--ticket)
         if [[ -z "$2" ]]; then
           print -u2 -- "claude-new: -t needs a ticket (e.g. $CWS_TICKET_EXAMPLE, or Other)"
@@ -330,7 +348,7 @@ print("{:<10} {:<14} {:<16} {:<9}".format("[" + (d.get("profile") or "?") + "]",
         done
         return 0 ;;
       -h|--help)
-        print -r -- 'claude-new [-p PROFILE] [-n|-a] [-c] [-t TICKET] [-T TYPE] [-g GOAL] [--done TEXT] [--prompt TEXT] [name]'
+        print -r -- 'claude-new [-p PROFILE] [-n|-a] [-c] [-t TICKET] [-T TYPE] [-g GOAL] [--done TEXT] [--path DIR]... [--prompt TEXT] [name]'
         print -r -- '    create a YYYY/MM/DD/HH-mm-ss_slug folder and start Claude in it'
         print -r -- '    -c / --code opens the folder in VS Code instead; the Claude extension there'
         print -r -- '    picks up the profile through claude-vscode'
@@ -339,6 +357,7 @@ print("{:<10} {:<14} {:<16} {:<9}".format("[" + (d.get("profile") or "?") + "]",
         print -r -- '    -T / --type is the kind of work (permissions, job errors, ...); asked if omitted'
         print -r -- '    -g / --goal is what the session should deliver, --done how you will know it did;'
         print -r -- '    both asked if omitted (Enter: the name / nothing). claude-guard keeps work on them'
+        print -r -- '    --path DIR (repeatable): a folder or repo outside the request that is part of the work'
         print -r -- '    -n / --no-audit keeps the session out of claude-audit and the weekly review'
         print -r -- '    (claude-search still finds it); -a / --audit keeps it in; asked if neither'
         print -r -- "    -p / --profile picks the profile (${profiles[*]}); asked if omitted"
@@ -497,6 +516,7 @@ print("{:<10} {:<14} {:<16} {:<9}".format("[" + (d.get("profile") or "?") + "]",
   started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   WS_NAME="$name" WS_PROFILE="$profile" WS_TICKET="$ticket" WS_SLUG="$slug" WS_TYPE="$ttype" \
   WS_STARTED="$started" WS_DIR="$dir" WS_AUDIT="$audit" WS_GOAL="$goal" WS_DONE="$done_when" \
+  WS_PATHS="${(pj:\n:)paths}" \
     "$CWS_PYTHON" -c '
 import json, os, socket
 p = os.path.join(os.environ["WS_DIR"], ".session.json")
@@ -508,6 +528,7 @@ json.dump({
     "task_type":  os.environ.get("WS_TYPE", ""),
     "goal":       os.environ["WS_GOAL"],
     "done_when":  os.environ["WS_DONE"],
+    "paths":      [p for p in os.environ["WS_PATHS"].split("\n") if p],
     "audit":      os.environ["WS_AUDIT"] == "1",
     "started_at": os.environ["WS_STARTED"],
     "ended_at":   None,

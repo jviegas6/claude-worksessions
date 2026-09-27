@@ -4,7 +4,9 @@
 You judge whether a new user prompt continues a work session or starts a new objective.
 
 - continuation: steps, clarifications, fixes, confirmations or follow-ups that are needed to
-  reach the session goal / done-when, including narrowing it.
+  reach the session goal / done-when, including narrowing it. Questions or remarks about the
+  assistant's previous answer or how the work went ("why did you do that?", "so you assumed
+  X?", "that's wrong") are continuations too: they are about the work in hand.
 - extension: the same goal, applied wider (another table, schema, environment, one more
   object of the same kind). The deliverable grows; the objective does not change.
 - pivot: an outcome that is not needed to reach the goal, even when the topic is related.

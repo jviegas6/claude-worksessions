@@ -72,6 +72,7 @@ WRITE_TOOLS = {"Write": "file_path", "Edit": "file_path", "MultiEdit": "file_pat
 URL = re.compile(r"https?://[^\s'\"`<>)]+")
 FILE_EXT = {"py", "md", "json", "jsonl", "txt", "csv", "yml", "yaml", "sh", "zsh", "log", "html", "gz", "sql",
             "toml", "ts", "js", "tsx", "ipynb", "env", "xml", "png", "pdf", "zip", "tar"}
+TEMP_ROOTS = ("/tmp", "/private/tmp")      # scratch space, besides the system temp dir
 REACH_TOOLS = re.compile(r"^(Read|Glob|Grep|WebFetch|WebSearch|Bash|mcp__.*)$")
 WORDS = re.compile(r"[a-z0-9][a-z0-9._-]{2,}")
 LOOP_AFTER = 3                      # the same call this many times in one request is a loop
@@ -267,8 +268,8 @@ def matches(ident, targets):
 
 
 def safe_roots(sdir, payload):
-    roots = [sdir, payload.get("cwd"), payload.get("scratchpad_dir"), tempfile.gettempdir(), "/tmp", "/private/tmp",
-             "/dev", os.environ.get("CLAUDE_CONFIG_DIR"), os.path.join(HOME, ".claude")]
+    roots = [sdir, payload.get("cwd"), payload.get("scratchpad_dir"), tempfile.gettempdir(), *TEMP_ROOTS, "/dev",
+             os.environ.get("CLAUDE_CONFIG_DIR"), os.path.join(HOME, ".claude")]
     roots += [os.path.join(HOME, n) for n in os.listdir(HOME) if n.startswith(".claude-")] if os.path.isdir(HOME) else []
     return [os.path.realpath(r).lower() for r in roots if r]
 

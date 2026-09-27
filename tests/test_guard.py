@@ -229,6 +229,7 @@ def test_outside_a_session_folder_nothing_happens(guard, tmp_path):
 # --- tool ------------------------------------------------------------------------------------
 def test_tool_flags_calls_outside_the_targets(guard, sdir, monkeypatch):
     monkeypatch.setattr(guard.subprocess, "Popen", lambda *a, **k: None)
+    monkeypatch.setattr(guard, "TEMP_ROOTS", ("/tmp", "/private/tmp"))               # /tmp/x below is scratch
     prompt(guard, sdir, "list the sources of sales_db.core.orders_daily", cfg(guard))
     sql = {"statement": "select * from sales_db.staging.orders"}
     assert tool(guard, sdir, "mcp__sql__run", sql, cfg(guard)) is None        # shadow: log only
@@ -429,8 +430,10 @@ def test_journal_write_failure_is_reported(guard, sdir, home, capsys):
 # --- scope: the folder, the repos it works in, what it names ------------------------------
 @pytest.fixture(autouse=True)
 def own_tmp(guard, tmp_path, monkeypatch):
-    """pytest's tmp_path sits in the system temp dir, which the guard treats as always safe."""
+    """pytest's tmp_path sits in a temp dir (the system one on macOS, /tmp on Linux), which the
+    guard treats as always safe."""
     monkeypatch.setattr(guard.tempfile, "gettempdir", lambda: str(tmp_path / "sys-tmp"))
+    monkeypatch.setattr(guard, "TEMP_ROOTS", ())
 
 
 def repo(tmp_path, name="proj"):

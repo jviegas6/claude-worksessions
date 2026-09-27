@@ -33,7 +33,8 @@ just as well — re-run `install.sh` afterwards so the skills and `CLAUDE.md` ca
 | `CWS_PROFILE_<name>_DESC` | — | the line shown in `claude-new`'s profile menu |
 | `CWS_PROFILE_<name>_BASE_URL` | — | route that profile through an API gateway (see below) |
 | `CWS_TASK_TYPES` | permissions, job errors, … | seed list of task types; the ones you have used are suggested first |
-| `CWS_GUARD_MODE` | `off` | [`claude-guard`](commands.md#claude-guard): `off`, `shadow` (log only) or `enforce` (block) |
+| `CWS_GUARD_MODE` | `off` | [`claude-guard`](commands.md#claude-guard): `off`, `shadow` (log only), `warn` (log and show a notice) or `enforce` (block) |
+| `CWS_GUARD_MAX_EXTENSIONS` | `2` | how many times a session's goal can be widened before the next widening counts as a new objective |
 | `CWS_GUARD_MODEL` | `haiku` | the model of the guard's judge |
 | `CWS_GUARD_PROFILE` | — (the session's own) | the profile the guard's judge runs under — its login or gateway, and its cost |
 | `CWS_GUARD_JUDGE_TIMEOUT` | `25` | seconds to wait for the judge in `enforce` before letting the prompt through |

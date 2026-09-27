@@ -181,6 +181,7 @@ work, so the audit trail stays next to the work it describes.
 |---|---|---|---|---|
 | `off` | — | — | — | not called |
 | `shadow` | log only | log only | log only | background, no delay to the user |
+| `warn` | log; a one-line notice to the user on a pivot | log; a notice on a new out-of-scope read or a loop (the call goes ahead) | log; a notice when next steps are missing | background, no delay; its verdict is shown at the next tool call, end of answer or prompt |
 | `enforce` | blocks pivots; injects the literal scope | denies out-of-scope calls and loops | asks once for proposals | synchronous, bounded by the timeout |
 
 In every mode, `decision` in the log is what **enforce** does (or would do), so shadow
@@ -200,6 +201,8 @@ data shows directly what enforcement would have blocked.
 | D8 | In enforce, the prompt's names join the targets only after the verdict | immediately | A blocked pivot must not widen the scope it was blocked from. |
 | D9 | `CWS_` prefix for config keys | `GUARD_MODE` | Matches every other claude-worksessions setting; environment overrides work the same way. |
 | D10 | A central judge journal in `_audit/guard/`, besides the per-folder log | per-folder log only | Reviewing and learning happen across sessions. One file holding the judge's full input and output makes each decision reviewable on its own and gives a labelled set for tuning the rules. `_audit/` is already the infrastructure folder for audit data. |
+| D13 | A `warn` mode between shadow and enforce | only shadow and enforce | Shadow is invisible, so trying the guard felt like nothing happened; enforce gets in the way. Warn shows what enforce would do, as a UI message Claude doesn't see, with no added delay |
+| D14 | Extensions add up: past `CWS_GUARD_MAX_EXTENSIONS` (2) per goal, one more is a pivot; a different product or platform is a pivot, not an extension | judge each prompt alone | Seen in testing: "Databricks API" → Snowflake → SQL Server were three extensions, each allowed. Drift is a property of the sequence, not of one prompt |
 | D12 | The request's scope is its folder, plus repos it **edits**, repos it **names** and folders it **declares** | a global list of allowed folders; any git repo | Measured in shadow: most false flags were reads of the repo the work was in. Edits and names follow the work itself; a declaration covers the rest; a global list would let every session read everywhere |
 | D11 | Configurable judge profile (`CWS_GUARD_PROFILE`) | always the session's profile | Keeps the judge's authentication, endpoint and cost under the user's control, for example judging every session on one profile's subscription. The session's profile stays the default. |
 

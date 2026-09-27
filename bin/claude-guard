@@ -24,8 +24,10 @@ clean `claude -p` on a small model that sees the goal, the current scope and the
 never the session. Its criteria live in _config/guard-rules.md.
 
 CWS_GUARD_MODE decides what happens: `off`, `shadow` (decide and log to .quality.jsonl,
-never block; the judge runs in the background so prompts are not held up) or `enforce`
-(block pivots and out-of-scope calls, ask once for next-level proposals). Everything fails
+never block; the judge runs in the background so prompts are not held up), `warn` (as shadow,
+and show the user a one-line notice where enforce would act) or `enforce` (block pivots and
+out-of-scope calls, ask once for next-level proposals). Extensions of the goal add up: past
+CWS_GUARD_MAX_EXTENSIONS (2) in a session, one more counts as a new objective. Everything fails
 open: an error or a slow judge lets the action through and is logged.
 
 A prompt starting `force:` passes unchecked (logged as an override); one asking to go deeper
@@ -44,7 +46,8 @@ import tempfile
 import time
 
 HOME = os.path.expanduser("~")
-MODES = ("off", "shadow", "enforce")
+MODES = ("off", "shadow", "warn", "enforce")
+BACKGROUND = ("shadow", "warn")      # the judge runs detached: prompts are never held up
 JUDGE_ENV = "CWS_GUARD_JUDGE"       # set in the judge's own claude -p, so its hooks stay quiet
 
 FORCE = re.compile(r"^\s*force:\s*", re.I)
@@ -86,8 +89,11 @@ You judge whether a new user prompt continues a work session or starts a new obj
   reach the session goal / done-when, including narrowing it. Questions or remarks about the
   assistant's previous answer or how the work went ("why did you do that?", "so you assumed
   X?", "that's wrong") are continuations too: they are about the work in hand.
-- extension: the same goal, applied wider (another table, schema, environment, one more
-  object of the same kind). The deliverable grows; the objective does not change.
+- extension: the same goal, applied wider within what it names: another table or schema in
+  the same system, another environment of the same job, one more object of the same kind in
+  the same product. The deliverable grows; the objective does not change.
+- A different product, platform, system or technology is a pivot, even for the same kind of
+  deliverable: goal "understand the Databricks API", prompt "what about Snowflake?" is a pivot.
 - pivot: an outcome that is not needed to reach the goal, even when the topic is related.
   Example: goal "fix the access policy on table X", prompt "survey every access-control
   mechanism the platform offers" is a pivot: a broader survey, a different deliverable.
@@ -133,8 +139,13 @@ def settings(conf):
         timeout = 25.0
     root = conf.get("CWS_WORK_ROOT") or os.environ.get("CLAUDE_WORK_ROOT") or os.path.join(HOME, "work_sessions")
     ignore = CODE_NAMES | set((conf.get("CWS_GUARD_IGNORE_NAMES") or "").lower().split())
+    try:
+        max_ext = max(0, int(conf.get("CWS_GUARD_MAX_EXTENSIONS") or 2))
+    except ValueError:
+        max_ext = 2
     return {"mode": mode if mode in MODES else "off", "model": conf.get("CWS_GUARD_MODEL") or "haiku", "ignore": ignore,
-            "timeout": timeout, "root": os.path.realpath(root), "profile": (conf.get("CWS_GUARD_PROFILE") or "").strip()}
+            "timeout": timeout, "root": os.path.realpath(root), "profile": (conf.get("CWS_GUARD_PROFILE") or "").strip(),
+            "max_ext": max_ext}
 
 
 def now():
@@ -391,21 +402,37 @@ def apply_verdict(sdir, job, cfg, ans, err, ms):
     rec = {"event": "prompt", "session_id": job["sid"], "prompt_no": job["no"], "initiated_by": "user",
            "mode": cfg["mode"], "judge_ms": ms, "prompt": job["prompt"][:200]}
     verdict = None if err else ans["verdict"]
-    blocked = verdict == "pivot" and enforce
+    reason = "" if err else ans.get("reason", "")
     with scope(sdir, job["sid"]) as st:
         current = st.get("prompt_no") == job["no"]                     # not overtaken by a later prompt
+        # drift: extensions add up. Past the allowance, one more is a new objective too
+        widened = int(st.get("extensions") or 0)
+        drift = verdict == "extension" and current and widened >= cfg["max_ext"]
+        if drift:
+            reason = "the goal has already been widened {} times; this widens it again: {}".format(widened, reason)
+        pivot = verdict == "pivot" or drift
+        blocked = pivot and enforce
+        if current and not blocked and verdict == "extension":
+            st["extensions"] = widened + 1
         if enforce and current and not blocked:
             grow(st, job.get("names") or [], job.get("widen", False))
         if not err and current and not blocked:
             st["literal"] = ans.get("literal") or st.get("literal") or job["prompt"][:300]
             grow(st, ans.get("targets") or [], st.get("open", False))
+        if cfg["mode"] == "warn" and pivot and current:
+            st.setdefault("notices", []).append(
+                "claude-guard: \"{}\" looks like a new objective, not part of this session's goal ({}). Goal: {}. "
+                "Consider claude-new for it, or claude-goal if the goal changed.".format(
+                    job["prompt"][:80], reason[:200], job.get("goal") or "(none)"))
     rec["judge_id"] = decision_id(job)
     if err:
         rec.update(decision="allow", type="ok", reason="judge failed, let through: " + err, judge_error=True)
     else:
-        rec.update(decision="block" if verdict == "pivot" else "allow", type="pivot" if verdict == "pivot" else "ok",
-                   verdict=verdict, reason=ans.get("reason", "")[:400], literal=ans.get("literal", "")[:300],
+        rec.update(decision="block" if pivot else "allow", type="pivot" if pivot else "ok",
+                   verdict=verdict, reason=reason[:400], literal=ans.get("literal", "")[:300],
                    targets=ans.get("targets") or [])
+        if drift:
+            rec["drift"] = widened + 1
     log(sdir, rec)
     journal(sdir, job, cfg, ans, err, ms, blocked)
     return rec
@@ -509,6 +536,7 @@ def on_prompt(payload, cfg):
         return None
     sid, prompt = payload.get("session_id") or "none", payload.get("prompt") or ""
     goal, done_when = session_goal(sdir)
+    pending = notices(sdir, sid, cfg)              # warnings from the last request, not shown yet
     base = {"event": "prompt", "session_id": sid, "initiated_by": "user", "mode": cfg["mode"], "prompt": prompt[:200]}
     with scope(sdir, sid) as st:
         no = st["prompt_no"] = int(st.get("prompt_no") or 0) + 1
@@ -519,19 +547,19 @@ def on_prompt(payload, cfg):
         if FORCE.match(prompt):
             st.update(open=True, turn=new_turn(), literal=FORCE.sub("", prompt)[:300])
             log(sdir, dict(base, decision="allow", type="ok", override=True, reason="force: prefix"))
-            return None
+            return show(pending, cfg)
         if trivial(prompt):                        # a confirmation or a command: same request goes on
             st["turn"] = new_turn()
-            return None
+            return show(pending, cfg)
         st["turn"] = new_turn()
         widen, names = bool(WIDEN.search(prompt)), sorted(prompt_anchors(prompt))
-        if cfg["mode"] == "shadow":               # nothing is blocked: the new names count at once
+        if cfg["mode"] in BACKGROUND:            # nothing is blocked: the new names count at once
             grow(st, names, widen)
         if widen:
             log(sdir, dict(base, decision="allow", type="ok", widened=True, reason="asked to go deeper"))
     job = {"sid": sid, "no": no, "prompt": prompt, "goal": goal, "done_when": done_when, "literal": literal,
            "names": names, "widen": widen}
-    if cfg["mode"] == "shadow":                    # decide in the background; never hold the prompt up
+    if cfg["mode"] in BACKGROUND:                  # decide in the background; never hold the prompt up
         try:
             subprocess.Popen([sys.executable, os.path.abspath(__file__), "judge", sdir, json.dumps(job)],
                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -539,7 +567,7 @@ def on_prompt(payload, cfg):
         except OSError as e:
             log(sdir, dict(base, decision="allow", type="ok", reason="judge not started: " + str(e)[:200],
                            judge_error=True))
-        return None
+        return show(pending, cfg)
     rec = apply_verdict(sdir, job, cfg, *judge(job, cfg))
     if rec["decision"] == "block":
         return {"decision": "block", "reason": (
@@ -552,6 +580,23 @@ def on_prompt(payload, cfg):
             "Scope of this request (claude-guard): {} Do exactly this. Where going further would help, "
             "end by proposing the next level instead of doing it.").format(rec["literal"])}}
     return None
+
+
+def notices(sdir, sid, cfg):
+    """Warnings waiting to be shown (warn mode): the judge runs after the prompt has gone, so its
+    verdict is shown at the next chance -- a tool call, the end of the answer, or the next prompt."""
+    if cfg["mode"] != "warn":
+        return []
+    with scope(sdir, sid) as st:
+        return st.pop("notices", [])
+
+
+def show(messages, cfg):
+    """A hook answer that only shows the user a message -- in warn mode -- or nothing."""
+    if cfg["mode"] != "warn":
+        return None
+    messages = [m for m in messages if m]
+    return {"systemMessage": "\n".join(messages)} if messages else None
 
 
 def new_turn():
@@ -571,8 +616,10 @@ def on_tool(payload, cfg):
             "mode": cfg["mode"], "tool": tool}
     if payload.get("agent_type"):
         base["agent_type"] = payload["agent_type"]
+    pending = notices(sdir, sid, cfg)
     if tool in WRITE_TOOLS:
-        return learn(sdir, sid, resolve(tool_input.get(WRITE_TOOLS[tool]) or "", cwd), roots, base)
+        learn(sdir, sid, resolve(tool_input.get(WRITE_TOOLS[tool]) or "", cwd), roots, base)
+        return show(pending, cfg)
     key = hashlib.sha1((tool + json.dumps(tool_input, sort_keys=True)).encode()).hexdigest()[:12]
     goal = session_goal(sdir)[0]
     declared = declared_paths(sdir)
@@ -594,16 +641,18 @@ def on_tool(payload, cfg):
     if repeats >= LOOP_AFTER:                    # denied every time from then on, logged once
         if repeats == LOOP_AFTER:
             log(sdir, dict(base, decision="deny", type="loop", reason="same call {} times in one request".format(repeats)))
+            pending.append("claude-guard: Claude ran the same {} call {} times in this request.".format(tool, repeats))
         return deny(cfg, "claude-guard: this is the same {} call {} times in this request. Change approach or ask "
-                         "the user instead of repeating it.".format(tool, repeats))
+                         "the user instead of repeating it.".format(tool, repeats), pending)
     if off:                                      # denied every time, logged once per identifier
         if new_off:
             log(sdir, dict(base, decision="deny", type="depth", reason="outside the request's scope",
                            reached=new_off[:5], targets=targets[:20]))
+            pending.append("claude-guard: Claude is reading {}, outside this request.".format(", ".join(new_off[:3])))
         return deny(cfg, "claude-guard: out of scope. This request is: {} -- and {} is outside it (its folder, the "
                          "repos it works in, and what it names). Don't open it now; list it as a possible next "
-                         "step.".format(literal or "(see the prompt)", ", ".join(off[:3])))
-    return None
+                         "step.".format(literal or "(see the prompt)", ", ".join(off[:3])), pending)
+    return show(pending, cfg)
 
 
 def outside(ident, targets, area):
@@ -637,9 +686,10 @@ def learn(sdir, sid, path, roots, base):
     return None
 
 
-def deny(cfg, reason):
+def deny(cfg, reason, pending=()):
+    """Enforce: deny the call. Warn: show what enforce would have denied. Shadow: nothing."""
     if cfg["mode"] != "enforce":
-        return None
+        return show(pending, cfg)
     return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                                    "permissionDecisionReason": reason}}
 
@@ -649,13 +699,14 @@ def on_stop(payload, cfg):
     if not sdir:
         return None
     sid = payload.get("session_id") or "none"
+    pending = notices(sdir, sid, cfg)
     with scope(sdir, sid) as st:
         turn = st.get("turn") or new_turn()
         no = st.get("prompt_no")
         if not payload.get("stop_hook_active"):
             st["turn"] = dict(turn, stopped=True)
     if turn.get("stopped") and not payload.get("stop_hook_active"):
-        return None                                # nothing happened since the last stop
+        return show(pending, cfg)                       # nothing happened since the last stop
     text = payload.get("last_assistant_message") or ""
     investigated = turn.get("reach", 0) >= 2
     missing = investigated and not payload.get("stop_hook_active") and not (
@@ -671,7 +722,9 @@ def on_stop(payload, cfg):
         return {"decision": "block", "reason": (
             "claude-guard: before finishing, add a short closing list of what could be examined next "
             "(the next level of depth) and why -- as proposals, without doing it.")}
-    return None
+    if missing:
+        pending.append("claude-guard: the answer ended without proposing what to look at next.")
+    return show(pending, cfg)
 
 
 # --- the report -----------------------------------------------------------------------------

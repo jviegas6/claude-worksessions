@@ -516,3 +516,74 @@ def test_subagent_calls_are_labelled(guard, sdir):
 def test_rules_say_questions_about_the_answer_continue(guard):
     assert "previous answer" in guard.DEFAULT_RULES
     assert guard.git_root("/") is None
+
+
+# --- warn mode and drift ------------------------------------------------------------------
+def test_drift_extensions_add_up(guard, sdir, monkeypatch):
+    ext = {"verdict": "extension", "literal": "Wider.", "targets": [], "reason": "another platform"}
+    fake_judge(monkeypatch, guard, {"verdict": "continuation", "literal": "Fix.", "targets": [], "reason": "first"})
+    prompt(guard, sdir, "fix the row filter function", cfg(guard, "enforce"))
+    fake_judge(monkeypatch, guard, ext)
+    for p in ("also the staging schema", "and the uat environment"):
+        assert "additionalContext" in prompt(guard, sdir, p, cfg(guard, "enforce"))["hookSpecificOutput"]
+    assert state(sdir)["extensions"] == 2
+    out = prompt(guard, sdir, "and the reporting database too", cfg(guard, "enforce"))
+    assert out["decision"] == "block" and "widened 2 times" in out["reason"]
+    r = records(sdir)[-1]
+    assert (r["type"], r["verdict"], r["drift"]) == ("pivot", "extension", 3)
+    assert state(sdir)["extensions"] == 2                                              # blocked: not counted
+    prompt(guard, sdir, "one more schema", cfg(guard, "shadow") | {"mode": "enforce", "max_ext": 5})
+    assert state(sdir)["extensions"] == 3
+    assert guard.settings({"CWS_GUARD_MAX_EXTENSIONS": "x"})["max_ext"] == 2
+    assert guard.settings({"CWS_GUARD_MAX_EXTENSIONS": "-1"})["max_ext"] == 0
+    assert "Snowflake" in guard.DEFAULT_RULES and "different product" in guard.DEFAULT_RULES
+
+
+def test_warn_mode_tells_the_user_and_never_blocks(guard, sdir, monkeypatch):
+    monkeypatch.setattr(guard.subprocess, "Popen", lambda *a, **k: None)
+    w = cfg(guard, "warn")
+    assert prompt(guard, sdir, "fix the row filter on sales_db.core.orders", w) is None   # judged in the background
+    job = {"sid": "s1", "no": 1, "prompt": "fix the row filter on sales_db.core.orders", "goal": "fix it", "literal": ""}
+    guard.apply_verdict(str(sdir), job, w, {"verdict": "continuation", "literal": "Fix.", "targets": []}, None, 5)
+    with guard.scope(str(sdir), "s1") as st:
+        st["prompt_no"] = 2
+    guard.apply_verdict(str(sdir), dict(job, no=2, prompt="what about snowflake?"), w,
+                        {"verdict": "pivot", "literal": "", "targets": [], "reason": "another platform"}, None, 5)
+    assert records(sdir)[-1]["decision"] == "block"                                      # what enforce would do
+    # the verdict arrived after the prompt went: shown at the next chance, once
+    out = tool(guard, sdir, "Read", {"file_path": str(sdir / "a")}, w)
+    assert "looks like a new objective" in out["systemMessage"] and "snowflake" in out["systemMessage"]
+    assert tool(guard, sdir, "Read", {"file_path": str(sdir / "b")}, w) is None
+    # out of scope and loops: shown, not denied, once
+    out = tool(guard, sdir, "Read", {"file_path": "/etc/elsewhere.md"}, w)
+    assert out == {"systemMessage": "claude-guard: Claude is reading /etc/elsewhere.md, outside this request."}
+    assert tool(guard, sdir, "Read", {"file_path": "/etc/elsewhere.md"}, w) is None
+    for _ in range(2):
+        tool(guard, sdir, "Bash", {"command": "ls"}, w)
+    assert "same Bash call 3 times" in tool(guard, sdir, "Bash", {"command": "ls"}, w)["systemMessage"]
+    assert tool(guard, sdir, "Bash", {"command": "ls"}, w) is None
+    # the end of an investigation without next steps
+    out = stop(guard, sdir, w, "Done.")
+    assert "without proposing what to look at next" in out["systemMessage"]
+    assert stop(guard, sdir, w, "again") is None
+    # a notice queued after the stop shows with the next prompt (or a write)
+    with guard.scope(str(sdir), "s1") as st:
+        st["notices"] = ["late one"]
+    assert prompt(guard, sdir, "yes", w) == {"systemMessage": "late one"}
+    with guard.scope(str(sdir), "s1") as st:
+        st["notices"] = ["late two"]
+    assert tool(guard, sdir, "Write", {"file_path": str(sdir / "x.md")}, w) == {"systemMessage": "late two"}
+    with guard.scope(str(sdir), "s1") as st:
+        st["notices"] = ["late three"]
+    assert prompt(guard, sdir, "force: do it anyway", w) == {"systemMessage": "late three"}
+    with guard.scope(str(sdir), "s1") as st:
+        st["notices"] = ["late four"]
+    assert prompt(guard, sdir, "now check the customers table", w) == {"systemMessage": "late four"}
+
+
+def test_shadow_never_shows_anything(guard, sdir):
+    s = cfg(guard, "shadow")
+    with guard.scope(str(sdir), "s1") as st:
+        st["notices"] = ["kept for warn only"]
+    assert tool(guard, sdir, "Read", {"file_path": "/etc/q"}, s) is None
+    assert guard.show(["x"], s) is None and guard.show([], cfg(guard, "warn")) is None

@@ -7,8 +7,11 @@ You judge whether a new user prompt continues a work session or starts a new obj
   reach the session goal / done-when, including narrowing it. Questions or remarks about the
   assistant's previous answer or how the work went ("why did you do that?", "so you assumed
   X?", "that's wrong") are continuations too: they are about the work in hand.
-- extension: the same goal, applied wider (another table, schema, environment, one more
-  object of the same kind). The deliverable grows; the objective does not change.
+- extension: the same goal, applied wider within what it names: another table or schema in
+  the same system, another environment of the same job, one more object of the same kind in
+  the same product. The deliverable grows; the objective does not change.
+- A different product, platform, system or technology is a pivot, even for the same kind of
+  deliverable: goal "understand the Databricks API", prompt "what about Snowflake?" is a pivot.
 - pivot: an outcome that is not needed to reach the goal, even when the topic is related.
   Example: goal "fix the access policy on table X", prompt "survey every access-control
   mechanism the platform offers" is a pivot: a broader survey, a different deliverable.

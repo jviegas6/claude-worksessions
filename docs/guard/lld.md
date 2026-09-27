@@ -75,12 +75,13 @@ treats every guard failure (a crash, a timeout, a non-zero exit) as non-blocking
 
 | Key in `cfg` | Source | Default | Validation |
 |---|---|---|---|
-| `mode` | `CWS_GUARD_MODE` | `off` | lower-cased; anything outside `off`/`shadow`/`enforce` becomes `off` |
+| `mode` | `CWS_GUARD_MODE` | `off` | lower-cased; anything outside `off`/`shadow`/`warn`/`enforce` becomes `off` |
 | `model` | `CWS_GUARD_MODEL` | `haiku` | passed as is to `claude --model` |
 | `timeout` | `CWS_GUARD_JUDGE_TIMEOUT` | `25` | float; unparsable → 25.0 |
 | `root` | `CWS_WORK_ROOT` → `$CLAUDE_WORK_ROOT` → `~/work_sessions` | — | `realpath` |
 | `ignore` | `CODE_NAMES` ∪ `CWS_GUARD_IGNORE_NAMES` (space-separated, lower-cased) | `CODE_NAMES` | — |
 | `profile` | `CWS_GUARD_PROFILE` | `""` (the session's own) | stripped; checked when the judge runs (§7.1) |
+| `max_ext` | `CWS_GUARD_MAX_EXTENSIONS` | `2` | int ≥ 0; unparsable → 2. Extensions allowed per goal before one more counts as a pivot (§7.5) |
 
 `CWS_GUARD_JUDGE_TIMEOUT` must stay below the hook timeout that `install.sh` registers for
 `UserPromptSubmit` (30 s). Otherwise Claude Code kills the hook first, which is still
@@ -100,6 +101,7 @@ Input used: `session_id`, `cwd`, `prompt`.
 | Situation | stdout |
 |---|---|
 | shadow, or anything allowed without a scope | *(none)* |
+| warn, a notice is waiting | `{"systemMessage": "<notices, one per line>"}` (shown to the user; Claude doesn't see it) |
 | enforce, pivot | `{"decision": "block", "reason": "<message to the user>"}` |
 | enforce, allowed with a literal scope | `{"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": "Scope of this request (claude-guard): <literal> Do exactly this. Where going further would help, end by proposing the next level instead of doing it."}}` |
 
@@ -124,6 +126,7 @@ Input used: `session_id`, `cwd`, `scratchpad_dir` (optional), `tool_name`, `tool
 | Situation | stdout |
 |---|---|
 | shadow, or nothing to flag | *(none)* |
+| warn, a new out-of-scope identifier, the third identical call, or a waiting notice | `{"systemMessage": "..."}`; the call goes ahead |
 | enforce, loop or out of scope | `{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "<reason for Claude>"}}` |
 
 Reasons:
@@ -140,6 +143,7 @@ Input used: `session_id`, `cwd`, `last_assistant_message`, `stop_hook_active`.
 | Situation | stdout |
 |---|---|
 | shadow, or proposals present, or no investigation | *(none)* |
+| warn, investigation without proposals, or a waiting notice | `{"systemMessage": "..."}`; Claude stops normally |
 | enforce, investigation without proposals, first stop | `{"decision": "block", "reason": "claude-guard: before finishing, add a short closing list of what could be examined next (the next level of depth) and why -- as proposals, without doing it."}` |
 
 `last_assistant_message` is used instead of reading `transcript_path`, which the spec says
@@ -180,6 +184,8 @@ stripped. A missing or corrupt file gives `("", "")`.
    "literal": "List the sources of the orders model.",
    "targets": ["db.core.orders", "orders_model"],
    "open": false,
+   "extensions": 1,
+   "notices": [],
    "words": ["claude-worksessions", "installer", "orders"],
    "paths": ["/users/me/repos/sales-etl"],
    "turn": {
@@ -201,6 +207,8 @@ stripped. A missing or corrupt file gives `("", "")`.
 | `open` | "go deeper" was asked: target checks are off until the next non-trivial prompt | `grow`, `force:` |
 | `words` | lower-cased words (`[a-z0-9][a-z0-9._-]{2,}`) from the session's non-trivial prompts, the last 400 kept. A git repo whose folder name is one of them, or in the goal, is in scope | `on_prompt` |
 | `paths` | git repos **learned** from writes (real path, lower-cased). Added to the paths declared in `.session.json` | `learn` |
+| `extensions` | extensions of the goal allowed so far; reset by `claude-goal` | `apply_verdict` |
+| `notices` | warn mode: messages for the user not shown yet (the judge answers after the prompt has gone) | `apply_verdict`; emptied by `notices()` |
 | `turn.reach` | reading-tool calls in the current request (safe ones included) | `on_tool` |
 | `turn.outside` | identifiers already flagged in this request (for de-duplication and the stop summary) | `on_tool` |
 | `turn.calls` | `sha1(tool_name + json(tool_input, sort_keys))[:12]` → count | `on_tool` |
@@ -388,15 +396,28 @@ The answer is read from `structured_output` in Claude Code's JSON result.
 
 ### 7.5 `apply_verdict(sdir, job, cfg, ans, err, ms)`
 
-1. `blocked = verdict == "pivot" and mode == "enforce"`.
-2. Under the lock: `current = st.prompt_no == job.no`.
+1. Under the lock: `current = st.prompt_no == job.no`.
+2. **Drift:** `widened = st.extensions`. An `extension` verdict when `widened >= max_ext` is
+   treated as a pivot (`drift`), with the reason prefixed "the goal has already been widened N
+   times; this widens it again". `pivot = verdict == "pivot" or drift`;
+   `blocked = pivot and mode == "enforce"`. An `extension` that isn't blocked increments
+   `st.extensions` (a blocked one doesn't).
+3. Scope growth:
    - enforce, current, not blocked → `grow(st, job.names, job.widen)`.
    - no error, current, not blocked → `literal = ans.literal or old literal or prompt[:300]`;
      `grow(st, ans.targets, st.open)` (keeps the open flag).
-3. Log to `.quality.jsonl`: error → `allow`/`ok` with `judge_error`; else `block`/`pivot` for a
-   pivot, `allow`/`ok` otherwise, with `verdict`, `reason`, `literal`, `targets`. Every prompt
-   record from the judge carries `judge_id`.
-4. `journal(...)` appends the full decision to the central journal (§10a).
+4. **Warn:** a current pivot appends a notice to `st.notices`: `claude-guard: "<prompt>" looks like
+   a new objective, not part of this session's goal (<reason>). Goal: <goal>. Consider claude-new
+   for it, or claude-goal if the goal changed.`
+5. Log to `.quality.jsonl`: error → `allow`/`ok` with `judge_error`; else `block`/`pivot` for a
+   pivot (drift included, with `drift: N`), `allow`/`ok` otherwise, with `verdict` (the judge's
+   own), `reason`, `literal`, `targets`. Every prompt record from the judge carries `judge_id`.
+6. `journal(...)` appends the full decision to the central journal (§10a).
+
+**Notices** (`notices(sdir, sid, cfg)`, `show(messages, cfg)`): in warn mode each hook first pops
+`st.notices`, and answers with `{"systemMessage": ...}` joining those and its own warnings. So a
+verdict that arrives after the prompt went is shown at the next tool call, the end of the answer,
+or the next prompt, whichever comes first, once. `show` returns nothing outside warn mode.
 
 In shadow a pivot is not blocked, so its targets are merged like any other. The session
 really does carry on with that work, and the tool checks should reflect it.
@@ -732,7 +753,8 @@ at 99% (`claude-guard` 99%).
 
 | Name | Where | Value | Effect |
 |---|---|---|---|
-| `CWS_GUARD_MODE` | config | `off` | mode |
+| `CWS_GUARD_MODE` | config | `off` | mode: `off`, `shadow`, `warn`, `enforce` |
+| `CWS_GUARD_MAX_EXTENSIONS` | config | `2` | extensions per goal before the next counts as a pivot |
 | `CWS_GUARD_MODEL` | config | `haiku` | judge model |
 | `CWS_GUARD_JUDGE_TIMEOUT` | config | `25` | seconds (enforce and background) |
 | `CWS_GUARD_PROFILE` | config | — | profile the judge runs under |

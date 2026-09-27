@@ -334,7 +334,7 @@ How to use it: [the user guide](guard/user-guide.md). Design: [HLD](guard/hld.md
 Keeps a session on the request it was given: doing the literal scope and proposing the next
 level instead of opening everything around it, and noticing when a prompt is really a new
 objective. Three hooks, registered by `install.sh`, that do nothing until
-`CWS_GUARD_MODE` is `shadow` or `enforce`:
+`CWS_GUARD_MODE` is `shadow`, `warn` or `enforce`:
 
 | hook | checks | enforce |
 |---|---|---|
@@ -347,7 +347,8 @@ objective. Three hooks, registered by `install.sh`, that do nothing until
 - Asking to go deeper — *aprofunda*, *go deeper*, *dig into*, *explore*… — lifts the target
   check until the next request.
 - **Shadow** decides and logs everything but never blocks, and runs the judge in the
-  background, so prompts are not held up. **Enforce** waits for the judge (about 10 s,
+  background, so prompts are not held up. **Warn** is shadow plus a one-line notice to you
+  wherever enforce would act. **Enforce** waits for the judge (about 10 s,
   up to `CWS_GUARD_JUDGE_TIMEOUT`). Any error or timeout lets the action through, logged.
 - Each decision is a line in `.quality.jsonl` in the session folder: `ts`, `event`,
   `decision` (what enforce does), `type` (`ok` / `depth` / `pivot` / `loop`),

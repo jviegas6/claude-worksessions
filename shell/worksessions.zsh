@@ -267,7 +267,7 @@ sp = os.path.join(folder, ".scope.json")
 try:
     s = json.load(open(sp))
     for st in (s.get("sessions") or {}).values():
-        for k in ("literal", "targets", "open"):
+        for k in ("literal", "targets", "open", "extensions"):
             st.pop(k, None)
     json.dump(s, open(sp, "w"), indent=1)
 except (OSError, ValueError, AttributeError):

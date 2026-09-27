@@ -28,6 +28,7 @@ CWS_GUARD_MODE="shadow"     # off | shadow | enforce
 |---|---|
 | `off` | nothing; the guard does nothing |
 | `shadow` | **nothing**. It decides everything and writes it to a log, but never blocks or slows you down |
+| `warn` | a one-line **notice** from `claude-guard` where enforce would act: a new objective, a read outside the request, a loop, missing next steps. Never blocks, never slows prompts; a verdict on your prompt appears at Claude's next step or at the end of its answer |
 | `enforce` | it blocks new objectives, stops Claude reading things outside the request, and asks Claude for next-step proposals. Prompts take a few seconds longer while the judge decides |
 
 The mode is read on every hook call, so changing it takes effect on the next prompt with no
@@ -86,6 +87,11 @@ You have three options:
 | treat it as separate work (usually right) | open a new session: `claude-new -t PROJ-123 "access-control survey"` |
 | change this session's objective on purpose | in a terminal in the session folder: `claude-goal "survey the access-control mechanisms"`, then resend the prompt |
 | just ask it here, this once | resend it starting with `force:` — `force: what access-control mechanisms…` |
+
+**Widening adds up.** Applying the goal to one more thing in the same system is fine ("also the
+customers table", "and the UAT environment"). But after two such widenings, the next one counts
+as a new objective (`CWS_GUARD_MAX_EXTENSIONS`). A different product or platform is a new
+objective straight away: goal "understand the Databricks API", then "what about Snowflake?".
 
 These don't count as a new objective:
 

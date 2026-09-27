@@ -94,7 +94,7 @@ A missing file leaves the defaults.
 | `CWS_PROFILE_<name>_DESC` | — | `claude-new` menu and `-L` |
 | `CWS_PROFILE_<name>_BASE_URL` | — | installer (gateway env; no sign-in), `claude-new -L` |
 | `CWS_INSTALL_YAZI` | `1` | installer |
-| `CWS_GUARD_MODE`, `CWS_GUARD_MODEL`, `CWS_GUARD_PROFILE`, `CWS_GUARD_JUDGE_TIMEOUT`, `CWS_GUARD_IGNORE_NAMES` | `off`, `haiku`, —, `15`, — | `claude-guard` ([LLD §2](guard/lld.md#2-configuration)) |
+| `CWS_GUARD_MODE`, `CWS_GUARD_MODEL`, `CWS_GUARD_PROFILE`, `CWS_GUARD_JUDGE_TIMEOUT`, `CWS_GUARD_IGNORE_NAMES` | `off`, `haiku`, —, `25`, — | `claude-guard` ([LLD §2](guard/lld.md#2-configuration)) |
 
 Environment-only: `CWS_CONFIG`, `CWS_PYTHON` (interpreter for shell JSON helpers), `CWS_OS`
 (OS override), `CWS_CACHE_DIR`, `CWS_TRASH_DIR`, `XDG_CACHE_HOME`, `XDG_DATA_HOME`,
@@ -202,10 +202,11 @@ and warned about.
 | `PostToolUseFailure` | `Bash\|mcp__.*` | `~/.local/bin/claude-hook-notfound` | 10 |
 | `UserPromptSubmit` | — | `~/.local/bin/claude-hook-vague` | 10 |
 | `UserPromptSubmit` | — | `~/.local/bin/claude-guard prompt` | 30 |
-| `PreToolUse` | `Read\|Glob\|Grep\|WebFetch\|WebSearch\|Bash\|mcp__.*` | `~/.local/bin/claude-guard tool` | 5 |
+| `PreToolUse` | `Read\|Glob\|Grep\|WebFetch\|WebSearch\|Bash\|Write\|Edit\|MultiEdit\|NotebookEdit\|mcp__.*` | `~/.local/bin/claude-guard tool` | 5 |
 | `Stop` | — | `~/.local/bin/claude-guard stop` | 10 |
 
-Added only when no hook in that event has the same `command`; the user's own hooks are kept.
+Added only when no hook in that event has the same `command`; the user's own hooks are kept. An
+existing group holding only our hook gets its matcher updated when it differs.
 Written atomically; invalid JSON is reported and left alone.
 
 ### 3.5 `uninstall.sh`
@@ -235,6 +236,7 @@ defaults `CWS_PROFILES`, `CWS_DEFAULT_PROFILE`, `CWS_TICKET_EXAMPLE`, `CWS_TASK_
 | `-t/--ticket T` | ticket |
 | `-T/--type T` | task type |
 | `-g/--goal G`, `--done TEXT` | goal and done-when |
+| `--path DIR` (repeatable) | a folder outside the request that is part of the work; must exist; stored absolute in `paths` |
 | `-n/--no-audit`, `-a/--audit` | audit off; don't ask |
 | `-c/--code` | open VS Code instead of starting Claude |
 | `--prompt TEXT` | first prompt (not with `-c`) |
@@ -320,6 +322,7 @@ folder's `.scope.json`, and appends a `goal` event to `.quality.jsonl`. See
 | `task_type` | `claude-new`, `claude-type --folder`, sidebar | the folder default |
 | `session_types` | `claude-type`, sidebar | `{session id: type}`; wins over `task_type` |
 | `goal`, `done_when`, `goal_history` | `claude-new`, `claude-goal` | read by `claude-guard` |
+| `paths` | `claude-new --path`, `claude-goal --path` | folders in the request's scope for `claude-guard` |
 | `audit` | `claude-new` | only literal `false` excludes |
 | `started_at`, `ended_at` | `claude-new` | UTC; `ended_at` stays `null` for `-c` |
 | `host`, `path` | `claude-new` | |

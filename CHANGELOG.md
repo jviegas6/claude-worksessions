@@ -1,5 +1,26 @@
 # Changelog
 
+## [2.17.0] — 2026-09-27
+
+- **claude-guard knows where the work is.** A request's scope is its folder, plus:
+  - a git repo Claude **edits** in the session, from the first edit;
+  - a git repo **named** in the goal or a prompt;
+  - folders **declared** with the new `claude-new --path DIR` / `claude-goal --path DIR`.
+
+  Reads there are no longer flagged. Found in shadow mode, where most flags on a real session
+  were reads of the very repo being worked on.
+- **claude-guard catches what it missed:**
+  - `../` and `./` paths in commands, and relative Glob/Grep paths, are resolved and checked;
+  - a path outside the request is flagged even when the judge hasn't answered, or the prompt
+    named nothing.
+- **Fewer false alarms:**
+  - the text of commit messages, PR bodies and heredocs isn't treated as something reached;
+  - more Python module names are ignored as code;
+  - questions about the assistant's previous answer are continuations, not new objectives;
+  - sub-agents' calls are labelled in the log.
+- The judge's timeout defaults to 25 s (was 15; the p90 on real sessions was 13.5 s).
+- `install.sh` updates the matcher of an existing guard hook, which now also sees writes.
+
 ## [2.16.1] — 2026-09-27
 
 - **Sidebar: request folders with no session now show** (#23), with their files: a request

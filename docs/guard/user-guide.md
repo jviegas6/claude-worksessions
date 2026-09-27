@@ -102,9 +102,17 @@ sources to look inside. That read is denied, and Claude is told to list it as a 
 step instead. You see the denial in the transcript, and the answer ends with suggestions like
 "Next: open `db.staging.orders_raw` to check its freshness".
 
-Always allowed: files in the session folder, the scratchpad and temp folders, Claude's own
-config, and anything named in your prompts (paths, URLs, `db.schema.table` names, snake_case
-names) or identified by the judge as a target.
+Always allowed:
+- files in the session folder, the scratchpad and temp folders, and Claude's own config;
+- anything named in your prompts (paths, URLs, `db.schema.table` names, snake_case names) or
+  identified by the judge as a target;
+- **a git repo Claude edits** in this session: from its first edit there, the whole repo is in scope;
+- **a git repo you name** in the goal or a prompt, by its folder name ("fix the installer in
+  claude-worksessions");
+- **folders you declare**: `claude-new --path ~/Repos/sales-etl`, or later
+  `claude-goal --path ~/Repos/sales-etl`.
+
+Everything else outside the session folder is out of scope, including `../` paths.
 
 ### 3.3 You *want* it to go further
 
@@ -135,6 +143,7 @@ examined next, it's asked, once, to add a short list of proposals. It doesn't ca
 | `claude-goal` | show the current session folder's goal and done-when |
 | `claude-goal "new goal" [--done "…"]` | change the goal on purpose; the old one is kept in the history and the guard starts a fresh scope |
 | `claude-goal --done "…"` | change only done-when |
+| `claude-new … --path DIR` / `claude-goal --path DIR` | a folder or repo outside the request that is part of the work (repeatable) |
 | `claude-guard report` | what the guard saw in the last 14 days, across all sessions |
 | `claude-guard report --days 7` | a different window |
 | `claude-guard report <folder>` | one request folder, or one day (`<work root>/2026/09/26`) |
@@ -289,7 +298,7 @@ CWS_GUARD_IGNORE_NAMES="client sdk"
 ```sh
 CWS_GUARD_MODEL="haiku"          # any model alias or name your profile can use
 CWS_GUARD_PROFILE=""             # the profile the judge runs under (e.g. "personal"); empty = the session's own
-CWS_GUARD_JUDGE_TIMEOUT="15"     # seconds; if the judge is slower, the prompt goes through (keep under 30)
+CWS_GUARD_JUDGE_TIMEOUT="25"     # seconds; if the judge is slower, the prompt goes through (keep under 30)
 ```
 
 ---
@@ -303,7 +312,7 @@ CWS_GUARD_JUDGE_TIMEOUT="15"     # seconds; if the judge is slower, the prompt g
 | `judge failed … judge profile dir … not found` | `CWS_GUARD_PROFILE` names a profile that doesn't exist; use a name from `claude-new -L` |
 | `judge failed …` on the gateway profile | the gateway may not offer the configured model. Set `CWS_GUARD_MODEL` to one it has, or `CWS_GUARD_PROFILE` to another profile |
 | `judge failed … timeout` | raise `CWS_GUARD_JUDGE_TIMEOUT` (below 30), or use a faster model |
-| A read you needed was denied | say "go deeper" in the prompt, or name the thing in the prompt; if it keeps happening, tune §7 |
+| A read you needed was denied | name the repo or folder in the prompt, add it with `claude-goal --path`, or say "go deeper"; if it keeps happening, tune §7 |
 | A follow-up was blocked as a new objective | resend with `force:`; add the case to `guard-rules.md` |
 | Prompts feel slow in enforce | expected (judge time). Go back to `shadow` if it's too much |
 | You want it gone for a while | `CWS_GUARD_MODE="off"`, effective on the next prompt |

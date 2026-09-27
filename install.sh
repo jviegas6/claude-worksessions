@@ -654,7 +654,8 @@ guard = os.path.join(os.environ["BIN"], "claude-guard")
 # (event, matcher, command, timeout): the guard's prompt check can wait on its judge
 WANT = [("PostToolUse", "Bash|mcp__.*", notfound, 10), ("PostToolUseFailure", "Bash|mcp__.*", notfound, 10),
         ("UserPromptSubmit", None, vague, 10), ("UserPromptSubmit", None, guard + " prompt", 30),
-        ("PreToolUse", "Read|Glob|Grep|WebFetch|WebSearch|Bash|mcp__.*", guard + " tool", 5),
+        ("PreToolUse", "Read|Glob|Grep|WebFetch|WebSearch|Bash|Write|Edit|MultiEdit|NotebookEdit|mcp__.*",
+         guard + " tool", 5),
         ("Stop", None, guard + " stop", 10)]
 try:
     d = json.load(open(p))
@@ -666,7 +667,13 @@ hooks = d.setdefault("hooks", {})
 added = []
 for event, matcher, hook, timeout in WANT:
     groups = hooks.setdefault(event, [])
-    if any(h.get("command") == hook for g in groups for h in g.get("hooks", [])):
+    mine = [g for g in groups if any(h.get("command") == hook for h in g.get("hooks", []))]
+    if mine:
+        # ours already, perhaps with an older matcher: bring a group holding only our hook up to date
+        for g in mine:
+            if matcher and g.get("matcher") != matcher and len(g.get("hooks", [])) == 1:
+                g["matcher"] = matcher
+                added.append(event)
         continue
     group = {"hooks": [{"type": "command", "command": hook, "timeout": timeout}]}
     if matcher:

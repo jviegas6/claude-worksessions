@@ -60,11 +60,21 @@ PATH = re.compile(r"(?<![\w.:/~-])(~?/[\w.@~+-]+(?:/(?:[\w.@~+-]+(?: [\w.@~+-]+)
 # code, not data: os.path.join, self.client.get. Platform objects that show up in commands the
 # same way go in CWS_GUARD_IGNORE_NAMES (space-separated first parts)
 CODE_NAMES = {"os", "sys", "json", "re", "self", "dt", "datetime", "subprocess", "np", "pd", "math", "time",
-              "pathlib", "shutil", "io", "cls", "super", "string", "collections", "typing"}
+              "pathlib", "shutil", "io", "cls", "super", "string", "collections", "typing", "importlib", "urllib",
+              "itertools", "functools", "logging", "argparse", "tempfile", "hashlib", "glob", "fcntl", "contextlib",
+              "textwrap", "unittest", "pytest", "types", "csv", "random", "uuid", "http", "email", "base64"}
+# ./x and ../x in commands: resolved against the session's cwd
+RELATIVE = re.compile(r"(?<![\w./~-])(\.\.?/[\w.@~+/-]*)")
+# text that is a message, not something reached: heredoc bodies, and -m/--body/--title/--message values
+HEREDOC = re.compile(r"<<-?\s*['\"]?(\w+)['\"]?[^\n]*\n.*?\n\s*\1\b", re.S)
+MESSAGE_ARG = re.compile(r"(?:-m|--message|--body|--title|--notes|--description)[ =](\"(?:[^\"\\]|\\.)*\"|'[^']*')")
+WRITE_TOOLS = {"Write": "file_path", "Edit": "file_path", "MultiEdit": "file_path", "NotebookEdit": "notebook_path"}
 URL = re.compile(r"https?://[^\s'\"`<>)]+")
 FILE_EXT = {"py", "md", "json", "jsonl", "txt", "csv", "yml", "yaml", "sh", "zsh", "log", "html", "gz", "sql",
             "toml", "ts", "js", "tsx", "ipynb", "env", "xml", "png", "pdf", "zip", "tar"}
+TEMP_ROOTS = ("/tmp", "/private/tmp")      # scratch space, besides the system temp dir
 REACH_TOOLS = re.compile(r"^(Read|Glob|Grep|WebFetch|WebSearch|Bash|mcp__.*)$")
+WORDS = re.compile(r"[a-z0-9][a-z0-9._-]{2,}")
 LOOP_AFTER = 3                      # the same call this many times in one request is a loop
 PROPOSALS = re.compile(r"(next (step|level)|could also|if you want|want me to|shall i|should i|would you like|"
                        r"deeper|próxim|posso |queres|quer que|se quiseres|aprofund|pr[oó]ximo passo)", re.I)
@@ -73,7 +83,9 @@ DEFAULT_RULES = """\
 You judge whether a new user prompt continues a work session or starts a new objective.
 
 - continuation: steps, clarifications, fixes, confirmations or follow-ups that are needed to
-  reach the session goal / done-when, including narrowing it.
+  reach the session goal / done-when, including narrowing it. Questions or remarks about the
+  assistant's previous answer or how the work went ("why did you do that?", "so you assumed
+  X?", "that's wrong") are continuations too: they are about the work in hand.
 - extension: the same goal, applied wider (another table, schema, environment, one more
   object of the same kind). The deliverable grows; the objective does not change.
 - pivot: an outcome that is not needed to reach the goal, even when the topic is related.
@@ -116,9 +128,9 @@ def load_config():
 def settings(conf):
     mode = (conf.get("CWS_GUARD_MODE") or "off").strip().lower()
     try:
-        timeout = float(conf.get("CWS_GUARD_JUDGE_TIMEOUT") or 15)
+        timeout = float(conf.get("CWS_GUARD_JUDGE_TIMEOUT") or 25)
     except ValueError:
-        timeout = 15.0
+        timeout = 25.0
     root = conf.get("CWS_WORK_ROOT") or os.environ.get("CLAUDE_WORK_ROOT") or os.path.join(HOME, "work_sessions")
     ignore = CODE_NAMES | set((conf.get("CWS_GUARD_IGNORE_NAMES") or "").lower().split())
     return {"mode": mode if mode in MODES else "off", "model": conf.get("CWS_GUARD_MODEL") or "haiku", "ignore": ignore,
@@ -155,6 +167,23 @@ def read_json(path, default):
 def session_goal(sdir):
     meta = read_json(os.path.join(sdir, ".session.json"), {})
     return (meta.get("goal") or meta.get("name") or "").strip(), (meta.get("done_when") or "").strip()
+
+
+def declared_paths(sdir):
+    """Folders the request declares as part of its scope (claude-new/claude-goal --path)."""
+    meta = read_json(os.path.join(sdir, ".session.json"), {})
+    paths = meta.get("paths") if isinstance(meta.get("paths"), list) else []
+    return [os.path.realpath(os.path.expanduser(p)).lower() for p in paths if isinstance(p, str) and p.strip()]
+
+
+def git_root(path):
+    """The git repository a path is in (the nearest folder with a .git), or None."""
+    d = path if os.path.isdir(path) else os.path.dirname(path)
+    while d and d != os.path.dirname(d):
+        if os.path.exists(os.path.join(d, ".git")):
+            return d
+        d = os.path.dirname(d)
+    return None
 
 
 @contextlib.contextmanager
@@ -211,14 +240,14 @@ def anchors(text, ignore=CODE_NAMES):
             out.add(m.lower())
     for p in PATH.findall(text):
         if len(p) > 2:
-            out.add(os.path.expanduser(p).rstrip("/.,;:").lower())
+            out.add(os.path.expanduser(p).rstrip("/.,;:"))        # paths keep their case: git_root needs it
     return out
 
 
 def prompt_anchors(text):
     """What a prompt names, more loosely than a tool call: also two-part names
     (db.schema) and snake_case words, since targets are better too many than too few."""
-    out = anchors(text)
+    out = {a.lower() for a in anchors(text)}
     rest = URL.sub(" ", text)
     out |= {m.lower() for m in re.findall(r"(?<![\w./-])[A-Za-z_]\w*\.[A-Za-z_]\w*(?![\w.-])", rest)
             if m.rsplit(".", 1)[-1].lower() not in FILE_EXT}
@@ -230,6 +259,7 @@ def prompt_anchors(text):
 def matches(ident, targets):
     """Loose on purpose: a call on db.schema.table is on target 'schema', a file under a
     target folder is on it, and a target named inside a URL counts."""
+    ident = ident.lower()
     tail = ident.rstrip("/").rsplit("/", 1)[-1].rsplit(".", 1)[-1]
     for t in targets:
         if len(t) >= 3 and (t in ident or ident in t or (len(tail) >= 3 and tail == t.rsplit(".", 1)[-1])):
@@ -238,8 +268,8 @@ def matches(ident, targets):
 
 
 def safe_roots(sdir, payload):
-    roots = [sdir, payload.get("cwd"), payload.get("scratchpad_dir"), tempfile.gettempdir(), "/tmp", "/private/tmp",
-             "/dev", os.environ.get("CLAUDE_CONFIG_DIR"), os.path.join(HOME, ".claude")]
+    roots = [sdir, payload.get("cwd"), payload.get("scratchpad_dir"), tempfile.gettempdir(), *TEMP_ROOTS, "/dev",
+             os.environ.get("CLAUDE_CONFIG_DIR"), os.path.join(HOME, ".claude")]
     roots += [os.path.join(HOME, n) for n in os.listdir(HOME) if n.startswith(".claude-")] if os.path.isdir(HOME) else []
     return [os.path.realpath(r).lower() for r in roots if r]
 
@@ -248,22 +278,37 @@ def safe(ident, roots):
     """A path in the session folder, the scratchpad, a temp dir or Claude's own config."""
     if not ident.startswith("/"):
         return False
-    forms = {ident, os.path.realpath(ident).lower()}
+    forms = {ident.lower(), os.path.realpath(ident).lower()}
     return any(f == r or f.startswith(r + "/") for f in forms for r in roots)
 
 
-def reached(tool, tool_input, ignore=CODE_NAMES):
+def resolve(p, cwd):
+    """A path as the tool would see it: ~ expanded, relative ones against the session's cwd."""
+    p = os.path.expanduser(p)
+    if not os.path.isabs(p):
+        p = os.path.join(cwd or ".", p)
+    return os.path.normpath(p).rstrip("/")
+
+
+def command_text(command):
+    """A Bash command without the text it only carries: heredoc bodies and message arguments
+    (a commit message or PR body can name anything)."""
+    return MESSAGE_ARG.sub(" ", HEREDOC.sub(" ", command or ""))
+
+
+def reached(tool, tool_input, ignore=CODE_NAMES, cwd=None):
     """What a tool call reaches, as identifiers to check against the targets."""
     if tool in ("Read", "Glob", "Grep"):
         p = tool_input.get("file_path") or tool_input.get("path") or ""
-        return {os.path.expanduser(p).rstrip("/").lower()} if p else set()
+        return {resolve(p, cwd)} if p else set()
     if tool == "WebFetch":
         return {(tool_input.get("url") or "").lower()} - {""}
     if tool == "WebSearch":
         q = (tool_input.get("query") or "").strip().lower()
         return {"search: " + q} if q else set()
     if tool == "Bash":
-        return anchors(tool_input.get("command") or "", ignore)
+        text = command_text(tool_input.get("command"))
+        return anchors(text, ignore) | {resolve(p, cwd) for p in RELATIVE.findall(text) if p.strip("./")}
     return anchors("\n".join(strings(tool_input)), ignore)
 
 
@@ -469,6 +514,8 @@ def on_prompt(payload, cfg):
         no = st["prompt_no"] = int(st.get("prompt_no") or 0) + 1
         base["prompt_no"] = no
         literal = st.get("literal") or ""
+        if not trivial(prompt):                     # words that can name a repo: "claude-worksessions"
+            st["words"] = sorted(set(st.get("words") or []) | set(WORDS.findall(prompt.lower())))[-400:]
         if FORCE.match(prompt):
             st.update(open=True, turn=new_turn(), literal=FORCE.sub("", prompt)[:300])
             log(sdir, dict(base, decision="allow", type="ok", override=True, reason="force: prefix"))
@@ -513,14 +560,22 @@ def new_turn():
 
 def on_tool(payload, cfg):
     tool = payload.get("tool_name") or ""
-    if not REACH_TOOLS.match(tool):
+    if tool not in WRITE_TOOLS and not REACH_TOOLS.match(tool):
         return None
     sdir = session_dir(payload.get("cwd"), cfg["root"])
     if not sdir:
         return None
-    sid, tool_input = payload.get("session_id") or "none", payload.get("tool_input") or {}
-    key = hashlib.sha1((tool + json.dumps(tool_input, sort_keys=True)).encode()).hexdigest()[:12]
+    sid, tool_input, cwd = payload.get("session_id") or "none", payload.get("tool_input") or {}, payload.get("cwd")
     roots = safe_roots(sdir, payload)
+    base = {"event": "tool", "session_id": sid, "initiated_by": "subagent" if payload.get("agent_id") else "agent",
+            "mode": cfg["mode"], "tool": tool}
+    if payload.get("agent_type"):
+        base["agent_type"] = payload["agent_type"]
+    if tool in WRITE_TOOLS:
+        return learn(sdir, sid, resolve(tool_input.get(WRITE_TOOLS[tool]) or "", cwd), roots, base)
+    key = hashlib.sha1((tool + json.dumps(tool_input, sort_keys=True)).encode()).hexdigest()[:12]
+    goal = session_goal(sdir)[0]
+    declared = declared_paths(sdir)
     with scope(sdir, sid) as st:
         turn = st.setdefault("turn", new_turn())
         turn["reach"] = turn.get("reach", 0) + 1
@@ -528,13 +583,14 @@ def on_tool(payload, cfg):
         calls[key] = calls.get(key, 0) + 1
         repeats = calls[key]
         targets = st.get("targets") or []
-        idents = {i for i in reached(tool, tool_input, cfg["ignore"]) if not safe(i, roots)}
-        off = sorted(i for i in idents if not matches(i, targets)) if targets and not st.get("open") else []
+        area = {"paths": declared + (st.get("paths") or []),
+                "words": set(st.get("words") or []) | set(WORDS.findall(goal.lower()))}
+        idents = {i for i in reached(tool, tool_input, cfg["ignore"], cwd) if not safe(i, roots)}
+        off = [] if st.get("open") else sorted(i for i in idents if outside(i, targets, area))
         new_off = [i for i in off if i not in turn.setdefault("outside", [])]
         turn["outside"] += new_off
         literal = st.get("literal") or ""
-    base = {"event": "tool", "session_id": sid, "prompt_no": st.get("prompt_no"), "initiated_by": "agent",
-            "mode": cfg["mode"], "tool": tool}
+    base["prompt_no"] = st.get("prompt_no")
     if repeats >= LOOP_AFTER:                    # denied every time from then on, logged once
         if repeats == LOOP_AFTER:
             log(sdir, dict(base, decision="deny", type="loop", reason="same call {} times in one request".format(repeats)))
@@ -542,11 +598,42 @@ def on_tool(payload, cfg):
                          "the user instead of repeating it.".format(tool, repeats))
     if off:                                      # denied every time, logged once per identifier
         if new_off:
-            log(sdir, dict(base, decision="deny", type="depth", reason="outside the request's targets",
+            log(sdir, dict(base, decision="deny", type="depth", reason="outside the request's scope",
                            reached=new_off[:5], targets=targets[:20]))
-        return deny(cfg, "claude-guard: out of scope. This request is: {} -- and {} is not among its targets. Don't "
-                         "open it now; list it as a possible next step.".format(literal or "(see the prompt)",
-                                                                                 ", ".join(off[:3])))
+        return deny(cfg, "claude-guard: out of scope. This request is: {} -- and {} is outside it (its folder, the "
+                         "repos it works in, and what it names). Don't open it now; list it as a possible next "
+                         "step.".format(literal or "(see the prompt)", ", ".join(off[:3])))
+    return None
+
+
+def outside(ident, targets, area):
+    """Is what a call reaches outside the request? A path is inside when it's under a declared or
+    learned folder, in a git repo the goal or a prompt names, or on a target. Anything else --
+    a table, a URL, a search -- can only be judged against targets, so with none it passes."""
+    if ident.startswith("/"):
+        low = os.path.realpath(ident).lower()
+        if any(low == p or low.startswith(p + "/") for p in area["paths"]):
+            return False
+        repo = git_root(ident)
+        if repo and os.path.basename(repo).lower() in area["words"]:
+            return False
+        return not (targets and matches(ident, targets))
+    return bool(targets) and not matches(ident, targets)
+
+
+def learn(sdir, sid, path, roots, base):
+    """A write inside a git repo puts that repo in the session's scope: that's where the work is."""
+    repo = git_root(path) if path else None
+    if not repo or safe(repo, roots):
+        return None
+    low = os.path.realpath(repo).lower()
+    with scope(sdir, sid) as st:
+        paths = st.setdefault("paths", [])
+        if low in paths:
+            return None
+        paths.append(low)
+        base["prompt_no"] = st.get("prompt_no")
+    log(sdir, dict(base, decision="allow", type="ok", learned=repo, reason="edits a file in this repo: now in scope"))
     return None
 
 

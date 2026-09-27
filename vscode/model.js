@@ -1,6 +1,7 @@
 // The sidebar's data model, kept free of the vscode API so `node --test` can check it.
 // Input is `claude-sessions -a --json`: { work_root, sessions: [{ id, mtime, cwd, in_work_root,
-// title, first_prompt, last_prompt, request: { path, name, ticket, task_type, profile } | null }] }
+// title, first_prompt, last_prompt, request: { path, name, ticket, task_type, profile } | null }],
+// requests: [request folders no session with a prompt belongs to: { path, name, ..., files, mtime }] }
 
 const fs = require("fs");
 const path = require("path");
@@ -46,12 +47,19 @@ function matches(s, filter) {
   return ws.every(w => hay.includes(w));
 }
 
-// A request's files to show: while searching, those whose path has one of the words, if
-// any does; otherwise all of them.
-function shownFiles(files, filter) {
-  const ws = words(filter);
-  const hit = ws.length ? (files || []).filter(f => ws.some(w => f.toLowerCase().includes(w))) : [];
-  return hit.length ? hit : files || [];
+// A request's files to show while searching. Only the words that matched nothing but file
+// names narrow the list: when the request was found by its name, ticket, type, profile, folder
+// or one of its sessions, every file shows. Of those words, a file needs one; if no file has
+// any, all show.
+function shownFiles(request, filter) {
+  const files = (request && request.files) || [];
+  const r = request || {};
+  const own = [r.name, r.ticket, r.task_type, r.profile, r.path,
+               ...(r.sessions || []).flatMap(s => [s.title, s.first_prompt, s.last_prompt, s.id])]
+    .filter(Boolean).join("\n").toLowerCase();
+  const ws = words(filter).filter(w => !own.includes(w));
+  const hit = ws.length ? files.filter(f => ws.some(w => f.toLowerCase().includes(w))) : [];
+  return hit.length ? hit : files;
 }
 
 // One level of a file tree: the folders (with their full prefix) then the files directly
@@ -143,15 +151,22 @@ function describeFilters(f) {
 // Tickets to offer in the ticket filter: those in use, most recent first, then (no ticket).
 function ticketsInUse(data) {
   const out = [];
-  for (const s of [...data.sessions].sort((a, b) => b.mtime - a.mtime)) {
+  const all = [...data.sessions, ...(data.requests || []).map(asSession)];
+  for (const s of all.sort((a, b) => b.mtime - a.mtime)) {
     const t = ticketOf(s);
     if (t !== NO_TICKET && !out.includes(t)) out.push(t);
   }
   return [...out, NO_TICKET];
 }
 
+// A session-less request seen as a session, so the search and filters apply to it the same
+// way: its fields and files for the search, its start and last change for the day, its files
+// as artifacts.
+const asSession = r => ({ id: "", request: r, started: r.started, mtime: r.mtime || r.started || 0, written: r.files });
+
 // Requests, newest activity first, each with its sessions newest first. Sessions with no
-// request (run in the work root itself) share one pseudo-request.
+// request (run in the work root itself) share one pseudo-request. Request folders with no
+// session to show (data.requests) are requests with none, when they pass the search and filters.
 function requests(data, opts) {
   const byPath = new Map();
   for (const s of visible(data, opts)) {
@@ -164,11 +179,21 @@ function requests(data, opts) {
     }
     byPath.get(key).sessions.push(s);
   }
+  const filter = (opts && opts.filter) || "", pass = passes(opts && opts.filters, opts && opts.now);
+  for (const r of data.requests || []) {
+    const s = asSession(r);
+    if (!byPath.has(r.path) && matches(s, filter) && pass(s)) {
+      byPath.set(r.path, { ...r, root: false, mtime: s.mtime, sessions: [] });
+    }
+  }
   const sort = SORTS.includes(opts && opts.sort) ? opts.sort : "activity";
   const out = [...byPath.values()];
   for (const r of out) {
-    r.mtime = Math.max(...r.sessions.map(s => s.mtime));
-    r.started = r.started || Math.min(...r.sessions.map(began));
+    if (r.sessions.length) {
+      r.mtime = Math.max(...r.sessions.map(s => s.mtime));
+      r.started = r.started || Math.min(...r.sessions.map(began));
+    }
+    r.started = r.started || r.mtime;
     r.sessions.sort(sessionOrder[sort]);
   }
   return out.sort(requestOrder[sort]);

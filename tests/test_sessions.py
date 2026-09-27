@@ -313,3 +313,31 @@ def test_json_has_start_times(sessions, home, monkeypatch, capsys, tmp_path):
     a, gone = json.loads(run_main(sessions, monkeypatch, capsys, "-a", "--json"))["sessions"]
     assert a["started"] == 1790067900.0 and a["request"]["started"] == 1790067600.0
     assert gone["started"] is None
+
+
+def test_json_lists_request_folders_with_no_session(sessions, home, monkeypatch, capsys, tmp_path):
+    """#23: a request with no session that has a prompt is still in the data, with its files."""
+    monkeypatch.setenv("CWS_CACHE_DIR", str(tmp_path / "cache"))
+    day = home / "work_sessions" / "2026" / "09" / "23"
+    folders = {}
+    for name in ("busy", "opened", "idle", "bare"):
+        d = folders[name] = day / ("10-00-00_" + name)
+        d.mkdir(parents=True)
+        (d / ".session.json").write_text(json.dumps({"name": name, "ticket": "BTPA-9",
+                                                     "started_at": "2026-09-23T09:00:00Z"}))
+    (day / "11-00-00_not-a-request").mkdir()                              # no .session.json
+    (folders["idle"] / "draft.md").write_text("x")
+    os.utime(folders["idle"] / "draft.md", (5_000_000_000, 5_000_000_000))
+    (folders["idle"] / "gone.md").symlink_to(folders["idle"] / "nowhere")  # listed, can't be stat'ed
+    write_transcript(home, "b", [rec("user", "work", cwd=str(folders["busy"]))], mtime=2_000)
+    write_transcript(home, "o", [rec("user", "<command-name>/exit</command-name>", cwd=str(folders["opened"]))],
+                     mtime=1_000)                                          # opened, closed before a prompt
+    data = json.loads(run_main(sessions, monkeypatch, capsys, "-a", "--json"))
+    reqs = {os.path.basename(r["path"]): r for r in data["requests"]}
+    assert sorted(reqs) == ["10-00-00_bare", "10-00-00_idle", "10-00-00_opened"]
+    idle = reqs["10-00-00_idle"]
+    assert (idle["name"], idle["ticket"], idle["files"], idle["files_truncated"]) == (
+        "idle", "BTPA-9", ["draft.md", "gone.md"], False)
+    assert idle["mtime"] == 5_000_000_000 and idle["started"] == sessions.iso_epoch("2026-09-23T09:00:00Z")
+    assert reqs["10-00-00_bare"]["files"] == [] and reqs["10-00-00_bare"]["mtime"] > 0
+    assert [s["id"] for s in data["sessions"]] == ["b", "o"]

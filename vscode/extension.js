@@ -248,7 +248,7 @@ class Sidebar {
               ...(files.length ? [{ kind: "files", request: r, inPinned }] : [])];
     }
     if (el.kind === "files" || el.kind === "dir") {
-      const files = M.shownFiles(el.request.files, this.filter);
+      const files = M.shownFiles(el.request, this.filter);
       return M.fileChildren(files, el.kind === "dir" ? el.prefix : "").map(x => ({ ...x, request: el.request, inPinned }));
     }
     return [];
@@ -305,7 +305,8 @@ class Sidebar {
     }
     if (el.kind === "request") {
       const r = el.request;
-      const it = new vscode.TreeItem(r.name, searching ? C.Expanded : C.Collapsed);
+      const empty = !r.sessions.length && !(r.files || []).length;
+      const it = new vscode.TreeItem(r.name, empty ? C.None : searching ? C.Expanded : C.Collapsed);
       it.id = idp + "r|" + r.path;
       const pinnedReq = M.isPinnedRequest(this.pins, this.data.work_root, r);
       it.contextValue = r.root ? "root" : pinnedReq ? "request-pinned" : "request";
@@ -323,10 +324,12 @@ class Sidebar {
       return it;
     }
     if (el.kind === "files") {
-      const r = el.request, n = r.files.length;
+      const r = el.request, n = r.files.length, shown = M.shownFiles(r, this.filter).length;
       const it = new vscode.TreeItem("Files", searching ? C.Expanded : C.Collapsed);
       it.id = idp + "f|" + r.path;
-      it.description = `${n}${r.files_truncated ? "+" : ""}`;
+      // narrowed by the search: say so, "1 of 4"
+      it.description = `${shown < n ? shown + " of " : ""}${n}${r.files_truncated ? "+" : ""}`;
+      if (shown < n) it.tooltip = "Only the files matching the search are listed. Clear the search to see all.";
       it.iconPath = new vscode.ThemeIcon("files");
       it.contextValue = "files";
       return it;

@@ -532,6 +532,37 @@ test("files: a Files node per request, folders, opening, reveal, copy, and what 
   assert.deepStrictEqual(items.filter(([c]) => c.kind === "file").map(([c]) => c.rel), ["out/brainlabs.csv"]);
   assert.ok(items.filter(([c]) => c.kind === "files" || c.kind === "dir").every(([, it]) => it.collapsibleState === 2));
   assert.ok(!items.some(([c]) => c.session?.id === "sb"));
+  const narrowed = items.find(([c]) => c.kind === "files")[1];
+  assert.strictEqual(narrowed.description, "1 of 3+");                          // says it is narrowed (#24)
+  assert.match(narrowed.tooltip, /Clear the search/);
+  // found by its name: every file shows, and the count is the plain one
+  p.setFilter("demo");
+  items = allItems(p);
+  assert.strictEqual(items.filter(([c]) => c.kind === "file").length, 3);
+  assert.strictEqual(items.find(([c]) => c.kind === "files")[1].description, "3+");
+});
+
+test("request folders with no session show, with their files (#23)", async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cws-idle-"));
+  const root = path.join(dir, "ws");
+  const now = Date.now() / 1000;
+  const C = { path: path.join(root, "2026/09/23/08-00-00_c"), name: "new request", ticket: "BTPA-9", task_type: "",
+              profile: "", started: now - 300, mtime: now - 100, files: ["draft.md"], files_truncated: false };
+  const D = { path: path.join(root, "2026/09/23/09-00-00_d"), name: "untouched", ticket: "", task_type: "",
+              profile: "", started: now - 200, mtime: now - 200, files: [], files_truncated: false };
+  for (const r of [C, D]) fs.mkdirSync(r.path, { recursive: true });
+  const { bin } = stubSessions(dir, { work_root: root, sessions: [], requests: [C, D] });
+  const fake = fakeVscode({ sessionsCommand: bin, openIn: "terminal" });
+  const ctx = context();
+  await load(fake).activate(ctx);
+  await settle(ctx);
+  const items = allItems(ctx.subscriptions[0].provider);
+  const reqs = items.filter(([c]) => c.kind === "request");
+  assert.deepStrictEqual(reqs.map(([, it]) => it.label), ["new request", "untouched"]);
+  assert.strictEqual(reqs[1][1].collapsibleState, 0);                           // nothing inside: no expander
+  assert.match(reqs[0][1].tooltip.value, /sessions: 0/);
+  assert.deepStrictEqual(items.filter(([c]) => c.kind === "file").map(([c]) => c.rel), ["draft.md"]);
+  assert.ok(!items.some(([c]) => c.kind === "session"));
 });
 
 test("copy for email: from the sidebar, a menu URI, the editor or a preview; saves first; reports errors", async t => {

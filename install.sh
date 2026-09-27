@@ -540,7 +540,7 @@ for d in "$CWS_WORK_ROOT" "$CWS_WORK_ROOT/_audit" "$CWS_WORK_ROOT/_config" "$CWS
   [[ -d "$d" ]] || { run mkdir -p "$d"; say "created $d"; }
 done
 local name
-for name in context review-rules; do
+for name in context review-rules guard-rules; do
   if [[ -f "$CWS_WORK_ROOT/_config/$name.md" ]]; then say "kept _config/$name.md"
   else run cp "$REPO/config/$name.example.md" "$CWS_WORK_ROOT/_config/$name.md"; say "created _config/$name.md — fill it in"; fi
 done
@@ -643,14 +643,19 @@ PY
                 say "$p: transcripts kept $keep days (was Claude Code's default, 30)"
               fi ;;
   esac
-  # Prompt-quality hooks: "doesn't exist → ask first" on commands and MCP tools, and
-  # "vague request → ask first" on a session's first prompts
+  # Prompt-quality hooks: "doesn't exist → ask first" on commands and MCP tools,
+  # "vague request → ask first" on a session's first prompts, and claude-guard (scope,
+  # pivots, loops; it does nothing until CWS_GUARD_MODE is shadow or enforce)
   hstate=$(BIN="$HOME/.local/bin" MODE=$(( DRY )) "$PY" - "$pdir/settings.json" <<'PY'
 import json, os, sys
 p, dry = sys.argv[1], os.environ["MODE"] == "1"
 notfound, vague = os.path.join(os.environ["BIN"], "claude-hook-notfound"), os.path.join(os.environ["BIN"], "claude-hook-vague")
-WANT = [("PostToolUse", "Bash|mcp__.*", notfound), ("PostToolUseFailure", "Bash|mcp__.*", notfound),
-        ("UserPromptSubmit", None, vague)]
+guard = os.path.join(os.environ["BIN"], "claude-guard")
+# (event, matcher, command, timeout): the guard's prompt check can wait on its judge
+WANT = [("PostToolUse", "Bash|mcp__.*", notfound, 10), ("PostToolUseFailure", "Bash|mcp__.*", notfound, 10),
+        ("UserPromptSubmit", None, vague, 10), ("UserPromptSubmit", None, guard + " prompt", 30),
+        ("PreToolUse", "Read|Glob|Grep|WebFetch|WebSearch|Bash|mcp__.*", guard + " tool", 5),
+        ("Stop", None, guard + " stop", 10)]
 try:
     d = json.load(open(p))
 except FileNotFoundError:
@@ -659,11 +664,11 @@ except ValueError:
     print("unparsed"); raise SystemExit
 hooks = d.setdefault("hooks", {})
 added = []
-for event, matcher, hook in WANT:
+for event, matcher, hook, timeout in WANT:
     groups = hooks.setdefault(event, [])
     if any(h.get("command") == hook for g in groups for h in g.get("hooks", [])):
         continue
-    group = {"hooks": [{"type": "command", "command": hook, "timeout": 10}]}
+    group = {"hooks": [{"type": "command", "command": hook, "timeout": timeout}]}
     if matcher:
         group["matcher"] = matcher
     groups.append(group)
@@ -679,7 +684,7 @@ PY
   case $hstate in
     ok)       say "$p: prompt-quality hooks in place" ;;
     unparsed) warn "$p: $pdir/settings.json isn't valid JSON — the prompt-quality hooks weren't added" ;;
-    added)    say "$p: ${${DRY:#0}:+[dry-run] }added the prompt-quality hooks (ask first when something doesn't exist or a request is vague)" ;;
+    added)    say "$p: ${${DRY:#0}:+[dry-run] }added the prompt-quality hooks (ask first when something doesn't exist or a request is vague; claude-guard)" ;;
   esac
 done
 if [[ ! -e "$HOME/.claude" ]]; then link ".claude-$CWS_SHARED_PROFILE" "$HOME/.claude"
@@ -717,7 +722,7 @@ done
 # --- 5. commands and skills -----------------------------------------------------------
 step "Commands"
 local b
-for b in claude-audit claude-search claude-sessions claude-vscode claude-md-email claude-delete claude-hook-notfound claude-hook-vague claude-retro; do link "$REPO/bin/$b" "$HOME/.local/bin/$b"; done
+for b in claude-audit claude-search claude-sessions claude-vscode claude-md-email claude-delete claude-hook-notfound claude-hook-vague claude-guard claude-retro; do link "$REPO/bin/$b" "$HOME/.local/bin/$b"; done
 
 # --- 5a. VS Code ------------------------------------------------------------------------
 # The Claude extension's env setting is machine-wide, so it can't follow a session's profile.

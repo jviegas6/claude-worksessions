@@ -60,7 +60,12 @@ def strings(value):
 
 def react(payload):
     """The hook's JSON answer for a payload, or None to stay quiet."""
-    text = "\n".join(strings([payload.get(k) for k in ("tool_response", "error", "tool_output")]))
+    response = payload.get("tool_response")
+    # a Bash command that succeeded: its stdout is content (git log, cat, sed of source code)
+    # that can say "does not exist" without anything missing; a real miss is on stderr
+    if payload.get("tool_name") == "Bash" and isinstance(response, dict) and "stderr" in response:
+        response = response.get("stderr")
+    text = "\n".join(strings([response] + [payload.get(k) for k in ("error", "tool_output")]))
     m = MISSING.search(text)
     if not m:
         return None

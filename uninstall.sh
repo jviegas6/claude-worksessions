@@ -5,7 +5,7 @@ emulate -L zsh
 REPO="${0:A:h}"
 say() { print -r -- "  $*"; }
 if [[ -x /usr/bin/python3 ]]; then PY=/usr/bin/python3; else PY="$(command -v python3)"; fi
-for b in claude-audit claude-search claude-sessions claude-vscode claude-md-email claude-delete claude-hook-notfound claude-hook-vague claude-retro; do
+for b in claude-audit claude-search claude-sessions claude-vscode claude-md-email claude-delete claude-hook-notfound claude-hook-vague claude-guard claude-retro; do
   f="$HOME/.local/bin/$b"
   [[ -L "$f" && "$(readlink "$f")" == "$REPO/bin/$b" ]] && rm "$f" && say "removed $f"
 done
@@ -51,6 +51,7 @@ for sfile in "$HOME"/.claude-*/settings.json(N); do
 import json, os, sys
 p = sys.argv[1]
 ours = {os.path.join(os.environ["BIN"], n) for n in ("claude-hook-notfound", "claude-hook-vague")}
+ours |= {os.path.join(os.environ["BIN"], "claude-guard") + " " + e for e in ("prompt", "tool", "stop")}
 try:
     d = json.load(open(p))
 except ValueError:

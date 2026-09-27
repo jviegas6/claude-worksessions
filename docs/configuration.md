@@ -33,6 +33,10 @@ just as well — re-run `install.sh` afterwards so the skills and `CLAUDE.md` ca
 | `CWS_PROFILE_<name>_DESC` | — | the line shown in `claude-new`'s profile menu |
 | `CWS_PROFILE_<name>_BASE_URL` | — | route that profile through an API gateway (see below) |
 | `CWS_TASK_TYPES` | permissions, job errors, … | seed list of task types; the ones you have used are suggested first |
+| `CWS_GUARD_MODE` | `off` | [`claude-guard`](commands.md#claude-guard): `off`, `shadow` (log only) or `enforce` (block) |
+| `CWS_GUARD_MODEL` | `haiku` | the model of the guard's judge |
+| `CWS_GUARD_JUDGE_TIMEOUT` | `15` | seconds to wait for the judge in `enforce` before letting the prompt through |
+| `CWS_GUARD_IGNORE_NAMES` | — | first parts of dotted names that are code, not data, in your commands (SDK objects), space-separated |
 | `CWS_INSTALL_YAZI` | `1` | install yazi, glow, pandoc and the Markdown extras |
 
 Changing a value: edit the file, open a new terminal. Re-run `install.sh` when you
@@ -91,6 +95,13 @@ and every session runs several folders down. Put the stable facts Claude would
 otherwise rediscover: tenants, subscription ids, workspaces, storage accounts, repo
 locations, naming quirks, hard-won rules of thumb, how you like answers. Ids and names
 only — no secrets. After editing it, run `./install.sh` to copy it into `CLAUDE.md`.
+
+## guard-rules.md — what the guard's judge counts as a pivot
+
+The system prompt of [`claude-guard`](commands.md#claude-guard)'s judge: what makes a prompt
+a *continuation*, an *extension* or a *pivot*, and how to state the literal scope and
+targets. `install.sh` creates it from `config/guard-rules.example.md`; tune it from what
+`claude-guard report` shows.
 
 ## review-rules.md — weekly-review house rules
 

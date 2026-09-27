@@ -29,6 +29,14 @@ def test_hook_speaks_only_on_clear_missing_resources(hook, tmp_path, monkeypatch
     assert say({"session_id": "other", "error": "PRINCIPAL_DOES_NOT_EXIST"}) is not None
 
 
+def test_hook_ignores_bash_stdout_content(hook, tmp_path, monkeypatch):
+    monkeypatch.setattr(hook.tempfile, "gettempdir", lambda: str(tmp_path))
+    say = lambda response: hook.react({"session_id": "b", "tool_name": "Bash", "tool_response": response})
+    assert say({"stdout": 'e9c03f7 a "does not exist" hook', "stderr": ""}) is None
+    assert say({"stdout": "", "stderr": "Error: Group sec_x does not exist"}) is not None
+    assert hook.react({"session_id": "b", "tool_name": "mcp__x__y", "tool_response": {"stdout": "PathNotFound"}})
+
+
 def test_hook_state_survives_odd_ids_and_bad_files(hook, tmp_path, monkeypatch):
     monkeypatch.setattr(hook.tempfile, "gettempdir", lambda: str(tmp_path))
     assert hook.state_path("../../etc/x").startswith(str(tmp_path)) and "/.." not in hook.state_path("../x")

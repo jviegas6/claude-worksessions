@@ -1,0 +1,556 @@
+#!/usr/bin/env python3
+"""claude-guard: keeps a session on the request it was given. Claude Code hooks, registered
+by install.sh in each profile's settings.json, plus a report for reviewing what they saw.
+
+    claude-guard prompt     UserPromptSubmit: is this prompt a continuation of the session's
+                            goal, a wider version of it, or a new objective (pivot)?
+                            Writes the request's contract -- literal scope and targets -- to
+                            .scope.json in the session folder
+    claude-guard tool       PreToolUse (reads, web, Bash, MCP): does the call stay on the
+                            contract's targets, and is it not the same call again and again?
+    claude-guard stop       Stop: after an investigation, does the answer end by proposing
+                            the next level instead of having done it?
+    claude-guard report [--days N] [PATH]
+                            what the guard saw, from every .quality.jsonl under the work root
+
+The rules are plain and deterministic; only the prompt check asks a judge -- a separate,
+clean `claude -p` on a small model that sees the goal, the current scope and the new prompt,
+never the session. Its criteria live in _config/guard-rules.md.
+
+CWS_GUARD_MODE decides what happens: `off`, `shadow` (decide and log to .quality.jsonl,
+never block; the judge runs in the background so prompts are not held up) or `enforce`
+(block pivots and out-of-scope calls, ask once for next-level proposals). Everything fails
+open: an error or a slow judge lets the action through and is logged.
+
+A prompt starting `force:` passes unchecked (logged as an override); one asking to go deeper
+("aprofunda", "go deeper", ...) lifts the target check until the next request.
+"""
+
+import contextlib
+import datetime as dt
+import hashlib
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+import time
+
+HOME = os.path.expanduser("~")
+MODES = ("off", "shadow", "enforce")
+JUDGE_ENV = "CWS_GUARD_JUDGE"       # set in the judge's own claude -p, so its hooks stay quiet
+
+FORCE = re.compile(r"^\s*force:\s*", re.I)
+WIDEN = re.compile(r"\b(aprofund\w*|mais a fundo|mais fundo|explor[ae]\w*|go deeper|dig (deeper|into)|deep[- ]dive|"
+                   r"in depth|explore|expand on)\b", re.I)
+CONFIRM = re.compile(r"^\s*(yes|yep|y|no|ok|okay|sure|go|go ahead|do it|done|merged|thanks|thank you|continue|"
+                     r"proceed|approved?|perfect|great|nice|cool|sim|não|nao|avança|segue|obrigad[oa]|faz|pode ser)\b",
+                     re.I)
+# What a tool call reaches: catalog.schema.table-like names, paths and URLs
+DOTTED = re.compile(r"(?<![\w./-])([A-Za-z_][\w-]*\.[A-Za-z_][\w-]*\.[A-Za-z_][\w-]*)(?![\w-]|\.\w)")
+# spaces only inside a folder name that another "/" follows: ~/Repos/BI Handover/x
+PATH = re.compile(r"(?<![\w.:/~-])(~?/[\w.@~+-]+(?:/(?:[\w.@~+-]+(?: [\w.@~+-]+)+(?=/)|[\w.@~+-]+))*)")
+# code, not data: os.path.join, self.client.get. Platform objects that show up in commands the
+# same way go in CWS_GUARD_IGNORE_NAMES (space-separated first parts)
+CODE_NAMES = {"os", "sys", "json", "re", "self", "dt", "datetime", "subprocess", "np", "pd", "math", "time",
+              "pathlib", "shutil", "io", "cls", "super", "string", "collections", "typing"}
+URL = re.compile(r"https?://[^\s'\"`<>)]+")
+FILE_EXT = {"py", "md", "json", "jsonl", "txt", "csv", "yml", "yaml", "sh", "zsh", "log", "html", "gz", "sql",
+            "toml", "ts", "js", "tsx", "ipynb", "env", "xml", "png", "pdf", "zip", "tar"}
+REACH_TOOLS = re.compile(r"^(Read|Glob|Grep|WebFetch|WebSearch|Bash|mcp__.*)$")
+LOOP_AFTER = 3                      # the same call this many times in one request is a loop
+PROPOSALS = re.compile(r"(next (step|level)|could also|if you want|want me to|shall i|should i|would you like|"
+                       r"deeper|próxim|posso |queres|quer que|se quiseres|aprofund|pr[oó]ximo passo)", re.I)
+
+DEFAULT_RULES = """\
+You judge whether a new user prompt continues a work session or starts a new objective.
+
+- continuation: steps, clarifications, fixes, confirmations or follow-ups that are needed to
+  reach the session goal / done-when, including narrowing it.
+- extension: the same goal, applied wider (another table, schema, environment, one more
+  object of the same kind). The deliverable grows; the objective does not change.
+- pivot: an outcome that is not needed to reach the goal, even when the topic is related.
+  Example: goal "fix the access policy on table X", prompt "survey every access-control
+  mechanism the platform offers" is a pivot: a broader survey, a different deliverable.
+
+literal: one sentence with exactly what the prompt asks for, no more.
+targets: the concrete things the request is about, as written (table, file, folder, job,
+repo, service, dataset, URL). Empty when none are named.
+"""
+SCHEMA = {"type": "object", "required": ["verdict", "literal", "targets", "reason"], "properties": {
+    "verdict": {"type": "string", "enum": ["continuation", "extension", "pivot"]},
+    "literal": {"type": "string"}, "targets": {"type": "array", "items": {"type": "string"}},
+    "reason": {"type": "string"}}}
+
+
+def load_config():
+    """KEY="value" lines from $CWS_CONFIG or ~/.config/claude-worksessions/config.env;
+    environment variables win."""
+    path = os.environ.get("CWS_CONFIG") or os.path.join(HOME, ".config", "claude-worksessions", "config.env")
+    conf = {}
+    try:
+        with open(path) as fh:
+            for line in fh:
+                m = re.match(r"\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)$", line)
+                if not m:
+                    continue
+                val = m.group(2).strip()
+                if val[:1] in ("'", '"'):
+                    val = val[1:].split(val[0])[0]
+                else:
+                    val = val.split(" #")[0].strip()
+                conf[m.group(1)] = val.replace("${HOME}", HOME).replace("$HOME", HOME)
+    except OSError:
+        pass
+    conf.update({k: v for k, v in os.environ.items() if k.startswith("CWS_")})
+    return conf
+
+
+def settings(conf):
+    mode = (conf.get("CWS_GUARD_MODE") or "off").strip().lower()
+    try:
+        timeout = float(conf.get("CWS_GUARD_JUDGE_TIMEOUT") or 15)
+    except ValueError:
+        timeout = 15.0
+    root = conf.get("CWS_WORK_ROOT") or os.environ.get("CLAUDE_WORK_ROOT") or os.path.join(HOME, "work_sessions")
+    ignore = CODE_NAMES | set((conf.get("CWS_GUARD_IGNORE_NAMES") or "").lower().split())
+    return {"mode": mode if mode in MODES else "off", "model": conf.get("CWS_GUARD_MODEL") or "haiku", "ignore": ignore,
+            "timeout": timeout, "root": os.path.realpath(root)}
+
+
+def now():
+    return dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+# --- the session folder: .session.json, .scope.json, .quality.jsonl ---------------------
+def session_dir(cwd, root):
+    """The request folder cwd is in (the nearest one with a .session.json, inside the work
+    root), or None -- sessions outside a request folder are not guarded."""
+    d = os.path.realpath(cwd or ".")
+    while d == root or d.startswith(root + os.sep):
+        if os.path.isfile(os.path.join(d, ".session.json")):
+            return d
+        if d == root:
+            break
+        d = os.path.dirname(d)
+    return None
+
+
+def read_json(path, default):
+    try:
+        with open(path) as fh:
+            v = json.load(fh)
+        return v if isinstance(v, type(default)) else default
+    except (OSError, ValueError):
+        return default
+
+
+def session_goal(sdir):
+    meta = read_json(os.path.join(sdir, ".session.json"), {})
+    return (meta.get("goal") or meta.get("name") or "").strip(), (meta.get("done_when") or "").strip()
+
+
+@contextlib.contextmanager
+def scope(sdir, sid):
+    """This session's state in .scope.json, locked for the read-modify-write; saved on exit.
+    Several sessions can share a folder, so the file holds one entry per session id."""
+    import fcntl
+    path = os.path.join(sdir, ".scope.json")
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
+    with os.fdopen(fd, "r+") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            data = json.loads(fh.read() or "{}")
+        except ValueError:
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        sessions = data.setdefault("sessions", {})
+        state = sessions.setdefault(sid or "none", {})
+        yield state
+        fh.seek(0)
+        fh.truncate()
+        fh.write(json.dumps(data, indent=1, ensure_ascii=False) + "\n")
+
+
+def log(sdir, record):
+    try:
+        with open(os.path.join(sdir, ".quality.jsonl"), "a") as fh:
+            fh.write(json.dumps(dict({"ts": now()}, **record), ensure_ascii=False) + "\n")
+    except OSError as e:
+        print("claude-guard: can't write .quality.jsonl: {}".format(e), file=sys.stderr)
+
+
+# --- what a prompt or tool call names ---------------------------------------------------
+def strings(value):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for v in value.values():
+            yield from strings(v)
+    elif isinstance(value, (list, tuple)):
+        for v in value:
+            yield from strings(v)
+
+
+def anchors(text, ignore=CODE_NAMES):
+    """The concrete things a text names: dotted names, paths and URLs, lowercased."""
+    out = set()
+    for u in URL.findall(text):
+        out.add(u.rstrip(".,;").lower())
+    text = URL.sub(" ", text)
+    for m in DOTTED.findall(text):
+        if m.rsplit(".", 1)[-1].lower() not in FILE_EXT and m.split(".", 1)[0].lower() not in ignore:
+            out.add(m.lower())
+    for p in PATH.findall(text):
+        if len(p) > 2:
+            out.add(os.path.expanduser(p).rstrip("/.,;:").lower())
+    return out
+
+
+def prompt_anchors(text):
+    """What a prompt names, more loosely than a tool call: also two-part names
+    (db.schema) and snake_case words, since targets are better too many than too few."""
+    out = anchors(text)
+    rest = URL.sub(" ", text)
+    out |= {m.lower() for m in re.findall(r"(?<![\w./-])[A-Za-z_]\w*\.[A-Za-z_]\w*(?![\w.-])", rest)
+            if m.rsplit(".", 1)[-1].lower() not in FILE_EXT}
+    parts = {p for a in out for p in re.split(r"[./]", a)}  # a bare first part (db) would cover everything in it
+    out |= {m.lower() for m in re.findall(r"\b[A-Za-z]\w*_\w+\b", rest) if len(m) >= 5 and m.lower() not in parts}
+    return out
+
+
+def matches(ident, targets):
+    """Loose on purpose: a call on db.schema.table is on target 'schema', a file under a
+    target folder is on it, and a target named inside a URL counts."""
+    tail = ident.rstrip("/").rsplit("/", 1)[-1].rsplit(".", 1)[-1]
+    for t in targets:
+        if len(t) >= 3 and (t in ident or ident in t or (len(tail) >= 3 and tail == t.rsplit(".", 1)[-1])):
+            return True
+    return False
+
+
+def safe_roots(sdir, payload):
+    roots = [sdir, payload.get("cwd"), payload.get("scratchpad_dir"), tempfile.gettempdir(), "/tmp", "/private/tmp",
+             "/dev", os.environ.get("CLAUDE_CONFIG_DIR"), os.path.join(HOME, ".claude")]
+    roots += [os.path.join(HOME, n) for n in os.listdir(HOME) if n.startswith(".claude-")] if os.path.isdir(HOME) else []
+    return [os.path.realpath(r).lower() for r in roots if r]
+
+
+def safe(ident, roots):
+    """A path in the session folder, the scratchpad, a temp dir or Claude's own config."""
+    if not ident.startswith("/"):
+        return False
+    forms = {ident, os.path.realpath(ident).lower()}
+    return any(f == r or f.startswith(r + "/") for f in forms for r in roots)
+
+
+def reached(tool, tool_input, ignore=CODE_NAMES):
+    """What a tool call reaches, as identifiers to check against the targets."""
+    if tool in ("Read", "Glob", "Grep"):
+        p = tool_input.get("file_path") or tool_input.get("path") or ""
+        return {os.path.expanduser(p).rstrip("/").lower()} if p else set()
+    if tool == "WebFetch":
+        return {(tool_input.get("url") or "").lower()} - {""}
+    if tool == "WebSearch":
+        q = (tool_input.get("query") or "").strip().lower()
+        return {"search: " + q} if q else set()
+    if tool == "Bash":
+        return anchors(tool_input.get("command") or "", ignore)
+    return anchors("\n".join(strings(tool_input)), ignore)
+
+
+def trivial(prompt):
+    t = (prompt or "").strip()
+    if not t or t.startswith(("/", "<", "[")):
+        return True
+    if WIDEN.search(t) or prompt_anchors(t):
+        return False
+    return bool(CONFIRM.match(t) and len(t.split()) <= 6) or (len(t.split()) < 3 and "?" not in t)
+
+
+# --- the judge ----------------------------------------------------------------------------
+def rules_text(root):
+    try:
+        with open(os.path.join(root, "_config", "guard-rules.md")) as fh:
+            text = fh.read().strip()
+        return text or DEFAULT_RULES
+    except OSError:
+        return DEFAULT_RULES
+
+
+def judge(job, cfg):
+    """Ask the judge about one prompt. Returns (answer dict or None, error or None, ms)."""
+    first = not job.get("literal")
+    msg = "GOAL: {}\nDONE_WHEN: {}\nCURRENT SCOPE: {}\nNEW PROMPT: {}\n{}".format(
+        job.get("goal") or "(none)", job.get("done_when") or "(not stated)",
+        job.get("literal") or "(none -- this is the first request)", job["prompt"][:4000],
+        "This is the session's first request: it defines the scope, so the verdict is continuation." if first else "")
+    cmd = ["claude", "-p", "--setting-sources", "", "--strict-mcp-config", "--model", cfg["model"], "--tools", "",
+           "--no-session-persistence", "--system-prompt", rules_text(cfg["root"]) + "\nAnswer only via the JSON schema.",
+           "--output-format", "json", "--json-schema", json.dumps(SCHEMA), msg]
+    t = time.time()
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=cfg["timeout"], cwd=tempfile.gettempdir(),
+                           env=dict(os.environ, **{JUDGE_ENV: "1"}))
+        out = json.loads(r.stdout or "{}")
+        ans = out.get("structured_output")
+        if out.get("is_error") or not isinstance(ans, dict) or ans.get("verdict") not in SCHEMA["properties"]["verdict"]["enum"]:
+            return None, (out.get("result") or r.stderr or "no answer").strip()[:200], int((time.time() - t) * 1000)
+        if first:
+            ans["verdict"] = "continuation"
+        return ans, None, int((time.time() - t) * 1000)
+    except subprocess.TimeoutExpired:
+        return None, "timeout after {:g}s".format(cfg["timeout"]), int((time.time() - t) * 1000)
+    except (OSError, ValueError) as e:
+        return None, str(e)[:200], int((time.time() - t) * 1000)
+
+
+def grow(st, names, widen):
+    """Add a request's names to the session's targets, and open or close the target check."""
+    st["targets"] = sorted(set(st.get("targets") or []) | {n.strip().lower() for n in names if n.strip()})
+    st["open"] = widen
+
+
+def apply_verdict(sdir, job, cfg, ans, err, ms):
+    """Record the judge's answer: the scope grows with its targets (unless a pivot is being
+    blocked), and the decision is logged. Returns the log record. In enforce the prompt's own
+    names join the targets here too, once it is known not to be a blocked pivot."""
+    enforce = cfg["mode"] == "enforce"
+    rec = {"event": "prompt", "session_id": job["sid"], "prompt_no": job["no"], "initiated_by": "user",
+           "mode": cfg["mode"], "judge_ms": ms, "prompt": job["prompt"][:200]}
+    verdict = None if err else ans["verdict"]
+    blocked = verdict == "pivot" and enforce
+    with scope(sdir, job["sid"]) as st:
+        current = st.get("prompt_no") == job["no"]                     # not overtaken by a later prompt
+        if enforce and current and not blocked:
+            grow(st, job.get("names") or [], job.get("widen", False))
+        if not err and current and not blocked:
+            st["literal"] = ans.get("literal") or st.get("literal") or job["prompt"][:300]
+            grow(st, ans.get("targets") or [], st.get("open", False))
+    if err:
+        rec.update(decision="allow", type="ok", reason="judge failed, let through: " + err, judge_error=True)
+        log(sdir, rec)
+        return rec
+    rec.update(decision="block" if verdict == "pivot" else "allow", type="pivot" if verdict == "pivot" else "ok",
+               verdict=verdict, reason=ans.get("reason", "")[:400], literal=ans.get("literal", "")[:300],
+               targets=ans.get("targets") or [])
+    log(sdir, rec)
+    return rec
+
+
+# --- the hooks ------------------------------------------------------------------------------
+def on_prompt(payload, cfg):
+    sdir = session_dir(payload.get("cwd"), cfg["root"])
+    if not sdir:
+        return None
+    sid, prompt = payload.get("session_id") or "none", payload.get("prompt") or ""
+    goal, done_when = session_goal(sdir)
+    base = {"event": "prompt", "session_id": sid, "initiated_by": "user", "mode": cfg["mode"], "prompt": prompt[:200]}
+    with scope(sdir, sid) as st:
+        no = st["prompt_no"] = int(st.get("prompt_no") or 0) + 1
+        base["prompt_no"] = no
+        literal = st.get("literal") or ""
+        if FORCE.match(prompt):
+            st.update(open=True, turn=new_turn(), literal=FORCE.sub("", prompt)[:300])
+            log(sdir, dict(base, decision="allow", type="ok", override=True, reason="force: prefix"))
+            return None
+        if trivial(prompt):                        # a confirmation or a command: same request goes on
+            st["turn"] = new_turn()
+            return None
+        st["turn"] = new_turn()
+        widen, names = bool(WIDEN.search(prompt)), sorted(prompt_anchors(prompt))
+        if cfg["mode"] == "shadow":               # nothing is blocked: the new names count at once
+            grow(st, names, widen)
+        if widen:
+            log(sdir, dict(base, decision="allow", type="ok", widened=True, reason="asked to go deeper"))
+    job = {"sid": sid, "no": no, "prompt": prompt, "goal": goal, "done_when": done_when, "literal": literal,
+           "names": names, "widen": widen}
+    if cfg["mode"] == "shadow":                    # decide in the background; never hold the prompt up
+        try:
+            subprocess.Popen([sys.executable, os.path.abspath(__file__), "judge", sdir, json.dumps(job)],
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             start_new_session=True)
+        except OSError as e:
+            log(sdir, dict(base, decision="allow", type="ok", reason="judge not started: " + str(e)[:200],
+                           judge_error=True))
+        return None
+    rec = apply_verdict(sdir, job, cfg, *judge(job, cfg))
+    if rec["decision"] == "block":
+        return {"decision": "block", "reason": (
+            "claude-guard: this looks like a new objective, not part of this session's goal ({}).\n"
+            "Session goal: {}\nStart it in its own session (claude-new), re-anchor this one with "
+            "claude-goal \"...\" if the goal really changed, or resend it starting with force: "
+            "to go ahead here.").format(rec["reason"], goal)}
+    if rec.get("literal"):
+        return {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": (
+            "Scope of this request (claude-guard): {} Do exactly this. Where going further would help, "
+            "end by proposing the next level instead of doing it.").format(rec["literal"])}}
+    return None
+
+
+def new_turn():
+    return {"reach": 0, "outside": [], "calls": {}}
+
+
+def on_tool(payload, cfg):
+    tool = payload.get("tool_name") or ""
+    if not REACH_TOOLS.match(tool):
+        return None
+    sdir = session_dir(payload.get("cwd"), cfg["root"])
+    if not sdir:
+        return None
+    sid, tool_input = payload.get("session_id") or "none", payload.get("tool_input") or {}
+    key = hashlib.sha1((tool + json.dumps(tool_input, sort_keys=True)).encode()).hexdigest()[:12]
+    roots = safe_roots(sdir, payload)
+    with scope(sdir, sid) as st:
+        turn = st.setdefault("turn", new_turn())
+        turn["reach"] = turn.get("reach", 0) + 1
+        calls = turn.setdefault("calls", {})
+        calls[key] = calls.get(key, 0) + 1
+        repeats = calls[key]
+        targets = st.get("targets") or []
+        idents = {i for i in reached(tool, tool_input, cfg["ignore"]) if not safe(i, roots)}
+        off = sorted(i for i in idents if not matches(i, targets)) if targets and not st.get("open") else []
+        new_off = [i for i in off if i not in turn.setdefault("outside", [])]
+        turn["outside"] += new_off
+        literal = st.get("literal") or ""
+    base = {"event": "tool", "session_id": sid, "prompt_no": st.get("prompt_no"), "initiated_by": "agent",
+            "mode": cfg["mode"], "tool": tool}
+    if repeats >= LOOP_AFTER:                    # denied every time from then on, logged once
+        if repeats == LOOP_AFTER:
+            log(sdir, dict(base, decision="deny", type="loop", reason="same call {} times in one request".format(repeats)))
+        return deny(cfg, "claude-guard: this is the same {} call {} times in this request. Change approach or ask "
+                         "the user instead of repeating it.".format(tool, repeats))
+    if off:                                      # denied every time, logged once per identifier
+        if new_off:
+            log(sdir, dict(base, decision="deny", type="depth", reason="outside the request's targets",
+                           reached=new_off[:5], targets=targets[:20]))
+        return deny(cfg, "claude-guard: out of scope. This request is: {} -- and {} is not among its targets. Don't "
+                         "open it now; list it as a possible next step.".format(literal or "(see the prompt)",
+                                                                                 ", ".join(off[:3])))
+    return None
+
+
+def deny(cfg, reason):
+    if cfg["mode"] != "enforce":
+        return None
+    return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                                   "permissionDecisionReason": reason}}
+
+
+def on_stop(payload, cfg):
+    sdir = session_dir(payload.get("cwd"), cfg["root"])
+    if not sdir:
+        return None
+    sid = payload.get("session_id") or "none"
+    with scope(sdir, sid) as st:
+        turn = st.get("turn") or new_turn()
+        no = st.get("prompt_no")
+        if not payload.get("stop_hook_active"):
+            st["turn"] = dict(turn, stopped=True)
+    if turn.get("stopped") and not payload.get("stop_hook_active"):
+        return None                                # nothing happened since the last stop
+    text = payload.get("last_assistant_message") or ""
+    investigated = turn.get("reach", 0) >= 2
+    missing = investigated and not payload.get("stop_hook_active") and not (
+        PROPOSALS.search(text[-800:]) or text.rstrip().endswith("?"))
+    typ = "depth" if (turn.get("outside") or missing) else "ok"
+    reasons = (["went outside the targets: " + ", ".join(turn["outside"][:5])] if turn.get("outside") else []) + \
+              (["no next-level proposals at the end"] if missing else [])
+    log(sdir, {"event": "stop", "session_id": sid, "prompt_no": no, "initiated_by": "agent", "mode": cfg["mode"],
+               "decision": "block" if missing else "allow", "type": typ, "reason": "; ".join(reasons) or "ok",
+               "reach": turn.get("reach", 0), "outside": len(turn.get("outside") or []),
+               "retry": bool(payload.get("stop_hook_active"))})
+    if missing and cfg["mode"] == "enforce":
+        return {"decision": "block", "reason": (
+            "claude-guard: before finishing, add a short closing list of what could be examined next "
+            "(the next level of depth) and why -- as proposals, without doing it.")}
+    return None
+
+
+# --- the report -----------------------------------------------------------------------------
+def report(args, cfg, out):
+    days, path = 14, cfg["root"]
+    it = iter(args)
+    for a in it:
+        if a == "--days":
+            days = int(next(it, "14"))
+        else:
+            path = os.path.realpath(a)
+    since = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    recs = []
+    for d, _, files in os.walk(path):
+        if ".quality.jsonl" in files:
+            with open(os.path.join(d, ".quality.jsonl")) as fh:
+                for line in fh:
+                    try:
+                        r = json.loads(line)
+                    except ValueError:
+                        continue
+                    if isinstance(r, dict) and r.get("ts", "") >= since:
+                        recs.append(dict(r, folder=os.path.relpath(d, cfg["root"])))
+    out.write("claude-guard: last {} days, {} records, mode now {}\n".format(days, len(recs), cfg["mode"]))
+    if not recs:
+        return 0
+    counts = {}
+    for r in recs:
+        k = (r.get("event"), r.get("type"), r.get("decision"))
+        counts[k] = counts.get(k, 0) + 1
+    out.write("\n  {:<8} {:<7} {:<8} {:>5}\n".format("event", "type", "decision", "n"))
+    for k in sorted(counts, key=lambda k: tuple(x or "" for x in k)):
+        out.write("  {:<8} {:<7} {:<8} {:>5}\n".format(*(x or "-" for x in k), counts[k]))
+    ms = sorted(r["judge_ms"] for r in recs if isinstance(r.get("judge_ms"), int) and not r.get("judge_error"))
+    errs = sum(1 for r in recs if r.get("judge_error"))
+    if ms or errs:
+        out.write("\n  judge: {} calls, median {:.1f}s, p90 {:.1f}s, {} failed\n".format(
+            len(ms), ms[len(ms) // 2] / 1000 if ms else 0, ms[int(len(ms) * 0.9)] / 1000 if ms else 0, errs))
+    over = sum(1 for r in recs if r.get("override"))
+    if over:
+        out.write("  overrides (force:): {}\n".format(over))
+    for typ, title in (("pivot", "Pivots"), ("depth", "Out of scope"), ("loop", "Loops")):
+        rows = [r for r in recs if r.get("type") == typ][-8:]
+        if rows:
+            out.write("\n  {} (latest {}):\n".format(title, len(rows)))
+            for r in rows:
+                what = r.get("prompt") or ", ".join(r.get("reached") or []) or r.get("tool") or "(end of answer)"
+                out.write("    {}  {}\n      {}\n      -> {}\n".format(r["ts"][:16], r["folder"], what[:110],
+                                                                    (r.get("reason") or "")[:140]))
+    return 0
+
+
+# --- entry point ------------------------------------------------------------------------------
+HOOKS = {"prompt": on_prompt, "tool": on_tool, "stop": on_stop}
+
+
+def main(argv=None, stdin=None, stdout=None):
+    argv = sys.argv[1:] if argv is None else argv
+    stdin, stdout = stdin or sys.stdin, stdout or sys.stdout
+    cmd = argv[0] if argv else ""
+    cfg = settings(load_config())
+    if cmd == "report":
+        return report(argv[1:], cfg, stdout)
+    if cmd == "judge":                             # the background half of a shadow prompt check
+        job = json.loads(argv[2])
+        apply_verdict(argv[1], job, cfg, *judge(job, cfg))
+        return 0
+    if cmd not in HOOKS:
+        print("usage: claude-guard prompt|tool|stop  (hooks, JSON on stdin)\n"
+              "       claude-guard report [--days N] [PATH]", file=sys.stderr)
+        return 0 if cmd in ("-h", "--help") else 1
+    if os.environ.get(JUDGE_ENV) or cfg["mode"] == "off":
+        return 0
+    try:
+        payload = json.load(stdin)
+        answer = HOOKS[cmd](payload, cfg) if isinstance(payload, dict) else None
+    except Exception as e:                         # fail open, always
+        print("claude-guard {}: {}: {}".format(cmd, type(e).__name__, e), file=sys.stderr)
+        return 0
+    if answer:
+        stdout.write(json.dumps(answer))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

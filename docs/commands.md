@@ -187,9 +187,11 @@ by side.
 | arrows icon (top) | sort by **last activity** (a resumed session moves up), **started** (newest first; resuming moves nothing) or **name**; remembered. By day always lists days newest first |
 | a session | open it in a tab (`claude-resume -p <profile> --resume <id>`), or go to its tab if open |
 | **+** on a request | a new session in that request's folder, with its profile |
+| **Active** (top) | the sessions a Claude process has open right now — in a tab here, a terminal or the Claude Code panel; they also read *active* with a pulse icon wherever they're listed |
 | pin on a session or request | **Pin** it: a **Pinned** group at the top lists it whatever the grouping and sort (also right-click → Pin / Unpin). Pins live in `<work root>/_config/pinned.json`, so they follow the work root to other machines |
 | folder on a request | reveal it in the Explorer (right-click: in Finder, a new window, set task type) |
-| **Files** under a request | the request folder's files as a tree — click to open (Markdown in the preview), right-click to reveal in Finder or copy the path |
+| **Files** under a request | the request folder's files as a tree, with their count and size (**Files 4 · 21 KB**; each file's size on hover) — click to open (Markdown in the preview), right-click to reveal in Finder or copy the path |
+| **Guard:** in the status bar | `claude-guard`'s mode; click to change it (`claude-guard mode`) |
 
 Every request folder is listed, including one with no session yet (just created, closed
 before the first prompt, or only written to from another session): it shows with its
@@ -216,6 +218,9 @@ panel), the terminal commands and your skills:
 | Go to request… | `ws`: open a request in a new window, reveal it, or start a session in it |
 | Run skill… | any skill in `~/.claude-*/skills`: a new request (`claude-new --prompt /<skill>`), so it gets its ticket, type and folder |
 | Resume session by id… | `claude-resume --resume ID` in a tab |
+| Run retrospective… | `claude-retro` for last week, the last 7 or N days, or the week of a day, in a tab |
+| Open latest retrospective report | the newest `_audit/quality/*_retro.md` in the Markdown preview |
+| Guard mode… | `claude-guard mode`: off, shadow, warn or enforce (also the status-bar item) |
 | Focus the search box · Clear search | |
 
 Sessions are named by Claude's auto-title, else their first prompt; hovering shows the
@@ -338,7 +343,7 @@ objective. Three hooks, registered by `install.sh`, that do nothing until
 
 | hook | checks | enforce |
 |---|---|---|
-| `claude-guard prompt` (`UserPromptSubmit`) | a judge — a clean `claude -p` on `CWS_GUARD_MODEL` that sees only the goal, done-when, the current scope and the new prompt — calls it *continuation*, *extension* or *pivot*, and gives its literal scope and targets. Paths, URLs and dotted names in the prompt are targets too | a pivot is blocked with the options: a new session, `claude-goal`, or resend with `force:`. Otherwise Claude is told the literal scope |
+| `claude-guard prompt` (`UserPromptSubmit`) | a judge — a clean `claude -p` on `CWS_GUARD_MODEL` that sees only the goal, done-when, the request folder's file names, the session's last few prompts that stayed on the goal (as typed) and the new prompt — calls it *continuation*, *extension* or *pivot*, and gives its literal scope and targets. Paths, URLs and dotted names in the prompt are targets too | a pivot is blocked with the options: a new session, `claude-goal`, or resend with `force:`. Otherwise Claude is told the literal scope |
 | `claude-guard tool` (`PreToolUse`: reads, web, Bash, MCP) | does the call reach something outside the targets (the session folder, scratchpad and temp dirs are always fine)? The same call a third time in one request is a loop | the call is denied, and Claude is told to list it as a next step |
 | `claude-guard stop` (`Stop`) | after an investigation (three or more reads, or a read outside the request), unless the prompt asked for brevity, does the answer end by proposing the next level? | Claude is asked once to add them |
 
@@ -362,6 +367,7 @@ claude-guard report --days 7 PATH   a shorter window, or one folder
 claude-guard review                 the judge's pivots, extensions and failures you haven't reviewed
 claude-guard review --all           every decision, with your marks
 claude-guard review ID right|wrong [NOTE]   mark one (an id prefix is enough)
+claude-guard mode [off|shadow|warn|enforce] show the mode, or set CWS_GUARD_MODE in config.env
 ```
 
 Every judge decision — goal, done-when, scope before, prompt, verdict, reason, model, profile,

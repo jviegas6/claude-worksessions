@@ -21,8 +21,11 @@ The guard is installed with claude-worksessions (`./install.sh`) and starts **of
 mode in `<work root>/_config/config.env`:
 
 ```sh
-CWS_GUARD_MODE="shadow"     # off | shadow | enforce
+CWS_GUARD_MODE="shadow"     # off | shadow | warn | enforce
 ```
+
+or run `claude-guard mode warn` (`claude-guard mode` alone shows it). In VS Code the status
+bar shows it — **Guard: warn** — and a click changes it.
 
 | Mode | What you notice |
 |---|---|

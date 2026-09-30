@@ -163,7 +163,8 @@ def test_enforce_blocks_a_pivot_and_keeps_the_scope(guard, sdir, monkeypatch):
                                     "reason": "broader survey"}, calls=calls)
     out = prompt(guard, sdir, "what permission methods exist in the platform overall?", cfg(guard, "enforce"))
     assert out["decision"] == "block" and "broader survey" in out["reason"] and "force:" in out["reason"]
-    assert "CURRENT SCOPE: Fix the filter." in calls[-1][0][-1]
+    msg = calls[-1][0][-1]                          # the prompt as typed, not the judge's paraphrase
+    assert "RECENT PROMPTS (oldest first):\n- fix the row filter function\n" in msg and "Fix the filter." not in msg
     st = state(sdir)
     assert st["literal"] == "Fix the filter." and st["targets"] == ["core"]           # the pivot added nothing
     fake_judge(monkeypatch, guard, {"verdict": "pivot", "literal": "x", "targets": [], "reason": "r"})
@@ -403,7 +404,7 @@ def test_journal_and_review(guard, sdir, home, monkeypatch):
     prompt(guard, sdir, "then document the result", c)
     j = [json.loads(l) for l in (root / "_audit" / "guard" / "judge.jsonl").read_text().splitlines()]
     assert [d.get("verdict") for d in j] == ["continuation", "pivot", None] and j[2]["error"] == "no claude"
-    assert j[1]["goal"] == "fix the row filter on core" and j[1]["scope_before"] == "Fix it." and j[1]["enforced"]
+    assert j[1]["goal"] == "fix the row filter on core" and j[1]["scope_before"] == "fix the row filter function" and j[1]["enforced"]
     assert j[1]["folder"].endswith("10-00-00_access-policy") and j[1]["model"] == "haiku"
     assert records(sdir)[1]["judge_id"] == j[1]["id"]
     run = lambda *a: (lambda o: (guard.main(["review", *a], stdout=o), o.getvalue())[1])(io.StringIO())
@@ -644,3 +645,132 @@ def test_warn_waits_for_the_verdict_at_the_end_of_the_answer(guard, sdir, monkey
         st.update(prompt_no=4, judging={"no": 4, "at": clock["t"]}, turn=guard.new_turn())
     stop(guard, sdir, cfg(guard, "shadow"), "ok")
     assert clock["t"] == start
+
+
+# --- the judge's context: goal, folder files, on-goal prompts as typed (#35) -----------------
+def test_judge_sees_folder_files_and_only_on_goal_prompts(guard, sdir, monkeypatch):
+    (sdir / "notes.md").write_text("x")
+    (sdir / ".hidden").write_text("x")
+    (sdir / "out").mkdir()
+    (sdir / "out" / "result.csv").write_text("x")
+    (sdir / "out" / ".tmp").write_text("x")
+    assert guard.folder_names(str(sdir)) == ["notes.md", "out/result.csv"]
+    assert guard.folder_names(str(sdir / "missing")) == []
+    calls = []
+    c = cfg(guard, "enforce")
+    answer = lambda v: fake_judge(monkeypatch, guard, {"verdict": v, "literal": "paraphrase", "targets": [],
+                                                       "reason": "r"}, calls=calls)
+    answer("continuation")
+    prompt(guard, sdir, "fix the row filter function", c)
+    answer("pivot")
+    prompt(guard, sdir, "review the platform plan milestones M4 and M6", c)
+    answer("continuation")
+    prompt(guard, sdir, "check the filter on the test user", c)
+    msg = calls[-1][0][-1]
+    assert "FILES IN THE REQUEST FOLDER: notes.md, out/result.csv" in msg
+    assert "- fix the row filter function\nNEW PROMPT: check the filter" in msg and "M4" not in msg
+    assert state(sdir)["recent"] == ["fix the row filter function", "check the filter on the test user"]
+    for i in range(4):
+        prompt(guard, sdir, "check the filter number {}".format(i), c)
+    assert len(state(sdir)["recent"]) == guard.RECENT
+    assert "new concrete things" in guard.DEFAULT_RULES and "DONE_WHEN is not stated" in guard.DEFAULT_RULES
+
+
+# --- a pivot is said again with the answer (#36) ----------------------------------------------
+def test_warn_pivot_is_repeated_at_the_end_of_the_answer(guard, sdir, monkeypatch):
+    monkeypatch.setattr(guard.subprocess, "Popen", lambda *a, **k: None)
+    w = cfg(guard, "warn")
+    prompt(guard, sdir, "fix the row filter on sales_db.core.orders", w)
+    with guard.scope(str(sdir), "s1") as st:
+        st.pop("judging")
+    prompt(guard, sdir, "now review the platform plan", w)
+    with guard.scope(str(sdir), "s1") as st:
+        st.pop("judging")
+    job = {"sid": "s1", "no": 2, "prompt": "now review the platform plan", "goal": "fix it"}
+    guard.apply_verdict(str(sdir), job, w, {"verdict": "pivot", "literal": "", "targets": [], "reason": "a plan"}, None, 5)
+    first = tool(guard, sdir, "Read", {"file_path": str(sdir / "a")}, w)["systemMessage"]
+    assert "looks like a new objective" in first
+    for f in "bcd":
+        tool(guard, sdir, "Read", {"file_path": str(sdir / f)}, w)
+    out = stop(guard, sdir, w, "The plan has six milestones. Want me to go deeper?")
+    assert out == {"systemMessage": first}                        # once more, next to the answer
+    assert stop(guard, sdir, w, "x") is None and "stop_notice" not in state(sdir)
+    # not yet shown at a tool call: shown once at the end, not twice
+    prompt(guard, sdir, "and the other plan", w)
+    with guard.scope(str(sdir), "s1") as st:
+        st.pop("judging")
+    guard.apply_verdict(str(sdir), dict(job, no=3, prompt="and the other plan"), w,
+                        {"verdict": "pivot", "literal": "", "targets": [], "reason": "a plan"}, None, 5)
+    msg = stop(guard, sdir, w, "Done. Want me to go deeper?")["systemMessage"]
+    assert msg.count("looks like a new objective") == 1
+    # a new prompt clears a pivot that was never stopped on
+    guard.apply_verdict(str(sdir), dict(job, no=3), w, {"verdict": "pivot", "literal": "", "targets": [],
+                                                        "reason": "r"}, None, 5)
+    prompt(guard, sdir, "yes", w)
+    assert "stop_notice" not in state(sdir)
+
+
+# --- work in another request's folder: one notice per folder (#37) ----------------------------
+def test_reads_and_writes_in_another_request_are_named_once(guard, sdir, home, monkeypatch):
+    other = home / "work_sessions" / "2026" / "09" / "29" / "23-00-00_platform-plan"
+    other.mkdir(parents=True)
+    (other / ".session.json").write_text("{}")
+    w = cfg(guard, "warn")
+    with guard.scope(str(sdir), "s1") as st:
+        st.update(prompt_no=1, turn=guard.new_turn())
+    out = tool(guard, sdir, "Read", {"file_path": str(other / "plan.md")}, w)["systemMessage"]
+    assert "working in another request, 2026/09/29/23-00-00_platform-plan" in out
+    assert "not this session's (2026/09/26/10-00-00_access-policy)" in out and "reading" not in out
+    assert tool(guard, sdir, "Read", {"file_path": str(other / "handoff.md")}, w) is None
+    out = tool(guard, sdir, "Bash", {"command": "cat {} /etc/hosts".format(other / "v2.md")}, w)["systemMessage"]
+    assert out == "claude-guard: Claude is reading /etc/hosts, outside this request."
+    assert records(sdir)[0]["elsewhere"] == ["2026/09/29/23-00-00_platform-plan"]
+    assert tool(guard, sdir, "Write", {"file_path": str(other / "plan.md")}, w) is None      # said already
+    # a new request: said again, for a write too; enforce denies it
+    with guard.scope(str(sdir), "s1") as st:
+        st["turn"] = guard.new_turn()
+    out = tool(guard, sdir, "Write", {"file_path": str(other / "plan.md")}, w)["systemMessage"]
+    assert "working in another request" in out
+    r = records(sdir)[-1]
+    assert (r["type"], r["reason"], r["elsewhere"]) == ("depth", "writes in another request",
+                                                        ["2026/09/29/23-00-00_platform-plan"])
+    out = tool(guard, sdir, "Edit", {"file_path": str(other / "plan.md")}, cfg(guard, "enforce"))
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "another request's folder" in out["hookSpecificOutput"]["permissionDecisionReason"]
+    # its own folder, and a folder the request names, are fine
+    assert tool(guard, sdir, "Write", {"file_path": str(sdir / "x.md")}, cfg(guard, "enforce")) is None
+    with guard.scope(str(sdir), "s1") as st:
+        st.update(turn=guard.new_turn(), targets=["23-00-00_platform-plan"])
+    assert tool(guard, sdir, "Write", {"file_path": str(other / "plan.md")}, cfg(guard, "enforce")) is None
+    assert guard.other_request("sales_db.core.orders", str(sdir), str(home / "work_sessions")) is None
+
+
+# --- claude-guard mode (#38) -------------------------------------------------------------------
+def test_mode_shows_and_sets(guard, home, monkeypatch, tmp_path):
+    real = tmp_path / "synced" / "config.env"
+    real.parent.mkdir()
+    real.write_text('CWS_WORK_ROOT="x"\nCWS_GUARD_MODE="shadow"  # comment\n')
+    real.chmod(0o600)
+    link = tmp_path / "config.env"
+    link.symlink_to(real)
+    monkeypatch.setenv("CWS_CONFIG", str(link))
+    monkeypatch.delenv("CWS_GUARD_MODE")
+    run = lambda *a: (lambda out: (guard.main(["mode", *a], stdout=out), out.getvalue()))(io.StringIO())
+    assert run() == (0, "shadow\n")
+    assert run("WARN") == (0, "claude-guard: mode warn (was shadow)\n")
+    assert link.is_symlink() and real.read_text() == 'CWS_WORK_ROOT="x"\nCWS_GUARD_MODE="warn"\n'
+    assert oct(real.stat().st_mode & 0o777) == "0o600"
+    assert run() == (0, "warn\n")
+    assert run("sometimes") == (1, "usage: claude-guard mode [off|shadow|warn|enforce]\n")
+    # no line yet: added; no file yet: created
+    real.write_text("A=1\n")
+    run("enforce")
+    assert real.read_text() == 'A=1\nCWS_GUARD_MODE="enforce"\n'
+    fresh = tmp_path / "new" / "config.env"
+    monkeypatch.setenv("CWS_CONFIG", str(fresh))
+    assert run("off") == (0, "claude-guard: mode off (was off)\n") and fresh.read_text() == 'CWS_GUARD_MODE="off"\n'
+    # the environment wins: said
+    monkeypatch.setenv("CWS_GUARD_MODE", "enforce")
+    code, text = run("warn")
+    assert "is set in the environment and wins" in text
+    assert "wins" in run()[1]

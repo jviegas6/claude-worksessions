@@ -12,6 +12,7 @@ process.env.CWS_TRASH_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "cws-bin-"));
 
 function fakeVscode(settings) {
   const commands = new Map(), executed = [], terminals = [], listeners = {}, messages = [], answers = [], views = {};
+  const statusBar = {};
   // Quick picks and input boxes take the next scripted answer: a function of the items, or a value.
   const answer = items => { const a = answers.shift(); return typeof a === "function" ? a(items) : a; };
   const on = name => fn => { (listeners[name] ||= []).push(fn); return { dispose() {} }; };
@@ -29,6 +30,7 @@ function fakeVscode(settings) {
                              { Folder: { id: "folder-theme" }, File: { id: "file-theme" } }),
     ThemeColor: class { constructor(id) { this.id = id; } },
     TerminalLocation: { Panel: 1, Editor: 2 },
+    StatusBarAlignment: { Left: 1, Right: 2 },
     ProgressLocation: { Notification: 15 },
     RelativePattern: class { constructor(base, pattern) { this.base = base; this.pattern = pattern; } },
     Uri: { file: p => ({ fsPath: p }) },
@@ -63,6 +65,8 @@ function fakeVscode(settings) {
           } };
         return qp;
       },
+      createStatusBarItem: (align, priority) => (statusBar.item = { align, priority, text: "", shown: false,
+        show() { this.shown = true; }, hide() { this.shown = false; }, dispose() {} }),
       withProgress: (opts, fn) => fn(),
       showInformationMessage: async m => messages.push(["info", m]),
       showWarningMessage: async (m, opts, ...items) => {
@@ -83,7 +87,7 @@ function fakeVscode(settings) {
       },
     },
   };
-  return { vscode, commands, executed, terminals, listeners, messages, answers, views };
+  return { vscode, commands, executed, terminals, listeners, messages, answers, views, statusBar };
 }
 
 function load(fake) {
@@ -874,4 +878,118 @@ test("filters: the Filter menu sets day, tickets and artifacts; remembered; show
   await fake.commands.get("claudeWorksessions.clearFilters")();
   assert.deepStrictEqual(sessions(), ["fresh", "stale"]);
   fs.rmSync(path.join(binDir, "x"), { recursive: true });
+});
+
+test("active sessions, file sizes, retro and the guard mode (#25 #26 #27 #38)", async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cws-batch-"));
+  const root = path.join(dir, "ws");
+  const A = { path: path.join(root, "2026/09/30/10-00-00_a"), name: "demo", ticket: "ABC-1", task_type: "",
+              profile: "", files: ["big.md", "notes.md"], files_truncated: false, size: 2048 + 5 };
+  fs.mkdirSync(A.path, { recursive: true });
+  fs.writeFileSync(path.join(A.path, "big.md"), "x".repeat(2048));
+  fs.writeFileSync(path.join(A.path, "notes.md"), "hello");
+  const now = Date.now() / 1000;
+  const data = { work_root: root, sessions: [
+    { id: "live", mtime: now - 30, cwd: A.path, in_work_root: true, title: "Running", first_prompt: "x",
+      last_prompt: "y", request: A, active: true },
+    { id: "idle", mtime: now - 90, cwd: A.path, in_work_root: true, title: "Idle", first_prompt: "x",
+      last_prompt: "y", request: A },
+  ] };
+  const { bin } = stubSessions(dir, data);
+  // claude-guard next to claude-sessions: records its arguments, sets the mode in config.env
+  const conf = path.join(dir, "config.env"), calls = path.join(dir, "guard-calls");
+  fs.writeFileSync(conf, 'CWS_GUARD_MODE="warn"\n');
+  fs.writeFileSync(path.join(dir, "claude-guard"),
+    `#!/bin/sh\necho "$@" >> "${calls}"\n[ "$2" = broken ] && { echo nope >&2; exit 1; }\n` +
+    `printf 'CWS_GUARD_MODE="%s"\\n' "$2" > "${conf}"\necho "claude-guard: mode $2 (was warn)"\n`, { mode: 0o755 });
+  const saved = process.env.CWS_CONFIG;
+  process.env.CWS_CONFIG = conf;
+  t.after(() => { if (saved === undefined) delete process.env.CWS_CONFIG; else process.env.CWS_CONFIG = saved; });
+  const fake = fakeVscode({ sessionsCommand: bin });
+  const ctx = context();
+  await load(fake).activate(ctx);
+  await settle(ctx);
+  const p = ctx.subscriptions[0].provider;
+  const run = (name, ...a) => fake.commands.get("claudeWorksessions." + name)(...a);
+
+  // Active: a group on top, expanded, with the running session; the row says so everywhere
+  let items = allItems(p);
+  const [, activeIt] = items.find(([c]) => c.kind === "active");
+  assert.deepStrictEqual([activeIt.label, activeIt.description, activeIt.iconPath.id, activeIt.collapsibleState],
+                         ["Active", "1", "pulse", 2]);
+  const rows = items.filter(([c]) => c.session && c.session.id === "live");
+  assert.strictEqual(rows.length, 2);
+  const inGroup = rows.find(([c]) => c.inActive)[1], inRequest = rows.find(([c]) => !c.inActive)[1];
+  assert.ok(inGroup.id !== inRequest.id && inGroup.description.startsWith("ABC-1 · demo · "));
+  assert.ok(inRequest.description.startsWith("active · ") && inRequest.iconPath.id === "pulse");
+  assert.match(inRequest.tooltip.value, /— \*active\*/);
+  assert.strictEqual(items.find(([c]) => c.kind === "request")[1].iconPath.id, "folder-active");
+  assert.strictEqual(items.find(([c]) => c.session && c.session.id === "idle")[1].iconPath.id, "comment-discussion");
+  // groups: the first real group is still the one expanded
+  assert.strictEqual(items.find(([c]) => c.kind === "group")[1].collapsibleState, 2);
+
+  // sizes: the Files row, the request's hover, each file's hover, and a narrowed list
+  const files = items.find(([c]) => c.kind === "files")[1];
+  assert.strictEqual(files.description, "2 · 2 KB");
+  assert.match(items.find(([c]) => c.kind === "request")[1].tooltip.value, /files: 2 · 2 KB/);
+  assert.deepStrictEqual(items.filter(([c]) => c.kind === "file").map(([, it]) => it.tooltip),
+                         ["big.md · 2 KB", "notes.md · 5 B"]);
+  p.setFilter("notes.md");
+  items = allItems(p);
+  assert.strictEqual(items.find(([c]) => c.kind === "files")[1].description, "1 of 2 · 5 B");
+  p.setFilter("");
+
+  // retro: the period picks the arguments; each runs in a tab
+  fake.answers.push(items => items[0]);
+  await run("retro");
+  fake.answers.push(items => items[1]);
+  await run("retro");
+  fake.answers.push(items => items[2], "21");
+  await run("retro");
+  fake.answers.push(items => items[3], "2026-09-24");
+  await run("retro");
+  fake.answers.push(items => items[2], undefined);                                   // cancelled: nothing
+  await run("retro");
+  fake.answers.push(undefined);
+  await run("retro");
+  assert.deepStrictEqual(fake.terminals.slice(-4).map(x => [x.name, x.sent[0], x.iconPath.id]), [
+    ["retro · last week", "claude-retro --week", "graph-line"],
+    ["retro · last 7 days", "claude-retro --days '7'", "graph-line"],
+    ["retro · last 21 days", "claude-retro --days '21'", "graph-line"],
+    ["retro · week of 2026-09-24", "claude-retro --week '2026-09-24'", "graph-line"]]);
+  // open the latest report, or say there is none
+  await run("openRetro");
+  assert.match(fake.messages.at(-1)[1], /No retrospective yet/);
+  const q = path.join(root, "_audit", "quality");
+  fs.mkdirSync(q, { recursive: true });
+  fs.writeFileSync(path.join(q, "2026-09-21_2026-09-27_retro.md"), "# retro");
+  await run("openRetro");
+  assert.deepStrictEqual(fake.executed.at(-1), ["markdown.showPreview", { fsPath: path.join(q, "2026-09-21_2026-09-27_retro.md") }]);
+
+  // guard: the status bar shows the mode; the picker changes it through claude-guard mode
+  const sb = fake.statusBar.item;
+  assert.deepStrictEqual([sb.text, sb.shown, sb.align], ["$(shield) Guard: warn", true, 1]);
+  assert.match(sb.tooltip, /one-line notice/);
+  fake.answers.push(items => { assert.strictEqual(items.find(i => i.k === "warn").description, "current"); return items.find(i => i.k === "off"); });
+  await run("guardMode");
+  assert.strictEqual(fs.readFileSync(calls, "utf8"), "mode off\n");
+  assert.deepStrictEqual(fake.messages.at(-1), ["info", "claude-guard: mode off (was warn)"]);
+  assert.strictEqual(sb.text, "$(circle-slash) Guard: off");
+  fake.answers.push(items => items.find(i => i.k === "off"));                        // the current one: nothing
+  await run("guardMode");
+  fake.answers.push(undefined);
+  await run("guardMode");
+  assert.strictEqual(fs.readFileSync(calls, "utf8"), "mode off\n");
+  fs.writeFileSync(conf, 'CWS_GUARD_MODE="enforce"\n');                            // changed elsewhere: the watcher
+  fake.listeners["watch:config.env"].forEach(f => f());
+  assert.strictEqual(sb.text, "$(shield) Guard: enforce");
+  fake.answers.push(() => ({ k: "broken" }));
+  await run("guardMode");
+  assert.match(fake.messages.at(-1)[1], /claude-guard mode failed: nope/);
+  // no claude-guard installed: no status bar item
+  fs.unlinkSync(path.join(dir, "claude-guard"));
+  fake.listeners["watch:config.env"].forEach(f => f());
+  assert.strictEqual(sb.shown, false);
+  // a session starting or stopping refreshes the list
+  assert.ok(fake.listeners["watch:*.json"].length >= 2);
 });

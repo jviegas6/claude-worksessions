@@ -275,13 +275,25 @@ function readDeleted(dir, filter = "") {
   return out.sort((a, b) => (b.deleted_at || 0) - (a.deleted_at || 0));
 }
 
+// Sessions a Claude process has open right now (claude-sessions' "active"), with the search,
+// filters and sort applied: [{ session, request }].
+function active(data, opts) {
+  const sort = SORTS.includes(opts && opts.sort) ? opts.sort : "activity";
+  const reqOf = new Map();
+  for (const r of requests(data, opts)) for (const s of r.sessions) reqOf.set(s.id, r);
+  return visible(data, opts).filter(s => s.active).sort(sessionOrder[sort])
+    .map(s => ({ session: s, request: reqOf.get(s.id) }));
+}
+
 // Top level of the tree for a grouping: groups of requests, or (recent) sessions directly —
-// after a Pinned group when anything pinned is shown.
+// after a Pinned group when anything pinned is shown, and an Active group when a session is open.
 function tree(data, grouping, opts) {
   const pins = opts && opts.pins;
   const top = pins ? pinned(data, pins, opts) : { requests: [], sessions: [] };
-  const lead = top.requests.length || top.sessions.length ? [{ kind: "pinned", ...top }] : [];
-  return [...lead, ...grouped(data, grouping, opts)];
+  const live = active(data, opts);
+  return [...(top.requests.length || top.sessions.length ? [{ kind: "pinned", ...top }] : []),
+          ...(live.length ? [{ kind: "active", sessions: live }] : []),
+          ...grouped(data, grouping, opts)];
 }
 
 function grouped(data, grouping, opts) {
@@ -418,6 +430,45 @@ function readSkills(dirs) {
   return [...out.values()];
 }
 
+// Bytes as people read them: 512 B, 21 KB, 3.4 MB.
+function formatSize(bytes) {
+  const n = Number(bytes) || 0;
+  if (n < 1024) return n + " B";
+  const units = ["KB", "MB", "GB", "TB"];
+  let v = n / 1024, i = 0;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  return (v < 10 ? v.toFixed(1).replace(/\.0$/, "") : Math.round(v)) + " " + units[i];
+}
+
+// The newest claude-retro report: <work root>/_audit/quality/*_retro.md, or undefined.
+function latestRetro(root) {
+  const dir = path.join(root, "_audit", "quality");
+  let names = [];
+  try { names = fs.readdirSync(dir).filter(n => n.endsWith("_retro.md")); } catch { return undefined; }
+  const withTime = names.map(n => {
+    try { return { file: path.join(dir, n), t: fs.statSync(path.join(dir, n)).mtimeMs }; } catch { return null; }
+  }).filter(Boolean);
+  withTime.sort((a, b) => b.t - a.t || byName(b.file, a.file));
+  return withTime.length ? withTime[0].file : undefined;
+}
+
+// claude-retro arguments for a period: "week" (last Mon–Sun), "days" (the last N), "weekof" (DATE's week).
+function retroArgs(period, value) {
+  return { week: ["--week"], days: ["--days", String(value || 7)], weekof: ["--week", value] }[period] || [];
+}
+
+// claude-guard's mode, as config.env sets it (anything unknown is off, as the guard reads it).
+const GUARD_MODES = {
+  off: "No checks",
+  shadow: "Judge and log, show nothing",
+  warn: "Judge and log, show a one-line notice",
+  enforce: "Block new objectives and out-of-scope calls",
+};
+function guardMode(conf) {
+  const m = String((conf && conf.CWS_GUARD_MODE) || "off").trim().toLowerCase();
+  return m in GUARD_MODES ? m : "off";
+}
+
 // claude-audit arguments for a period and view.
 function auditArgs(period, detail, date) {
   const args = { today: ["--day"], week: ["--week"], lastweek: ["--week", date], month: ["--month"],
@@ -429,4 +480,4 @@ module.exports = { NO_TICKET, DAY_PRESETS, ARTIFACT_LABELS, dayRange, passes, fi
                    describeFilters, ticketsInUse, binDir, readDeleted, GROUPINGS, GROUPING_LABELS, SORTS, SORT_LABELS, ROOT_KEY, readPins, togglePin, requestKey,
                    isPinnedSession, isPinnedRequest, pinned, matches, shownFiles, fileChildren, visible, requests, dayOf, tree,
                    sessionLabel, tabName, ago, matchPending, parseCsv, taskTypes, setTaskType,
-                   readSkills, auditArgs };
+                   readSkills, auditArgs, active, formatSize, latestRetro, retroArgs, GUARD_MODES, guardMode };

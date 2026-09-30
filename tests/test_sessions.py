@@ -174,7 +174,7 @@ def test_json_output(sessions, home, monkeypatch, capsys):
     assert data["work_root"] == str(root)
     a, b, c, d, gone = data["sessions"]
     for x in (a, b, c):
-        assert (x["request"].pop("files"), x["request"].pop("files_truncated")) == ([], False)
+        assert (x["request"].pop("files"), x["request"].pop("files_truncated"), x["request"].pop("size")) == ([], False, 0)
         x["request"].pop("started")
     assert (a["id"], a["title"], a["first_prompt"], a["last_prompt"]) == ("a", "Title A", "first", "last A")
     assert a["request"] == {"path": str(req), "name": "demo work", "ticket": "BTPA-1",
@@ -278,6 +278,7 @@ def test_json_has_request_files_and_written(sessions, home, monkeypatch, capsys,
     a, b, gone = data["sessions"]
     assert a["written"] == [str(req / "out" / "report.md")] and b["written"] == []
     assert a["request"]["files"] == ["out/report.md"] and a["request"]["files_truncated"] is False
+    assert a["request"]["size"] == (req / "out" / "report.md").stat().st_size
     assert b["request"]["files"] == ["out/report.md"]
     assert gone["written"] == [] and gone["request"] is None
     assert (tmp_path / "cache" / "written.json").exists()
@@ -338,6 +339,7 @@ def test_json_lists_request_folders_with_no_session(sessions, home, monkeypatch,
     idle = reqs["10-00-00_idle"]
     assert (idle["name"], idle["ticket"], idle["files"], idle["files_truncated"]) == (
         "idle", "BTPA-9", ["draft.md", "gone.md"], False)
+    assert idle["size"] == (folders["idle"] / "draft.md").stat().st_size   # the dangling link counts 0
     assert idle["mtime"] == 5_000_000_000 and idle["started"] == sessions.iso_epoch("2026-09-23T09:00:00Z")
     assert reqs["10-00-00_bare"]["files"] == [] and reqs["10-00-00_bare"]["mtime"] > 0
     assert [s["id"] for s in data["sessions"]] == ["b", "o"]

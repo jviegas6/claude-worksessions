@@ -47,6 +47,8 @@ const loadData = () => run(sessionsCommand(), ["-a", "--json"]).then(JSON.parse)
 
 const shq = s => "'" + String(s).replace(/'/g, "'\\''") + "'";
 
+const fileSize = f => { try { return fs.statSync(f).size; } catch { return undefined; } };
+
 const NO_FILTERS = { day: { preset: "any" }, tickets: [], artifacts: "any" };
 
 class Sidebar {
@@ -229,7 +231,7 @@ class Sidebar {
     const opts = this.opts();
     if (!el) {
       const top = M.tree(this.data, this.grouping, opts);
-      const firstGroup = top.findIndex(x => x.kind !== "pinned");
+      const firstGroup = top.findIndex(x => x.kind !== "pinned" && x.kind !== "active");
       const gone = M.filtersActive(this.filters) ? [] : M.readDeleted(this.bin, this.filter);
       return [...top.map((x, i) => ({ ...x, first: i === firstGroup })),
               ...(gone.length ? [{ kind: "deleted", items: gone }] : [])];
@@ -240,6 +242,10 @@ class Sidebar {
       return [...el.requests.map(r => ({ kind: "request", request: r, inPinned: true })),
               ...el.sessions.map(x => ({ kind: "session", session: x.session, request: x.request,
                                          showRequest: true, inPinned: true }))];
+    }
+    if (el.kind === "active") {
+      return el.sessions.map(x => ({ kind: "session", session: x.session, request: x.request,
+                                     showRequest: true, inActive: true }));
     }
     if (el.kind === "group") return el.requests.map(r => ({ kind: "request", request: r }));
     if (el.kind === "request") {
@@ -264,7 +270,7 @@ class Sidebar {
     const now = Date.now() / 1000;
     // While searching everything opens up; ids carry the search so that takes effect.
     const searching = !!this.filter;
-    const idp = `${this.grouping}|${this.filter}|${el.inPinned ? "p|" : ""}`;
+    const idp = `${this.grouping}|${this.filter}|${el.inPinned ? "p|" : ""}${el.inActive ? "a|" : ""}`;
     if (el.kind === "deleted") {
       const it = new vscode.TreeItem("Deleted", C.Collapsed);
       it.id = idp + "deleted";
@@ -296,6 +302,14 @@ class Sidebar {
       it.iconPath = new vscode.ThemeIcon("pinned");
       return it;
     }
+    if (el.kind === "active") {
+      const it = new vscode.TreeItem("Active", C.Expanded);
+      it.id = idp + "active";
+      it.description = String(el.sessions.length);
+      it.iconPath = new vscode.ThemeIcon("pulse", new vscode.ThemeColor("charts.green"));
+      it.tooltip = "Sessions a Claude process has open right now — in a tab here, a terminal or the Claude Code panel.";
+      return it;
+    }
     if (el.kind === "group") {
       const it = new vscode.TreeItem(el.key, el.first || searching ? C.Expanded : C.Collapsed);
       it.id = idp + "g|" + el.key;
@@ -312,23 +326,31 @@ class Sidebar {
       it.contextValue = r.root ? "root" : pinnedReq ? "request-pinned" : "request";
       it.description = [pinnedReq && !el.inPinned && "pinned", this.grouping !== "ticket" && r.ticket,
                         r.task_type, r.profile, M.ago(r.mtime, now)].filter(Boolean).join(" · ");
-      it.iconPath = new vscode.ThemeIcon(r.sessions.some(s => this.isOpen(s.id)) ? "folder-active" : "folder");
+      it.iconPath = new vscode.ThemeIcon(r.sessions.some(s => this.isOpen(s.id) || s.active) ? "folder-active" : "folder");
       const md = new vscode.MarkdownString();
       md.appendMarkdown("**").appendText(r.name).appendMarkdown("**\n\n");
       for (const [k, v] of [["ticket", r.ticket], ["type", r.task_type], ["profile", r.profile],
                             ["sessions", String(r.sessions.length)], ["last activity", M.ago(r.mtime, now) + " ago"]]) {
         md.appendMarkdown(`${k}: `).appendText(v || "—").appendMarkdown("  \n");
       }
+      if ((r.files || []).length) {
+        md.appendMarkdown("files: ").appendText(`${r.files.length}${r.files_truncated ? "+" : ""}` +
+                                                (r.size !== undefined ? ` · ${M.formatSize(r.size)}` : ""))
+          .appendMarkdown("  \n");
+      }
       md.appendMarkdown("\n").appendText(path.relative(this.data.work_root, r.path) || r.path);
       it.tooltip = md;
       return it;
     }
     if (el.kind === "files") {
-      const r = el.request, n = r.files.length, shown = M.shownFiles(r, this.filter).length;
+      const r = el.request, n = r.files.length, list = M.shownFiles(r, this.filter), shown = list.length;
       const it = new vscode.TreeItem("Files", searching ? C.Expanded : C.Collapsed);
       it.id = idp + "f|" + r.path;
-      // narrowed by the search: say so, "1 of 4"
-      it.description = `${shown < n ? shown + " of " : ""}${n}${r.files_truncated ? "+" : ""}`;
+      // narrowed by the search: say so, "1 of 4", and the size of what is listed
+      const size = r.size === undefined ? undefined
+        : shown < n ? list.reduce((t, f) => t + (fileSize(path.join(r.path, f)) || 0), 0) : r.size;
+      it.description = `${shown < n ? shown + " of " : ""}${n}${r.files_truncated ? "+" : ""}` +
+        (size !== undefined ? ` · ${M.formatSize(size)}` : "");
       if (shown < n) it.tooltip = "Only the files matching the search are listed. Clear the search to see all.";
       it.iconPath = new vscode.ThemeIcon("files");
       it.contextValue = "files";
@@ -347,25 +369,27 @@ class Sidebar {
       const it = new vscode.TreeItem(uri, C.None);
       it.id = idp + "file|" + el.request.path + "|" + el.rel;
       it.iconPath = vscode.ThemeIcon.File;
-      it.tooltip = el.rel;
+      const bytes = fileSize(uri.fsPath);
+      it.tooltip = bytes === undefined ? el.rel : `${el.rel} · ${M.formatSize(bytes)}`;
       it.contextValue = /\.(md|markdown)$/i.test(el.rel) ? "file-md" : "file";
       it.command = { command: "claudeWorksessions.openFile", title: "Open", arguments: [el] };
       return it;
     }
-    const s = el.session, r = el.request, open = this.isOpen(s.id);
+    const s = el.session, r = el.request, open = this.isOpen(s.id), live = !!s.active;
     const it = new vscode.TreeItem(M.sessionLabel(s), C.None);
     it.id = idp + "s|" + s.id + (el.showRequest ? "|flat" : "");
     const pinnedSes = M.isPinnedSession(this.pins, s.id);
     it.contextValue = (pinnedSes ? "session-pinned" : "session") + (s.deletable && s.deletable.ok ? "-del" : "");
-    it.description = (el.showRequest && r ? (r.ticket && !r.root ? r.ticket + " · " : "") + r.name + " · " : "") +
-      M.ago(s.mtime, now);
+    it.description = (live && !el.inActive ? "active · " : "") +
+      (el.showRequest && r ? (r.ticket && !r.root ? r.ticket + " · " : "") + r.name + " · " : "") + M.ago(s.mtime, now);
     it.iconPath = open ? new vscode.ThemeIcon("terminal", new vscode.ThemeColor("charts.green"))
-                       : new vscode.ThemeIcon(pinnedSes ? "pinned" : "comment-discussion");
+      : live ? new vscode.ThemeIcon("pulse", new vscode.ThemeColor("charts.green"))
+      : new vscode.ThemeIcon(pinnedSes ? "pinned" : "comment-discussion");
     it.command = { command: "claudeWorksessions.open", title: "Open", arguments: [el] };
     const clip = t => (t || "—").replace(/\s+/g, " ").slice(0, 300);
     const md = new vscode.MarkdownString();
     md.appendMarkdown("**").appendText(s.title || "(no title yet)").appendMarkdown("**")
-      .appendMarkdown(open ? " — *open in a tab*\n\n" : "\n\n");
+      .appendMarkdown(open ? " — *open in a tab*\n\n" : live ? " — *active*\n\n" : "\n\n");
     md.appendMarkdown("**Last prompt:** ").appendText(clip(s.last_prompt)).appendMarkdown("\n\n");
     md.appendMarkdown("**First prompt:** ").appendText(clip(s.first_prompt)).appendMarkdown("\n\n");
     md.appendText([r && !r.root ? r.ticket || "no ticket" : "no request", r && r.task_type, r && r.profile,
@@ -722,6 +746,69 @@ async function filterMenu(bar) {
   }
 }
 
+// claude-retro: run a retrospective in a terminal tab, or open the newest report.
+async function retro(bar) {
+  const p = await vscode.window.showQuickPick([
+    { label: "Last week", description: "Monday to Sunday", period: "week" },
+    { label: "Last 7 days", period: "days", value: 7 },
+    { label: "Last N days…", period: "days", ask: "days" },
+    { label: "The week of a day…", period: "weekof", ask: "date" },
+  ], { placeHolder: "claude-retro — which period?" });
+  if (!p) return;
+  let value = p.value;
+  if (p.ask === "days") {
+    value = await vscode.window.showInputBox({ prompt: "How many days back?", value: "14",
+      validateInput: v => (/^[1-9]\d{0,2}$/.test(v.trim()) ? null : "a number of days, 1–999") });
+  }
+  if (p.ask === "date") {
+    value = await vscode.window.showInputBox({ prompt: "A day in the week (YYYY-MM-DD)", value: new Date().toISOString().slice(0, 10),
+      validateInput: v => (/^\d{4}-\d{2}-\d{2}$/.test(v) ? null : "YYYY-MM-DD") });
+  }
+  if (p.ask && !value) return;
+  const args = M.retroArgs(p.period, String(value || "").trim());
+  bar.terminal(`retro · ${p.ask ? (p.ask === "days" ? `last ${value} days` : "week of " + value) : p.label.toLowerCase()}`,
+               bar.data.work_root, ["claude-retro", ...args.map(a => (a.startsWith("-") ? a : shq(a)))].join(" "), "graph-line");
+}
+
+async function openRetro(bar) {
+  const file = M.latestRetro(bar.data.work_root);
+  if (!file) return vscode.window.showInformationMessage("No retrospective yet — run one with Run retrospective… (claude-retro).");
+  return vscode.commands.executeCommand("markdown.showPreview", vscode.Uri.file(file));
+}
+
+// claude-guard's mode: shown in the status bar, changed with claude-guard mode.
+async function guardMode(status) {
+  const now = M.guardMode(config());
+  const pick = await vscode.window.showQuickPick(Object.entries(M.GUARD_MODES).map(([k, d]) => ({
+    label: k, description: k === now ? "current" : "", detail: d, k })), { placeHolder: `claude-guard mode — now: ${now}` });
+  if (!pick || pick.k === now) return;
+  try {
+    const out = await run(binPath("claude-guard"), ["mode", pick.k]);
+    vscode.window.showInformationMessage(out.trim().split("\n").join(" — "));
+  } catch (e) {
+    vscode.window.showErrorMessage("claude-guard mode failed: " + e.message);
+  }
+  status.update();
+}
+
+class GuardStatus {
+  constructor() {
+    this.item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 10);
+    this.item.command = "claudeWorksessions.guardMode";
+    this.update();
+  }
+
+  update() {
+    if (!fs.existsSync(binPath("claude-guard"))) return this.item.hide();
+    const m = M.guardMode(config());
+    this.item.text = `$(${m === "off" ? "circle-slash" : "shield"}) Guard: ${m}`;
+    this.item.tooltip = `claude-guard: ${M.GUARD_MODES[m]}. Click to change it.`;
+    this.item.show();
+  }
+
+  dispose() { this.item.dispose(); }
+}
+
 async function resumeById(bar) {
   const id = await vscode.window.showInputBox({ prompt: "Session id to resume",
     validateInput: v => (/^[0-9A-Za-z-]{2,}$/.test(v.trim()) ? null : "a session id, e.g. 34e66495-1e97-…") });
@@ -750,9 +837,10 @@ function activate(context) {
   };
   bar.onChange();
 
+  const status = new GuardStatus();
   const cmd = (name, fn) => vscode.commands.registerCommand("claudeWorksessions." + name, fn);
   context.subscriptions.push(
-    view,
+    view, status,
     vscode.window.registerWebviewViewProvider("claudeWorksessions.search", box),
     cmd("refresh", () => bar.refresh()),
     cmd("grouping", async () => {
@@ -811,6 +899,9 @@ function activate(context) {
     cmd("goToRequest", () => goToRequest(bar)),
     cmd("runSkill", () => runSkill(bar)),
     cmd("resumeById", () => resumeById(bar)),
+    cmd("retro", () => retro(bar)),
+    cmd("openRetro", () => openRetro(bar)),
+    cmd("guardMode", () => guardMode(status)),
     cmd("focusSearch", async () => { await vscode.commands.executeCommand("claudeWorksessions.search.focus"); box.focus(); }),
     cmd("clearFilter", () => { box.clear(); bar.setFilter(""); }),
     vscode.window.onDidCloseTerminal(t => bar.closed(t)),
@@ -846,6 +937,21 @@ function activate(context) {
   pinWatch.onDidChange(() => bar.reloadPins()); pinWatch.onDidCreate(() => bar.reloadPins());
   pinWatch.onDidDelete(() => bar.reloadPins());
   context.subscriptions.push(pinWatch);
+  // sessions start and stop (Active): Claude Code keeps one record per running process
+  for (const p of new Set([shared, ...(conf.CWS_PROFILES || "").split(/\s+/).filter(Boolean)])) {
+    const w = vscode.workspace.createFileSystemWatcher(
+      new vscode.RelativePattern(vscode.Uri.file(path.join(HOME, ".claude-" + p, "sessions")), "*.json"));
+    w.onDidCreate(soon); w.onDidDelete(soon);
+    context.subscriptions.push(w);
+  }
+  // the guard's mode, changed here, in a terminal or on another machine
+  const confFile = process.env.CWS_CONFIG || path.join(HOME, ".config/claude-worksessions/config.env");
+  let confReal = confFile;
+  try { confReal = fs.realpathSync(confFile); } catch {}
+  const confWatch = vscode.workspace.createFileSystemWatcher(
+    new vscode.RelativePattern(vscode.Uri.file(path.dirname(confReal)), path.basename(confReal)));
+  confWatch.onDidChange(() => status.update()); confWatch.onDidCreate(() => status.update());
+  context.subscriptions.push(confWatch);
   bar.refresh();
 }
 

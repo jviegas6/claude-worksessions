@@ -309,3 +309,10 @@ def test_open_session_is_blocked_even_when_idle(sessions, world, monkeypatch):
     monkeypatch.setattr(sessions, "running_sessions", lambda: {"quiet-1"})
     v = verdicts(sessions)
     assert v["quiet-1"] == {"ok": False, "why": ["no artifacts"], "blocked": ["open in a running Claude session"]}
+
+
+def test_open_sessions_are_marked_active(sessions, world, monkeypatch):
+    monkeypatch.setattr(sessions, "running_sessions", lambda: {"quiet-1"})
+    data = sessions.as_json(sessions.sessions())
+    assert {s["id"]: s["active"] for s in data["sessions"]}["quiet-1"] is True
+    assert sum(s["active"] for s in data["sessions"]) == 1

@@ -729,12 +729,14 @@ names. Context keys `claudeWorksessions.filtered` / `filtering` drive the toolba
   = request start → oldest session → `mtime`.
 - **Groupings**: `day` (by the `YYYY/MM/DD` path; days always newest first; `(work root)` and
   `(elsewhere)` last), `ticket` (`(no ticket)`), `recent` (flat sessions). A **Pinned** group comes
-  first when anything pinned is visible.
+  first when anything pinned is visible, then an **Active** group (`active`) of the visible
+  sessions `claude-sessions` marks `active` (a live Claude process has them open).
 - **Sorts**: `activity` (mtime), `started`, `name` (locale, numeric).
 - **Search** (`matches`): every word must appear in the session's title, prompts, id, or its
   request's name, ticket, type, profile, path or file names.
 - **Files** (`shownFiles`): narrowed only by words that match nothing but file names; the label
-  shows `shown of total` when narrowed. `fileChildren` builds one folder level at a time.
+  shows `shown of total` when narrowed, and the size (`request.size`, or the sum of the listed
+  files when narrowed). `fileChildren` builds one folder level at a time.
 - **Filters** (`passes`): day presets (today, yesterday, last 7 days, this/last week, this month, a
   date; a session is on a day it was active), tickets (including `(no ticket)`), artifacts
   (with/without).

@@ -221,6 +221,24 @@
         "title": "Clear filters",
         "category": "Work sessions",
         "icon": "$(clear-all)"
+      },
+      {
+        "command": "claudeWorksessions.retro",
+        "title": "Run retrospective\u2026 (claude-retro)",
+        "category": "Work sessions",
+        "icon": "$(graph-line)"
+      },
+      {
+        "command": "claudeWorksessions.openRetro",
+        "title": "Open latest retrospective report",
+        "category": "Work sessions",
+        "icon": "$(book)"
+      },
+      {
+        "command": "claudeWorksessions.guardMode",
+        "title": "Guard mode\u2026 (claude-guard mode)",
+        "category": "Work sessions",
+        "icon": "$(shield)"
       }
     ],
     "menus": {
@@ -284,6 +302,21 @@
           "command": "claudeWorksessions.clearFilters",
           "when": "view == claudeWorksessions.sessions && claudeWorksessions.filtered",
           "group": "1_run@5"
+        },
+        {
+          "command": "claudeWorksessions.retro",
+          "when": "view == claudeWorksessions.sessions",
+          "group": "2_quality@1"
+        },
+        {
+          "command": "claudeWorksessions.openRetro",
+          "when": "view == claudeWorksessions.sessions",
+          "group": "2_quality@2"
+        },
+        {
+          "command": "claudeWorksessions.guardMode",
+          "when": "view == claudeWorksessions.sessions",
+          "group": "2_quality@3"
         }
       ],
       "view/item/context": [

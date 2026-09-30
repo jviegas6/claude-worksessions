@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.20.1] — 2026-09-30
+
+- **claude-guard: follow-ups to Claude's last answer are no longer pivots** (#40). The judge
+  now also sees the end of Claude's last answer (kept by the Stop hook), and the rules say a
+  prompt following up on what that answer did, proposed or asked is a continuation. The strict
+  rule for a goal with no done-when no longer applies to what the last answer brought up. Add
+  the changed lines to your `_config/guard-rules.md` (they are in
+  `config/guard-rules.example.md`).
+- A pivot notice or block in a session whose goal was set a week or more ago suggests
+  `claude-goal` to re-anchor it.
+- A prompt whose judge call failed (e.g. a timeout) no longer counts as one that stayed on the
+  goal, and `claude-goal` now also clears the recent prompts.
+
 ## [2.20.0] — 2026-09-30
 
 - **The guard's mode shows in the Sessions panel** too: in its subtitle

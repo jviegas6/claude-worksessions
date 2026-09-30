@@ -668,12 +668,13 @@ def test_judge_sees_folder_files_and_only_on_goal_prompts(guard, sdir, monkeypat
     prompt(guard, sdir, "check the filter on the test user", c)
     msg = calls[-1][0][-1]
     assert "FILES IN THE REQUEST FOLDER: notes.md, out/result.csv" in msg
-    assert "- fix the row filter function\nNEW PROMPT: check the filter" in msg and "M4" not in msg
+    assert "- fix the row filter function\nLAST ANSWER (its end): (none yet)\nNEW PROMPT: check the filter" in msg
+    assert "M4" not in msg
     assert state(sdir)["recent"] == ["fix the row filter function", "check the filter on the test user"]
     for i in range(4):
         prompt(guard, sdir, "check the filter number {}".format(i), c)
     assert len(state(sdir)["recent"]) == guard.RECENT
-    assert "new concrete things" in guard.DEFAULT_RULES and "DONE_WHEN is not stated" in guard.DEFAULT_RULES
+    assert "Concrete things the prompt brings in" in guard.DEFAULT_RULES and "DONE_WHEN is not stated" in guard.DEFAULT_RULES
 
 
 # --- a pivot is said again with the answer (#36) ----------------------------------------------
@@ -774,3 +775,52 @@ def test_mode_shows_and_sets(guard, home, monkeypatch, tmp_path):
     code, text = run("warn")
     assert "is set in the environment and wins" in text
     assert "wins" in run()[1]
+
+
+# --- follow-ups to the last answer (#40) --------------------------------------------------------
+def test_judge_sees_the_end_of_the_last_answer(guard, sdir, monkeypatch):
+    calls = []
+    fake_judge(monkeypatch, guard, {"verdict": "continuation", "literal": "x", "targets": [], "reason": "r"}, calls=calls)
+    c = cfg(guard, "enforce")
+    prompt(guard, sdir, "fix the row filter function", c)
+    long = "Built the status bar item.\n" + "x" * 1000 + "\nWant me to show it in the panel too?"
+    stop(guard, sdir, c, long)
+    assert state(sdir)["last_answer"] == long[-guard.LAST_ANSWER:]
+    prompt(guard, sdir, "can't you show it in the panel too?", c)
+    msg = calls[-1][0][-1]
+    assert "LAST ANSWER (its end): " + "x" * 10 in msg and "Want me to show it in the panel too?\nNEW PROMPT" in msg
+    stop(guard, sdir, c, "")                                       # an empty answer keeps the last one
+    assert state(sdir)["last_answer"].endswith("panel too?")
+    assert "follows up on the LAST ANSWER" in guard.DEFAULT_RULES and "never about what the last answer" in guard.DEFAULT_RULES
+
+
+def test_a_failed_judge_is_not_an_on_goal_prompt(guard, sdir, monkeypatch):
+    fake_judge(monkeypatch, guard, {"verdict": "continuation", "literal": "x", "targets": [], "reason": "r"})
+    prompt(guard, sdir, "fix the row filter function", cfg(guard, "enforce"))
+    fake_judge(monkeypatch, guard, exc=subprocess.TimeoutExpired("claude", 25))
+    prompt(guard, sdir, "and show it in the dashboard", cfg(guard, "enforce"))
+    assert state(sdir)["recent"] == ["fix the row filter function"]
+
+
+def test_an_old_goal_suggests_claude_goal(guard, sdir, monkeypatch):
+    now = guard.dt.datetime(2026, 9, 30, tzinfo=guard.dt.timezone.utc)
+    meta = json.loads((sdir / ".session.json").read_text())
+    write = lambda **kw: (sdir / ".session.json").write_text(json.dumps(dict(meta, **kw)))
+    write(started_at="2026-09-22T20:20:13Z")
+    assert "set 7 days ago" in guard.stale_goal(str(sdir), now) and "claude-goal" in guard.stale_goal(str(sdir), now)
+    write(started_at="2026-09-22T20:20:13Z", goal_history=[{"goal": "old", "until": "2026-09-29T10:00:00Z"}])
+    assert guard.stale_goal(str(sdir), now) == ""                  # re-anchored yesterday
+    write(started_at="nonsense")
+    assert guard.stale_goal(str(sdir), now) == ""
+    write(started_at="2020-01-01T00:00:00Z", goal_history=["junk"])
+    fake_judge(monkeypatch, guard, {"verdict": "continuation", "literal": "x", "targets": [], "reason": "r"})
+    prompt(guard, sdir, "fix the row filter function", cfg(guard, "enforce"))
+    fake_judge(monkeypatch, guard, {"verdict": "pivot", "literal": "", "targets": [], "reason": "other"})
+    out = prompt(guard, sdir, "survey all the dashboards", cfg(guard, "enforce"))
+    assert out["decision"] == "block" and "days ago; if the work has moved on, claude-goal" in out["reason"]
+    monkeypatch.setattr(guard.subprocess, "Popen", lambda *a, **k: None)
+    w = cfg(guard, "warn")
+    prompt(guard, sdir, "survey the reports too", w)
+    guard.apply_verdict(str(sdir), {"sid": "s1", "no": 3, "prompt": "survey the reports too", "goal": "g"}, w,
+                        {"verdict": "pivot", "literal": "", "targets": [], "reason": "r"}, None, 5)
+    assert "claude-goal \"<the goal now>\"" in state(sdir)["notices"][-1]

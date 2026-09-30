@@ -239,6 +239,26 @@
         "title": "Guard mode\u2026 (claude-guard mode)",
         "category": "Work sessions",
         "icon": "$(shield)"
+      },
+      {
+        "command": "claudeWorksessions.guardMode.off",
+        "title": "Guard mode: off\u2026",
+        "icon": "$(circle-slash)"
+      },
+      {
+        "command": "claudeWorksessions.guardMode.shadow",
+        "title": "Guard mode: shadow\u2026",
+        "icon": "$(shield)"
+      },
+      {
+        "command": "claudeWorksessions.guardMode.warn",
+        "title": "Guard mode: warn\u2026",
+        "icon": "$(shield)"
+      },
+      {
+        "command": "claudeWorksessions.guardMode.enforce",
+        "title": "Guard mode: enforce\u2026",
+        "icon": "$(shield)"
       }
     ],
     "menus": {
@@ -314,8 +334,23 @@
           "group": "2_quality@2"
         },
         {
-          "command": "claudeWorksessions.guardMode",
-          "when": "view == claudeWorksessions.sessions",
+          "command": "claudeWorksessions.guardMode.off",
+          "when": "view == claudeWorksessions.sessions && claudeWorksessions.guardMode == off",
+          "group": "2_quality@3"
+        },
+        {
+          "command": "claudeWorksessions.guardMode.shadow",
+          "when": "view == claudeWorksessions.sessions && claudeWorksessions.guardMode == shadow",
+          "group": "2_quality@3"
+        },
+        {
+          "command": "claudeWorksessions.guardMode.warn",
+          "when": "view == claudeWorksessions.sessions && claudeWorksessions.guardMode == warn",
+          "group": "2_quality@3"
+        },
+        {
+          "command": "claudeWorksessions.guardMode.enforce",
+          "when": "view == claudeWorksessions.sessions && claudeWorksessions.guardMode == enforce",
           "group": "2_quality@3"
         }
       ],
@@ -508,6 +543,22 @@
         },
         {
           "command": "claudeWorksessions.filterActive",
+          "when": "false"
+        },
+        {
+          "command": "claudeWorksessions.guardMode.off",
+          "when": "false"
+        },
+        {
+          "command": "claudeWorksessions.guardMode.shadow",
+          "when": "false"
+        },
+        {
+          "command": "claudeWorksessions.guardMode.warn",
+          "when": "false"
+        },
+        {
+          "command": "claudeWorksessions.guardMode.enforce",
           "when": "false"
         }
       ],

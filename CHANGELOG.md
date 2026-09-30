@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.20.0] — 2026-09-30
+
+- **The guard's mode shows in the Sessions panel** too: in its subtitle
+  (`By day · Last activity · guard: warn`) and as *Guard mode: warn…* in its `…` menu, which
+  opens the picker. Nothing shows when `claude-guard` isn't installed.
+
 ## [2.19.0] — 2026-09-30
 
 - **claude-guard's judge is anchored on the goal** (#35). It used to see "the current scope":

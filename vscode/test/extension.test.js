@@ -969,12 +969,25 @@ test("active sessions, file sizes, retro and the guard mode (#25 #26 #27 #38)", 
   // guard: the status bar shows the mode; the picker changes it through claude-guard mode
   const sb = fake.statusBar.item;
   assert.deepStrictEqual([sb.text, sb.shown, sb.align], ["$(shield) Guard: warn", true, 1]);
+  // ... and in the Sessions panel: its subtitle, and the … menu entry for the current mode
+  const view = ctx.subscriptions[0];
+  const guardKey = () => fake.executed.filter(([n, k]) => n === "setContext" && k === "claudeWorksessions.guardMode").length;
+  assert.match(view.description, / · guard: warn$/);
+  assert.ok(guardKey() >= 1);
+  const pkg = require("../package.json");
+  const entries = pkg.contributes.menus["view/title"].filter(e => e.command.startsWith("claudeWorksessions.guardMode."));
+  assert.deepStrictEqual(entries.map(e => e.when.split("== ").pop()), ["off", "shadow", "warn", "enforce"]);
+  assert.strictEqual(pkg.contributes.commands.find(c => c.command === "claudeWorksessions.guardMode.warn").title,
+                     "Guard mode: warn\u2026");
+  fake.answers.push(undefined);
+  await run("guardMode.warn");                                                      // the menu entry opens the picker
   assert.match(sb.tooltip, /one-line notice/);
   fake.answers.push(items => { assert.strictEqual(items.find(i => i.k === "warn").description, "current"); return items.find(i => i.k === "off"); });
   await run("guardMode");
   assert.strictEqual(fs.readFileSync(calls, "utf8"), "mode off\n");
   assert.deepStrictEqual(fake.messages.at(-1), ["info", "claude-guard: mode off (was warn)"]);
   assert.strictEqual(sb.text, "$(circle-slash) Guard: off");
+  assert.match(view.description, / · guard: off$/);
   fake.answers.push(items => items.find(i => i.k === "off"));                        // the current one: nothing
   await run("guardMode");
   fake.answers.push(undefined);
@@ -990,6 +1003,7 @@ test("active sessions, file sizes, retro and the guard mode (#25 #26 #27 #38)", 
   fs.unlinkSync(path.join(dir, "claude-guard"));
   fake.listeners["watch:config.env"].forEach(f => f());
   assert.strictEqual(sb.shown, false);
+  assert.doesNotMatch(view.description, /guard/);
   // a session starting or stopping refreshes the list
   assert.ok(fake.listeners["watch:*.json"].length >= 2);
 });

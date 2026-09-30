@@ -343,7 +343,7 @@ objective. Three hooks, registered by `install.sh`, that do nothing until
 
 | hook | checks | enforce |
 |---|---|---|
-| `claude-guard prompt` (`UserPromptSubmit`) | a judge — a clean `claude -p` on `CWS_GUARD_MODEL` that sees only the goal, done-when, the request folder's file names, the session's last few prompts that stayed on the goal (as typed) and the new prompt — calls it *continuation*, *extension* or *pivot*, and gives its literal scope and targets. Paths, URLs and dotted names in the prompt are targets too | a pivot is blocked with the options: a new session, `claude-goal`, or resend with `force:`. Otherwise Claude is told the literal scope |
+| `claude-guard prompt` (`UserPromptSubmit`) | a judge — a clean `claude -p` on `CWS_GUARD_MODEL` that sees only the goal, done-when, the request folder's file names, the session's last few prompts that stayed on the goal (as typed), the end of Claude's last answer and the new prompt — calls it *continuation*, *extension* or *pivot*, and gives its literal scope and targets. Paths, URLs and dotted names in the prompt are targets too | a pivot is blocked with the options: a new session, `claude-goal`, or resend with `force:`. Otherwise Claude is told the literal scope |
 | `claude-guard tool` (`PreToolUse`: reads, web, Bash, MCP) | does the call reach something outside the targets (the session folder, scratchpad and temp dirs are always fine)? The same call a third time in one request is a loop | the call is denied, and Claude is told to list it as a next step |
 | `claude-guard stop` (`Stop`) | after an investigation (three or more reads, or a read outside the request), unless the prompt asked for brevity, does the answer end by proposing the next level? | Claude is asked once to add them |
 

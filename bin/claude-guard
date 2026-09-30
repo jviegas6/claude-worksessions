@@ -88,6 +88,8 @@ VERDICT_WAIT = 15.0                 # warn: how long the end of an answer waits 
                                     # (under the Stop hook's 20 s timeout; the judge takes 5-12 s)
 VERDICT_STALE = 30.0                # ... never for a judge started longer ago than this
 RECENT = 3                          # on-goal prompts the judge sees, besides the goal
+LAST_ANSWER = 600                   # characters of the end of Claude's last answer the judge sees
+OLD_SESSION_DAYS = 7                # a pivot in a session this old suggests re-anchoring its goal
 FOLDER_FILES = 30                   # request-folder file names the judge sees
 BRIEF = re.compile(r"\b(just|only|one line|one-liner|briefly|in short|short answer|no explanation|"
                    r"s[oó]|apenas|numa linha|resumidamente)\b", re.I)
@@ -101,6 +103,9 @@ You judge whether a new user prompt continues a work session or starts a new obj
   reach the session goal / done-when, including narrowing it. Questions or remarks about the
   assistant's previous answer or how the work went ("why did you do that?", "so you assumed
   X?", "that's wrong") are continuations too: they are about the work in hand.
+- A prompt that follows up on the LAST ANSWER -- what it did, built, proposed, asked or
+  showed ("can you also show it in the panel?", "do the second option") -- is a continuation,
+  even when it names things the goal doesn't: they came from that answer.
 - extension: the same goal, applied wider within what it names: another table or schema in
   the same system, another environment of the same job, one more object of the same kind in
   the same product. The deliverable grows; the objective does not change.
@@ -112,10 +117,11 @@ You judge whether a new user prompt continues a work session or starts a new obj
 - Judge against GOAL and DONE_WHEN. RECENT PROMPTS only show how the work has gone so far;
   they never widen the goal.
 - Concrete things the prompt brings in -- a document, plan, milestone, system, person or
-  request -- that appear nowhere in the goal, the recent prompts or the folder's files point
-  to a pivot. Never invent a link between them and the goal to make it a continuation.
-- When DONE_WHEN is not stated the goal is only its title: be strict, and a prompt that
-  brings in new concrete things is a pivot.
+  request -- that appear nowhere in the goal, the recent prompts, the folder's files or the
+  last answer point to a pivot. Never invent a link between them and the goal to make it a
+  continuation.
+- When DONE_WHEN is not stated the goal is only its title: be strict about such things, but
+  never about what the last answer brought up.
 
 literal: one sentence with exactly what the prompt asks for, no more.
 targets: the concrete things the request is about, as written (table, file, folder, job,
@@ -222,6 +228,23 @@ def folder_names(sdir):
     except OSError:
         pass
     return out[:FOLDER_FILES]
+
+
+def stale_goal(sdir, now=None):
+    """A hint when the session is old enough that its goal may have moved on, else ""."""
+    meta = read_json(os.path.join(sdir, ".session.json"), {})
+    history = meta.get("goal_history") if isinstance(meta.get("goal_history"), list) else []
+    last = history[-1] if history and isinstance(history[-1], dict) else {}
+    try:                                            # claude-goal's last change, else the session's start
+        began = dt.datetime.strptime(str(last.get("until") or meta.get("started_at") or ""),
+                                     "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.timezone.utc)
+    except ValueError:
+        return ""
+    days = ((now or dt.datetime.now(dt.timezone.utc)) - began).days
+    if days < OLD_SESSION_DAYS:
+        return ""
+    return (" This goal was set {} days ago; if the work has moved on, claude-goal \"<the goal now>\" "
+            "re-anchors it.".format(days))
 
 
 def declared_paths(sdir):
@@ -408,9 +431,11 @@ def judge(job, cfg):
     first = not (job.get("recent") or job.get("literal"))
     recent = "".join("\n- " + " ".join(p.split())[:300] for p in job.get("recent") or []) or \
         " (none -- this is the first request)"
-    msg = "GOAL: {}\nDONE_WHEN: {}\nFILES IN THE REQUEST FOLDER: {}\nRECENT PROMPTS (oldest first):{}\nNEW PROMPT: {}\n{}".format(
+    answer = " ".join((job.get("last_answer") or "").split()) or "(none yet)"
+    msg = ("GOAL: {}\nDONE_WHEN: {}\nFILES IN THE REQUEST FOLDER: {}\nRECENT PROMPTS (oldest first):{}\n"
+           "LAST ANSWER (its end): {}\nNEW PROMPT: {}\n{}").format(
         job.get("goal") or "(none)", job.get("done_when") or "(not stated)",
-        ", ".join(job.get("files") or []) or "(none)", recent, job["prompt"][:4000],
+        ", ".join(job.get("files") or []) or "(none)", recent, answer, job["prompt"][:4000],
         "This is the session's first request: it defines the scope, so the verdict is continuation." if first else "")
     # The profile's settings are loaded (a gateway profile keeps its URL and token there) with every
     # hook switched off, so the judge never runs the guard or any other hook
@@ -467,12 +492,12 @@ def apply_verdict(sdir, job, cfg, ans, err, ms):
         if not err and current and not blocked:
             st["literal"] = ans.get("literal") or st.get("literal") or job["prompt"][:300]
             grow(st, ans.get("targets") or [], st.get("open", False))
-        if not pivot:                               # the judge's context: prompts that stayed on the goal
+        if not pivot and not err:                   # the judge's context: prompts judged to stay on the goal
             st["recent"] = ((st.get("recent") or []) + [job["prompt"][:300]])[-RECENT:]
         if cfg["mode"] == "warn" and pivot and current:
             text = ("claude-guard: \"{}\" looks like a new objective, not part of this session's goal ({}). Goal: {}. "
-                    "Consider claude-new for it, or claude-goal if the goal changed.".format(
-                        job["prompt"][:80], reason[:200], job.get("goal") or "(none)"))
+                    "Consider claude-new for it, or claude-goal if the goal changed.{}".format(
+                        job["prompt"][:80], reason[:200], job.get("goal") or "(none)", stale_goal(sdir)))
             st.setdefault("notices", []).append(text)
             st["stop_notice"] = {"no": job["no"], "text": text}   # said again with the answer
     rec["judge_id"] = decision_id(job)
@@ -594,6 +619,7 @@ def on_prompt(payload, cfg):
         no = st["prompt_no"] = int(st.get("prompt_no") or 0) + 1
         base["prompt_no"] = no
         literal, recent = st.get("literal") or "", list(st.get("recent") or [])
+        last_answer = st.get("last_answer") or ""
         st.pop("stop_notice", None)                 # a new request: the last one's pivot has been said
         if not trivial(prompt):                     # words that can name a repo: "claude-worksessions"
             st["words"] = sorted(set(st.get("words") or []) | set(WORDS.findall(prompt.lower())))[-400:]
@@ -614,7 +640,8 @@ def on_prompt(payload, cfg):
         if widen:
             log(sdir, dict(base, decision="allow", type="ok", widened=True, reason="asked to go deeper"))
     job = {"sid": sid, "no": no, "prompt": prompt, "goal": goal, "done_when": done_when, "literal": literal,
-           "recent": recent, "files": folder_names(sdir), "names": names, "widen": widen}
+           "recent": recent, "files": folder_names(sdir), "last_answer": last_answer, "names": names,
+           "widen": widen}
     if cfg["mode"] in BACKGROUND:                  # decide in the background; never hold the prompt up
         try:
             subprocess.Popen([sys.executable, os.path.abspath(__file__), "judge", sdir, json.dumps(job)],
@@ -630,7 +657,7 @@ def on_prompt(payload, cfg):
             "claude-guard: this looks like a new objective, not part of this session's goal ({}).\n"
             "Session goal: {}\nStart it in its own session (claude-new), re-anchor this one with "
             "claude-goal \"...\" if the goal really changed, or resend it starting with force: "
-            "to go ahead here.").format(rec["reason"], goal)}
+            "to go ahead here.{}").format(rec["reason"], goal, stale_goal(sdir))}
     if rec.get("literal"):
         return {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": (
             "Scope of this request (claude-guard): {} Do exactly this. Where going further would help, "
@@ -818,6 +845,8 @@ def on_stop(payload, cfg):
         turn = st.get("turn") or new_turn()
         no = st.get("prompt_no")
         again = st.pop("stop_notice", None) if cfg["mode"] == "warn" else None
+        if payload.get("last_assistant_message"):   # what the next prompt may follow up on
+            st["last_answer"] = payload["last_assistant_message"][-LAST_ANSWER:]
         if not payload.get("stop_hook_active"):
             st["turn"] = dict(turn, stopped=True)
     if again and again.get("no") == no and again.get("text") not in pending:

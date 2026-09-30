@@ -655,14 +655,15 @@ def test_claude_goal_shows_and_reanchors(tmp_path):
     (d / "sub").mkdir(parents=True)
     (d / ".session.json").write_text(json.dumps({"name": "x", "goal": "fix the filter"}))
     (d / ".scope.json").write_text(json.dumps({"sessions": {"s1": {"literal": "L", "targets": ["t"], "prompt_no": 4,
-                                                                 "extensions": 2}}}))
+                                                                 "extensions": 2, "recent": ["p"],
+                                                                 "last_answer": "A"}}}))
     goal = lambda args, cwd=d: zsh('cd "{}" && claude-goal {}'.format(cwd, args), tmp_path)
     assert goal("") == "goal: fix the filter\ndone when: (not stated)\n"
     out = goal("survey the access methods --done 'a comparison table'", d / "sub")
     assert out == "goal: fix the filter -> survey the access methods\ndone when: a comparison table\n"
     meta = json.loads((d / ".session.json").read_text())
     assert meta["goal"] == "survey the access methods" and meta["goal_history"][0]["goal"] == "fix the filter"
-    assert json.loads((d / ".scope.json").read_text())["sessions"]["s1"] == {"prompt_no": 4}
+    assert json.loads((d / ".scope.json").read_text())["sessions"]["s1"] == {"prompt_no": 4, "last_answer": "A"}
     rec = json.loads((d / ".quality.jsonl").read_text())
     assert rec["event"] == "goal" and rec["previous"] == "fix the filter" and rec["initiated_by"] == "user"
     assert goal("--done ''").endswith("done when: (not stated)\n")

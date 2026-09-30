@@ -367,12 +367,13 @@ DONE_WHEN: <done_when or "(not stated)">
 FILES IN THE REQUEST FOLDER: <visible names, top level and one below, up to 30, or "(none)">
 RECENT PROMPTS (oldest first):
 - <the last 3 prompts not judged pivots, as typed, 300 chars each>   | " (none -- this is the first request)"
+LAST ANSWER (its end): <the last 600 chars of Claude's last answer, kept by the Stop hook, or "(none yet)">
 NEW PROMPT: <prompt, first 4000 chars>
 <if first: "This is the session's first request: it defines the scope, so the verdict is continuation.">
 ```
 
 "First" means the session has no recent prompt (and no literal) yet. A prompt joins the recent
-ones when its verdict comes back as anything but a pivot, so an accepted detour never becomes
+ones when its verdict comes back as anything but a pivot (a failed judge call doesn't count), so an accepted detour never becomes
 the yardstick for the next prompt. The verdict is also forced to `continuation`
 in code after the call, so a first prompt can never be a pivot.
 

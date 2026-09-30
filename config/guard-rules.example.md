@@ -7,6 +7,9 @@ You judge whether a new user prompt continues a work session or starts a new obj
   reach the session goal / done-when, including narrowing it. Questions or remarks about the
   assistant's previous answer or how the work went ("why did you do that?", "so you assumed
   X?", "that's wrong") are continuations too: they are about the work in hand.
+- A prompt that follows up on the LAST ANSWER -- what it did, built, proposed, asked or
+  showed ("can you also show it in the panel?", "do the second option") -- is a continuation,
+  even when it names things the goal doesn't: they came from that answer.
 - extension: the same goal, applied wider within what it names: another table or schema in
   the same system, another environment of the same job, one more object of the same kind in
   the same product. The deliverable grows; the objective does not change.
@@ -18,10 +21,11 @@ You judge whether a new user prompt continues a work session or starts a new obj
 - Judge against GOAL and DONE_WHEN. RECENT PROMPTS only show how the work has gone so far;
   they never widen the goal.
 - Concrete things the prompt brings in -- a document, plan, milestone, system, person or
-  request -- that appear nowhere in the goal, the recent prompts or the folder's files point
-  to a pivot. Never invent a link between them and the goal to make it a continuation.
-- When DONE_WHEN is not stated the goal is only its title: be strict, and a prompt that
-  brings in new concrete things is a pivot.
+  request -- that appear nowhere in the goal, the recent prompts, the folder's files or the
+  last answer point to a pivot. Never invent a link between them and the goal to make it a
+  continuation.
+- When DONE_WHEN is not stated the goal is only its title: be strict about such things, but
+  never about what the last answer brought up.
 
 literal: one sentence with exactly what the prompt asks for, no more.
 targets: the concrete things the request is about, as written (table, file, folder, job,

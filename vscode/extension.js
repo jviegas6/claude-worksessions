@@ -791,18 +791,23 @@ async function guardMode(status) {
   status.update();
 }
 
+// The mode shows in the status bar, the Sessions panel's subtitle and its … menu
+// ("Guard mode: warn…", one menu entry per mode, picked by the claudeWorksessions.guardMode key).
 class GuardStatus {
-  constructor() {
+  constructor(onUpdate) {
+    this.onUpdate = onUpdate;
     this.item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 10);
     this.item.command = "claudeWorksessions.guardMode";
     this.update();
   }
 
   update() {
-    if (!fs.existsSync(binPath("claude-guard"))) return this.item.hide();
-    const m = M.guardMode(config());
-    this.item.text = `$(${m === "off" ? "circle-slash" : "shield"}) Guard: ${m}`;
-    this.item.tooltip = `claude-guard: ${M.GUARD_MODES[m]}. Click to change it.`;
+    this.mode = fs.existsSync(binPath("claude-guard")) ? M.guardMode(config()) : "";
+    vscode.commands.executeCommand("setContext", "claudeWorksessions.guardMode", this.mode);
+    this.onUpdate && this.onUpdate();
+    if (!this.mode) return this.item.hide();
+    this.item.text = `$(${this.mode === "off" ? "circle-slash" : "shield"}) Guard: ${this.mode}`;
+    this.item.tooltip = `claude-guard: ${M.GUARD_MODES[this.mode]}. Click to change it.`;
     this.item.show();
   }
 
@@ -826,7 +831,7 @@ function activate(context) {
   bar.onChange = () => {
     const filtered = M.describeFilters(bar.filters);
     view.description = `${M.GROUPING_LABELS[bar.grouping]} · ${M.SORT_LABELS[bar.sort] || M.SORT_LABELS.activity}` +
-      (filtered ? ` · only ${filtered}` : "");
+      (filtered ? ` · only ${filtered}` : "") + (status && status.mode ? ` · guard: ${status.mode}` : "");
     vscode.commands.executeCommand("setContext", "claudeWorksessions.filtered", !!filtered);
     view.message = bar.error ? `claude-sessions failed: ${bar.error}`
       : bar.filter && !bar.counts().shown ? `No session matches "${bar.filter}" — press Enter in the box to search their contents.`
@@ -835,9 +840,10 @@ function activate(context) {
     vscode.commands.executeCommand("setContext", "claudeWorksessions.filtering", !!bar.filter);
     box.update();
   };
+  let status;
   bar.onChange();
 
-  const status = new GuardStatus();
+  status = new GuardStatus(() => bar.onChange());
   const cmd = (name, fn) => vscode.commands.registerCommand("claudeWorksessions." + name, fn);
   context.subscriptions.push(
     view, status,
@@ -902,6 +908,7 @@ function activate(context) {
     cmd("retro", () => retro(bar)),
     cmd("openRetro", () => openRetro(bar)),
     cmd("guardMode", () => guardMode(status)),
+    ...Object.keys(M.GUARD_MODES).map(m => cmd("guardMode." + m, () => guardMode(status))),
     cmd("focusSearch", async () => { await vscode.commands.executeCommand("claudeWorksessions.search.focus"); box.focus(); }),
     cmd("clearFilter", () => { box.clear(); bar.setFilter(""); }),
     vscode.window.onDidCloseTerminal(t => bar.closed(t)),

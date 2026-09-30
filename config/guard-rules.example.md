@@ -15,6 +15,13 @@ You judge whether a new user prompt continues a work session or starts a new obj
 - pivot: an outcome that is not needed to reach the goal, even when the topic is related.
   Example: goal "fix the access policy on table X", prompt "survey every access-control
   mechanism the platform offers" is a pivot: a broader survey, a different deliverable.
+- Judge against GOAL and DONE_WHEN. RECENT PROMPTS only show how the work has gone so far;
+  they never widen the goal.
+- Concrete things the prompt brings in -- a document, plan, milestone, system, person or
+  request -- that appear nowhere in the goal, the recent prompts or the folder's files point
+  to a pivot. Never invent a link between them and the goal to make it a continuation.
+- When DONE_WHEN is not stated the goal is only its title: be strict, and a prompt that
+  brings in new concrete things is a pivot.
 
 literal: one sentence with exactly what the prompt asks for, no more.
 targets: the concrete things the request is about, as written (table, file, folder, job,

@@ -369,3 +369,42 @@ test("request folders with no session are requests too (#23)", () => {
   assert.strictEqual(M.requests({ ...data, requests: [{ ...bare, mtime: undefined }] })
     .find(r => r.path === bare.path).mtime, 10);
 });
+
+test("active: an Active group after Pinned, with the search, filters and sort applied (#26)", () => {
+  const d = { work_root: ROOT, sessions: [ses("a1", 300, A, { active: true }), ses("b1", 200, B),
+                                          ses("c1", 400, C, { active: true, title: "zeta" })] };
+  const t = M.tree(d, "day", { pins: { sessions: { b1: 1 }, requests: {} } });
+  assert.deepStrictEqual(t.slice(0, 2).map(x => x.kind), ["pinned", "active"]);
+  assert.deepStrictEqual(t[1].sessions.map(x => [x.session.id, x.request.path]), [["c1", C.path], ["a1", A.path]]);
+  assert.deepStrictEqual(M.active(d, { sort: "name" }).map(x => x.session.id), ["a1", "c1"]);
+  assert.deepStrictEqual(M.active(d, { filter: "zeta" }).map(x => x.session.id), ["c1"]);
+  assert.ok(!M.tree({ work_root: ROOT, sessions: [ses("b1", 1, B)] }, "day").some(x => x.kind === "active"));
+});
+
+test("formatSize, retroArgs and guardMode", () => {
+  assert.deepStrictEqual([0, 512, 1024, 1536, 21 * 1024, 3.4 * 1024 ** 2, 5 * 1024 ** 3, 2 * 1024 ** 5, undefined]
+    .map(M.formatSize), ["0 B", "512 B", "1 KB", "1.5 KB", "21 KB", "3.4 MB", "5 GB", "2048 TB", "0 B"]);
+  assert.deepStrictEqual(M.retroArgs("week"), ["--week"]);
+  assert.deepStrictEqual(M.retroArgs("days", 14), ["--days", "14"]);
+  assert.deepStrictEqual(M.retroArgs("days"), ["--days", "7"]);
+  assert.deepStrictEqual(M.retroArgs("weekof", "2026-09-24"), ["--week", "2026-09-24"]);
+  assert.deepStrictEqual(M.retroArgs("nope"), []);
+  assert.deepStrictEqual([{ CWS_GUARD_MODE: " Warn " }, { CWS_GUARD_MODE: "loud" }, {}, undefined].map(M.guardMode),
+                         ["warn", "off", "off", "off"]);
+  assert.deepStrictEqual(Object.keys(M.GUARD_MODES), ["off", "shadow", "warn", "enforce"]);
+});
+
+test("latestRetro: the newest _audit/quality/*_retro.md", () => {
+  const fs = require("fs"), os = require("os"), path = require("path");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cws-retro-"));
+  assert.strictEqual(M.latestRetro(root), undefined);
+  const q = path.join(root, "_audit", "quality");
+  fs.mkdirSync(q, { recursive: true });
+  for (const [n, t] of [["2026-09-14_2026-09-20_retro.md", 1000], ["2026-09-21_2026-09-27_retro.md", 3000],
+                        ["history.json", 9000], ["old_retro.md", 2000]]) {
+    fs.writeFileSync(path.join(q, n), "x");
+    fs.utimesSync(path.join(q, n), t, t);
+  }
+  fs.symlinkSync(path.join(q, "nowhere"), path.join(q, "broken_retro.md"));
+  assert.strictEqual(M.latestRetro(root), path.join(q, "2026-09-21_2026-09-27_retro.md"));
+});

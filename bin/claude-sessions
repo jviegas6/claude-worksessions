@@ -5,7 +5,8 @@
   claude-sessions 50       the 50 most recent
   claude-sessions -a       all of them
   claude-sessions --json   the same as JSON, with each session's title, last prompt, the files
-                           it wrote, and its request folder (ticket, task type, profile, files)
+                           it wrote, whether a Claude process has it open (active), and its
+                           request folder (ticket, task type, profile, files and their size)
                            -- for the VS Code sidebar. Its "requests" are the request folders
                            no listed session with a prompt belongs to, so new and
                            session-less requests show too
@@ -221,6 +222,17 @@ def folder_files(folder):
     return out, False
 
 
+def files_size(folder, files):
+    """Bytes on disk of a request folder's listed files."""
+    total = 0
+    for f in files:
+        try:
+            total += os.path.getsize(os.path.join(folder, f))
+        except OSError:
+            pass
+    return total
+
+
 WRITE_TOOLS = {"Write": "file_path", "Edit": "file_path", "MultiEdit": "file_path",
                "NotebookEdit": "notebook_path"}
 
@@ -376,6 +388,7 @@ def value_check(entries):
                     ["active in the last two minutes"] if now - e["mtime"] < ACTIVE_SECS else []))
         if not why:
             blocked.append("it has artifacts and counts in the review")
+        e["active"] = e["id"] in running
         e["audited"] = audited
         e["artifacts"] = artifacts
         e["deletable"] = {"ok": bool(why) and len(blocked) == 0, "why": why, "blocked": blocked}
@@ -385,7 +398,7 @@ def value_check(entries):
 def as_json(rows):
     root = CA.DEFAULT_ROOT
     out = []
-    listed = {}
+    listed, sizes = {}, {}
     cache = load_written_cache()
     for mtime, cwd, sid, first, path in rows:
         try:
@@ -407,6 +420,9 @@ def as_json(rows):
             if folder not in listed:
                 listed[folder] = folder_files(folder)
             request["files"], request["files_truncated"] = listed[folder]
+            if folder not in sizes:
+                sizes[folder] = files_size(folder, request["files"])
+            request["size"] = sizes[folder]
         out.append({"id": sid, "mtime": mtime, "cwd": cwd,
                     "in_work_root": cwd == root or cwd.startswith(root + os.sep),
                     "title": title, "last_prompt": last,
@@ -436,7 +452,8 @@ def idle_requests(entries, listed):
                 times.append(os.path.getmtime(p))
             except OSError:
                 pass
-        info.update(files=files, files_truncated=truncated, mtime=max(times) if times else 0)
+        info.update(files=files, files_truncated=truncated, size=files_size(folder, files),
+                    mtime=max(times) if times else 0)
         out.append(info)
     return out
 

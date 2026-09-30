@@ -1,5 +1,32 @@
 # Changelog
 
+## [2.19.0] — 2026-09-30
+
+- **claude-guard's judge is anchored on the goal** (#35). It used to see "the current scope":
+  the previous verdict's paraphrase of the previous prompt, which drifted a little each time,
+  until an unrelated request read as more of the same. It now sees the goal and done-when, the
+  request folder's file names, and the last three prompts that were not pivots, as typed. The
+  default rules add: judge against the goal; new documents, plans, systems or people that
+  appear nowhere in it are a pivot, with no invented link; with no done-when, be strict.
+  `_config/guard-rules.md` is yours: add the same three lines there (they are in
+  `config/guard-rules.example.md`).
+- **A pivot warning is repeated at the end of the answer** (#36), next to the reply you read,
+  not only at Claude's first tool call where it scrolled away.
+- **Working in another request is said once** (#37). Reads in another request's folder give
+  one notice naming that request, instead of one "reading … outside this request" line per
+  file. Writes there are flagged too (and denied in enforce), unless the prompt named it.
+- **`claude-guard mode [off|shadow|warn|enforce]`** (#38) shows or sets the mode in
+  `config.env` (through the link into the work root). VS Code shows it in the status bar —
+  **Guard: warn** — and a click, or *Guard mode…* in the panel's `…` menu, changes it.
+- **VS Code: Active sessions** (#26). An **Active** group under Pinned lists the sessions a
+  Claude process has open right now, wherever they run; their rows read *active* with a pulse
+  icon. `claude-sessions --json` has `active` per session.
+- **VS Code: sizes** (#27). **Files 4 · 21 KB**, each file's size on hover, and the size of
+  what is listed when the search narrows it. `claude-sessions --json` has `size` per request.
+- **VS Code: retrospectives** (#25). *Run retrospective…* (last week, the last 7 or N days, the
+  week of a day) runs `claude-retro` in a tab; *Open latest retrospective report* opens the
+  newest one in the Markdown preview.
+
 ## [2.18.1] — 2026-09-28
 
 - **Warn notices arrive with the answer.** The judge runs in the background and takes 5–12 s,

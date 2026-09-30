@@ -14,14 +14,18 @@ by install.sh in each profile's settings.json, plus a report for reviewing what 
                             what the guard saw, from every .quality.jsonl under the work root
     claude-guard review [--days N] [--all]  |  review ID right|wrong [NOTE]
                             go through the judge's decisions and mark them, to tune the rules
+    claude-guard mode [off|shadow|warn|enforce]
+                            show the mode, or set it (CWS_GUARD_MODE in config.env)
 
 Every judge decision -- what it saw and what it said -- is also kept in
 <work root>/_audit/guard/judge.jsonl; your review marks go to reviews.jsonl next to it.
 CWS_GUARD_PROFILE picks the profile the judge runs under (default: the session's own).
 
 The rules are plain and deterministic; only the prompt check asks a judge -- a separate,
-clean `claude -p` on a small model that sees the goal, the current scope and the new prompt,
-never the session. Its criteria live in _config/guard-rules.md.
+clean `claude -p` on a small model that sees the goal and done-when, the request folder's
+files, the session's last few prompts that stayed on the goal (as typed, never paraphrased,
+so the scope can't drift) and the new prompt -- never the session. Its criteria live in
+_config/guard-rules.md.
 
 CWS_GUARD_MODE decides what happens: `off`, `shadow` (decide and log to .quality.jsonl,
 never block; the judge runs in the background so prompts are not held up), `warn` (as shadow,
@@ -83,6 +87,8 @@ INVESTIGATION = 3                   # reads in one request that make it an inves
 VERDICT_WAIT = 15.0                 # warn: how long the end of an answer waits for its prompt's verdict
                                     # (under the Stop hook's 20 s timeout; the judge takes 5-12 s)
 VERDICT_STALE = 30.0                # ... never for a judge started longer ago than this
+RECENT = 3                          # on-goal prompts the judge sees, besides the goal
+FOLDER_FILES = 30                   # request-folder file names the judge sees
 BRIEF = re.compile(r"\b(just|only|one line|one-liner|briefly|in short|short answer|no explanation|"
                    r"s[oó]|apenas|numa linha|resumidamente)\b", re.I)
 PROPOSALS = re.compile(r"(next (step|level)|could also|if you want|want me to|shall i|should i|would you like|"
@@ -103,6 +109,13 @@ You judge whether a new user prompt continues a work session or starts a new obj
 - pivot: an outcome that is not needed to reach the goal, even when the topic is related.
   Example: goal "fix the access policy on table X", prompt "survey every access-control
   mechanism the platform offers" is a pivot: a broader survey, a different deliverable.
+- Judge against GOAL and DONE_WHEN. RECENT PROMPTS only show how the work has gone so far;
+  they never widen the goal.
+- Concrete things the prompt brings in -- a document, plan, milestone, system, person or
+  request -- that appear nowhere in the goal, the recent prompts or the folder's files point
+  to a pivot. Never invent a link between them and the goal to make it a continuation.
+- When DONE_WHEN is not stated the goal is only its title: be strict, and a prompt that
+  brings in new concrete things is a pivot.
 
 literal: one sentence with exactly what the prompt asks for, no more.
 targets: the concrete things the request is about, as written (table, file, folder, job,
@@ -114,10 +127,19 @@ SCHEMA = {"type": "object", "required": ["verdict", "literal", "targets", "reaso
     "reason": {"type": "string"}}}
 
 
+def config_path():
+    return os.environ.get("CWS_CONFIG") or os.path.join(HOME, ".config", "claude-worksessions", "config.env")
+
+
 def load_config():
     """KEY="value" lines from $CWS_CONFIG or ~/.config/claude-worksessions/config.env;
     environment variables win."""
-    path = os.environ.get("CWS_CONFIG") or os.path.join(HOME, ".config", "claude-worksessions", "config.env")
+    conf = read_config_file(config_path())
+    conf.update({k: v for k, v in os.environ.items() if k.startswith("CWS_")})
+    return conf
+
+
+def read_config_file(path):
     conf = {}
     try:
         with open(path) as fh:
@@ -133,7 +155,6 @@ def load_config():
                 conf[m.group(1)] = val.replace("${HOME}", HOME).replace("$HOME", HOME)
     except OSError:
         pass
-    conf.update({k: v for k, v in os.environ.items() if k.startswith("CWS_")})
     return conf
 
 
@@ -184,6 +205,23 @@ def read_json(path, default):
 def session_goal(sdir):
     meta = read_json(os.path.join(sdir, ".session.json"), {})
     return (meta.get("goal") or meta.get("name") or "").strip(), (meta.get("done_when") or "").strip()
+
+
+def folder_names(sdir):
+    """The request folder's visible files (top level, then one level down), for the judge."""
+    out = []
+    try:
+        for n in sorted(os.listdir(sdir)):
+            if n.startswith("."):
+                continue
+            p = os.path.join(sdir, n)
+            if os.path.isdir(p):
+                out += [n + "/" + m for m in sorted(os.listdir(p)) if not m.startswith(".")]
+            else:
+                out.append(n)
+    except OSError:
+        pass
+    return out[:FOLDER_FILES]
 
 
 def declared_paths(sdir):
@@ -367,10 +405,12 @@ def judge(job, cfg):
     profile, env, perr = judge_profile(cfg)
     if perr:
         return None, perr, 0
-    first = not job.get("literal")
-    msg = "GOAL: {}\nDONE_WHEN: {}\nCURRENT SCOPE: {}\nNEW PROMPT: {}\n{}".format(
+    first = not (job.get("recent") or job.get("literal"))
+    recent = "".join("\n- " + " ".join(p.split())[:300] for p in job.get("recent") or []) or \
+        " (none -- this is the first request)"
+    msg = "GOAL: {}\nDONE_WHEN: {}\nFILES IN THE REQUEST FOLDER: {}\nRECENT PROMPTS (oldest first):{}\nNEW PROMPT: {}\n{}".format(
         job.get("goal") or "(none)", job.get("done_when") or "(not stated)",
-        job.get("literal") or "(none -- this is the first request)", job["prompt"][:4000],
+        ", ".join(job.get("files") or []) or "(none)", recent, job["prompt"][:4000],
         "This is the session's first request: it defines the scope, so the verdict is continuation." if first else "")
     # The profile's settings are loaded (a gateway profile keeps its URL and token there) with every
     # hook switched off, so the judge never runs the guard or any other hook
@@ -427,11 +467,14 @@ def apply_verdict(sdir, job, cfg, ans, err, ms):
         if not err and current and not blocked:
             st["literal"] = ans.get("literal") or st.get("literal") or job["prompt"][:300]
             grow(st, ans.get("targets") or [], st.get("open", False))
+        if not pivot:                               # the judge's context: prompts that stayed on the goal
+            st["recent"] = ((st.get("recent") or []) + [job["prompt"][:300]])[-RECENT:]
         if cfg["mode"] == "warn" and pivot and current:
-            st.setdefault("notices", []).append(
-                "claude-guard: \"{}\" looks like a new objective, not part of this session's goal ({}). Goal: {}. "
-                "Consider claude-new for it, or claude-goal if the goal changed.".format(
-                    job["prompt"][:80], reason[:200], job.get("goal") or "(none)"))
+            text = ("claude-guard: \"{}\" looks like a new objective, not part of this session's goal ({}). Goal: {}. "
+                    "Consider claude-new for it, or claude-goal if the goal changed.".format(
+                        job["prompt"][:80], reason[:200], job.get("goal") or "(none)"))
+            st.setdefault("notices", []).append(text)
+            st["stop_notice"] = {"no": job["no"], "text": text}   # said again with the answer
     rec["judge_id"] = decision_id(job)
     if err:
         rec.update(decision="allow", type="ok", reason="judge failed, let through: " + err, judge_error=True)
@@ -462,7 +505,8 @@ def journal(sdir, job, cfg, ans, err, ms, blocked):
     entry = {"id": decision_id(job), "ts": now(), "folder": os.path.relpath(sdir, cfg["root"]),
              "session_id": job["sid"], "prompt_no": job["no"], "mode": cfg["mode"], "model": cfg["model"],
              "profile": judge_profile(cfg)[0], "judge_ms": ms, "goal": job.get("goal", ""),
-             "done_when": job.get("done_when", ""), "scope_before": job.get("literal", ""),
+             "done_when": job.get("done_when", ""),
+             "scope_before": "\n".join(job.get("recent") or []) or job.get("literal", ""),
              "prompt": job["prompt"][:4000], "enforced": blocked}
     if err:
         entry["error"] = err
@@ -549,7 +593,8 @@ def on_prompt(payload, cfg):
     with scope(sdir, sid) as st:
         no = st["prompt_no"] = int(st.get("prompt_no") or 0) + 1
         base["prompt_no"] = no
-        literal = st.get("literal") or ""
+        literal, recent = st.get("literal") or "", list(st.get("recent") or [])
+        st.pop("stop_notice", None)                 # a new request: the last one's pivot has been said
         if not trivial(prompt):                     # words that can name a repo: "claude-worksessions"
             st["words"] = sorted(set(st.get("words") or []) | set(WORDS.findall(prompt.lower())))[-400:]
         if FORCE.match(prompt):
@@ -569,7 +614,7 @@ def on_prompt(payload, cfg):
         if widen:
             log(sdir, dict(base, decision="allow", type="ok", widened=True, reason="asked to go deeper"))
     job = {"sid": sid, "no": no, "prompt": prompt, "goal": goal, "done_when": done_when, "literal": literal,
-           "names": names, "widen": widen}
+           "recent": recent, "files": folder_names(sdir), "names": names, "widen": widen}
     if cfg["mode"] in BACKGROUND:                  # decide in the background; never hold the prompt up
         try:
             subprocess.Popen([sys.executable, os.path.abspath(__file__), "judge", sdir, json.dumps(job)],
@@ -628,12 +673,32 @@ def on_tool(payload, cfg):
     if payload.get("agent_type"):
         base["agent_type"] = payload["agent_type"]
     pending = notices(sdir, sid, cfg)
-    if tool in WRITE_TOOLS:
-        learn(sdir, sid, resolve(tool_input.get(WRITE_TOOLS[tool]) or "", cwd), roots, base)
-        return show(pending, cfg)
-    key = hashlib.sha1((tool + json.dumps(tool_input, sort_keys=True)).encode()).hexdigest()[:12]
     goal = session_goal(sdir)[0]
     declared = declared_paths(sdir)
+    area_of = lambda st: {"paths": declared + (st.get("paths") or []),
+                          "words": set(st.get("words") or []) | set(WORDS.findall(goal.lower()))}
+    if tool in WRITE_TOOLS:
+        path = resolve(tool_input.get(WRITE_TOOLS[tool]) or "", cwd)
+        learn(sdir, sid, path, roots, base)
+        other = other_request(path, sdir, cfg["root"])
+        if not other:
+            return show(pending, cfg)
+        with scope(sdir, sid) as st:
+            turn = st.setdefault("turn", new_turn())
+            off = not st.get("open") and outside(path, st.get("targets") or [], area_of(st))
+            first = off and other not in turn.setdefault("elsewhere", [])
+            if first:
+                turn["elsewhere"].append(other)
+            base["prompt_no"] = st.get("prompt_no")
+        if not off:
+            return show(pending, cfg)
+        if first:
+            log(sdir, dict(base, decision="deny", type="depth", reason="writes in another request",
+                           reached=[path], elsewhere=[other]))
+            pending.append(elsewhere_notice(other, sdir, cfg["root"]))
+        return deny(cfg, "claude-guard: out of scope. {} is in another request's folder ({}), not this session's. "
+                         "Don't change it from here; say that it belongs there.".format(path, other), pending)
+    key = hashlib.sha1((tool + json.dumps(tool_input, sort_keys=True)).encode()).hexdigest()[:12]
     with scope(sdir, sid) as st:
         turn = st.setdefault("turn", new_turn())
         turn["reach"] = turn.get("reach", 0) + 1
@@ -641,12 +706,16 @@ def on_tool(payload, cfg):
         calls[key] = calls.get(key, 0) + 1
         repeats = calls[key]
         targets = st.get("targets") or []
-        area = {"paths": declared + (st.get("paths") or []),
-                "words": set(st.get("words") or []) | set(WORDS.findall(goal.lower()))}
+        area = area_of(st)
         idents = {i for i in reached(tool, tool_input, cfg["ignore"], cwd) if not safe(i, roots)}
         off = [] if st.get("open") else sorted(i for i in idents if outside(i, targets, area))
         new_off = [i for i in off if i not in turn.setdefault("outside", [])]
         turn["outside"] += new_off
+        # reads in another request's folder: said once per request folder, not once per file
+        others = {i: other_request(i, sdir, cfg["root"]) for i in new_off}
+        seen = turn.setdefault("elsewhere", [])
+        new_other = sorted({o for o in others.values() if o and o not in seen})
+        seen += new_other
         literal = st.get("literal") or ""
     base["prompt_no"] = st.get("prompt_no")
     if repeats >= LOOP_AFTER:                    # denied every time from then on, logged once
@@ -658,12 +727,29 @@ def on_tool(payload, cfg):
     if off:                                      # denied every time, logged once per identifier
         if new_off:
             log(sdir, dict(base, decision="deny", type="depth", reason="outside the request's scope",
-                           reached=new_off[:5], targets=targets[:20]))
-            pending.append("claude-guard: Claude is reading {}, outside this request.".format(", ".join(new_off[:3])))
+                           reached=new_off[:5], targets=targets[:20], **({"elsewhere": new_other} if new_other else {})))
+            plain = [i for i in new_off if not others[i]]
+            if plain:
+                pending.append("claude-guard: Claude is reading {}, outside this request.".format(", ".join(plain[:3])))
+            pending += [elsewhere_notice(o, sdir, cfg["root"]) for o in new_other]
         return deny(cfg, "claude-guard: out of scope. This request is: {} -- and {} is outside it (its folder, the "
                          "repos it works in, and what it names). Don't open it now; list it as a possible next "
                          "step.".format(literal or "(see the prompt)", ", ".join(off[:3])), pending)
     return show(pending, cfg)
+
+
+def other_request(ident, sdir, root):
+    """The other request folder a path is in, relative to the work root, or None."""
+    if not ident.startswith("/"):
+        return None
+    d = session_dir(ident, root)
+    return os.path.relpath(d, root) if d and os.path.realpath(d) != os.path.realpath(sdir) else None
+
+
+def elsewhere_notice(other, sdir, root):
+    return ("claude-guard: Claude is working in another request, {}, not this session's ({}). If that is "
+            "the work, carry on in a session there (claude-resume, or a new session in that folder).".format(
+                other, os.path.relpath(sdir, root)))
 
 
 def outside(ident, targets, area):
@@ -731,8 +817,11 @@ def on_stop(payload, cfg):
         asked = st.get("prompt") or ""
         turn = st.get("turn") or new_turn()
         no = st.get("prompt_no")
+        again = st.pop("stop_notice", None) if cfg["mode"] == "warn" else None
         if not payload.get("stop_hook_active"):
             st["turn"] = dict(turn, stopped=True)
+    if again and again.get("no") == no and again.get("text") not in pending:
+        pending.insert(0, again["text"])            # shown at a tool call, long scrolled away: say it again
     if turn.get("stopped") and not payload.get("stop_hook_active"):
         return show(pending, cfg)                       # nothing happened since the last stop
     text = payload.get("last_assistant_message") or ""
@@ -818,6 +907,44 @@ def report(args, cfg, out):
     return 0
 
 
+# --- the mode -------------------------------------------------------------------------------
+MODE_LINE = re.compile(r"^\s*CWS_GUARD_MODE=")
+
+
+def set_mode(args, cfg, out):
+    """claude-guard mode            the mode the hooks run in
+       claude-guard mode MODE       set it: CWS_GUARD_MODE in config.env (the hooks read it on every call)"""
+    env = (os.environ.get("CWS_GUARD_MODE") or "").strip().lower()
+    note = ("claude-guard: CWS_GUARD_MODE={} is set in the environment and wins over config.env\n".format(env)
+            if env else "")
+    if not args:
+        out.write("{}\n{}".format(cfg["mode"], note))
+        return 0
+    mode = args[0].strip().lower()
+    if mode not in MODES:
+        out.write("usage: claude-guard mode [{}]\n".format("|".join(MODES)))
+        return 1
+    path = os.path.realpath(config_path())          # often a link into the synced work root: keep it
+    try:
+        with open(path) as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        lines = []
+    was = settings(read_config_file(path))["mode"]
+    new = 'CWS_GUARD_MODE="{}"'.format(mode)
+    lines = [new if MODE_LINE.match(l) else l for l in lines] if any(MODE_LINE.match(l) for l in lines) \
+        else lines + [new]
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w") as fh:
+        fh.write("\n".join(lines) + "\n")
+    with contextlib.suppress(OSError):
+        os.chmod(tmp, os.stat(path).st_mode & 0o7777)
+    os.replace(tmp, path)
+    out.write("claude-guard: mode {} (was {})\n{}".format(mode, was, note if env != mode else ""))
+    return 0
+
+
 # --- entry point ------------------------------------------------------------------------------
 HOOKS = {"prompt": on_prompt, "tool": on_tool, "stop": on_stop}
 
@@ -831,6 +958,8 @@ def main(argv=None, stdin=None, stdout=None):
         return report(argv[1:], cfg, stdout)
     if cmd == "review":
         return review(argv[1:], cfg, stdout)
+    if cmd == "mode":
+        return set_mode(argv[1:], cfg, stdout)
     if cmd == "judge":                             # the background half of a shadow prompt check
         job = json.loads(argv[2])
         apply_verdict(argv[1], job, cfg, *judge(job, cfg))
@@ -838,7 +967,8 @@ def main(argv=None, stdin=None, stdout=None):
     if cmd not in HOOKS:
         print("usage: claude-guard prompt|tool|stop  (hooks, JSON on stdin)\n"
               "       claude-guard report [--days N] [PATH]\n"
-              "       claude-guard review [--days N] [--all] | review ID right|wrong [NOTE]", file=sys.stderr)
+              "       claude-guard review [--days N] [--all] | review ID right|wrong [NOTE]\n"
+              "       claude-guard mode [off|shadow|warn|enforce]", file=sys.stderr)
         return 0 if cmd in ("-h", "--help") else 1
     if os.environ.get(JUDGE_ENV) or cfg["mode"] == "off":
         return 0

@@ -364,12 +364,16 @@ claude -p
 ```
 GOAL: <goal or "(none)">
 DONE_WHEN: <done_when or "(not stated)">
-CURRENT SCOPE: <literal before this prompt, or "(none -- this is the first request)">
+FILES IN THE REQUEST FOLDER: <visible names, top level and one below, up to 30, or "(none)">
+RECENT PROMPTS (oldest first):
+- <the last 3 prompts not judged pivots, as typed, 300 chars each>   | " (none -- this is the first request)"
 NEW PROMPT: <prompt, first 4000 chars>
 <if first: "This is the session's first request: it defines the scope, so the verdict is continuation.">
 ```
 
-"First" means the session has no literal yet. The verdict is also forced to `continuation`
+"First" means the session has no recent prompt (and no literal) yet. A prompt joins the recent
+ones when its verdict comes back as anything but a pivot, so an accepted detour never becomes
+the yardstick for the next prompt. The verdict is also forced to `continuation`
 in code after the call, so a first prompt can never be a pivot.
 
 ### 7.3 Output schema
@@ -592,7 +596,7 @@ hook carries on.
   the folder's `.quality.jsonl`, so the two can be joined.
 - `enforced` is true only when the decision blocked the prompt (a pivot in enforce).
 - A failed call has `error` instead of `verdict`, `literal`, `targets` and `reason`.
-- `scope_before` is the literal the judge was shown as the current scope. `prompt` is kept up
+- `scope_before` is the recent prompts the judge was shown (one per line). `prompt` is kept up
   to the 4,000 characters the judge saw (the folder log keeps 200).
 
 ### Reviews — `<work root>/_audit/guard/reviews.jsonl`

@@ -186,11 +186,9 @@ stripped. A missing or corrupt file gives `("", "")`.
    "open": false,
    "extensions": 1,
    "notices": [],
-   "words": ["claude-worksessions", "installer", "orders"],
-   "paths": ["/users/me/repos/sales-etl"],
    "turn": {
     "reach": 4,
-    "outside": ["db.staging.orders_raw"],
+    "outside": ["/w/2026/09/29/23-00-00_plan/a.md"],
     "calls": {"3f9a1c0b2d4e": 1, "a01b2c3d4e5f": 3},
     "stopped": true
    }
@@ -204,13 +202,12 @@ stripped. A missing or corrupt file gives `("", "")`.
 | `prompt_no` | count of prompts seen in this session, trivial ones included | `on_prompt` |
 | `literal` | one-sentence literal scope of the current request | judge result (`apply_verdict`); the text after `force:` |
 | `targets` | sorted, lower-cased, de-duplicated names the session's requests are about. They **accumulate** over the session and are reset only by `claude-goal` | `grow` |
-| `open` | "go deeper" was asked: target checks are off until the next non-trivial prompt | `grow`, `force:` |
-| `words` | lower-cased words (`[a-z0-9][a-z0-9._-]{2,}`) from the session's non-trivial prompts, the last 400 kept. A git repo whose folder name is one of them, or in the goal, is in scope | `on_prompt` |
-| `paths` | git repos **learned** from writes (real path, lower-cased). Added to the paths declared in `.session.json` | `learn` |
+| `open` | "go deeper" was asked: the other-request check is off until the next non-trivial prompt | `grow`, `force:` |
 | `extensions` | extensions of the goal allowed so far; reset by `claude-goal` | `apply_verdict` |
 | `notices` | warn mode: messages for the user not shown yet (the judge answers after the prompt has gone) | `apply_verdict`; emptied by `notices()` |
 | `turn.reach` | reading-tool calls in the current request (safe ones included) | `on_tool` |
-| `turn.outside` | identifiers already flagged in this request (for de-duplication and the stop summary) | `on_tool` |
+| `turn.outside` | paths in other request folders already noted in this request (de-duplication, stop summary) | `on_tool` |
+| `turn.elsewhere` | the other request folders already named in a notice this request | `on_tool` |
 | `turn.calls` | `sha1(tool_name + json(tool_input, sort_keys))[:12]` → count | `on_tool` |
 | `turn.stopped` | a Stop was already evaluated for this request | `on_stop` |
 
@@ -505,36 +502,30 @@ target if **any** target `t` with `len(t) ≥ 3` satisfies one of:
 ```
 tool not in WRITE_TOOLS and not in REACH_TOOLS → return
 sdir none → return
-Write/Edit/MultiEdit/NotebookEdit → learn(...) and return None        # writes are never checked
+Write/Edit/MultiEdit/NotebookEdit in another request's folder, outside(...) and not st.open:
+    notice + log (deny, depth) once per folder per request; enforce denies every such write
 key = sha1(tool + json(tool_input, sort_keys))[:12]
 with scope(sdir, sid) as st:
     turn = st.turn (created if missing)
     turn.reach += 1
     turn.calls[key] += 1 → repeats
-    area = declared paths (.session.json) + learned paths; words from prompts + the goal
     idents = {i in reached(..., cwd) if not safe(i)}
-    off = sorted(i for i in idents if outside(i, targets, area))    unless st.open
+    off = paths in another request folder (other_request) and outside(i, targets, declared)   unless st.open
     new_off = off minus turn.outside;  turn.outside += new_off
 if repeats >= LOOP_AFTER (3):
     log loop once (at exactly 3); return deny(...)       # enforce denies every repeat from 3 on
-if off:
-    if new_off: log depth (reached[:5], targets[:20])     # logged once per identifier per request
-    return deny(...)                                      # enforce denies every out-of-scope call
+if new_off:
+    log depth (allow) once per path; notice once per other request folder   # never denied
 return None
 ```
 
-- **`outside(ident, targets, area)`.** A **path** is inside the request when it is under a
-  declared or learned path, in a git repo (`git_root`: the nearest folder with a `.git`) whose
-  folder name is in `area.words`, or on a target. Otherwise it is outside, **even with no
-  targets**: the request's folder is its scope. Anything that is not a path (a table name, a URL,
-  a search) can only be judged against targets, so with none it passes.
-- **`learn(sdir, sid, path, …)`.** A write to a file inside a git repo that isn't already a safe
-  place adds the repo to `paths` and logs an `allow`/`ok` tool record with `learned` (once per
-  repo). That's where the work is, so its reads are in scope from then on.
+- **Scope is the prompt check's call.** Calls are not judged against the prompt's targets: that
+  string matching was noisy, and in enforce a deny only made Claude reword the call (#43, #44).
+- **`outside(path, targets, declared)`.** A path in another request's folder is still part of
+  this request when it is under a folder the request declares (`.session.json` `paths`) or a
+  target names it.
 - Sub-agent calls (payloads with `agent_id`) are logged with `initiated_by: "subagent"` and
   `agent_type`.
-- An identifier is **logged** once per request, but in enforce **every** call that reaches it
-  is denied, so retrying a denied call does not get it through.
 - `deny(cfg, reason)` returns the deny JSON only in enforce, and `None` otherwise.
 
 ---
@@ -551,13 +542,13 @@ investigated = (turn.reach >= INVESTIGATION (3) or turn.outside) and not BRIEF i
 missing = investigated and not stop_hook_active
           and not (PROPOSALS in last 800 chars of last_assistant_message or it ends with "?")
 type = depth if turn.outside or missing else ok
-log stop (decision block if missing, reason lists "went outside the targets: …" and/or "no next-level proposals at the end")
+log stop (decision block if missing, reason lists "worked in another request: …" and/or "no next-level proposals at the end")
 enforce and missing → block JSON
 warn → systemMessage: pending notices, plus "the answer ended without proposing what to look at next" if missing
 ```
 
 **When next steps are expected:** after a real investigation, meaning 3 or more reading calls in
-the request, or any read outside it. Never when the prompt asked for brevity: `BRIEF` matches
+the request, or any read in another request's folder. Never when the prompt asked for brevity: `BRIEF` matches
 *just*, *only*, *one line*, *one-liner*, *briefly*, *in short*, *short answer*, *no explanation*,
 *só*, *apenas*, *numa linha*, *resumidamente*. `st.prompt` holds the request's text (first 300 chars).
 
@@ -758,7 +749,7 @@ scanned as before.
 
 | File | Covers |
 |---|---|
-| `tests/test_guard.py` (30 tests) | extraction and matching; `trivial`; folder resolution and settings; config parsing and the ignore list; shadow background spawn and spawn failure; `force:` and widening; enforce pivot blocking without widening the scope; first-prompt rule; late verdicts; each judge failure mode; rules file; no-op outside request folders; out-of-scope logging, de-duplication and denial; safe roots; loops (denied from the 3rd call, logged once); repeated out-of-scope calls denied every time, logged once; stop blocking once, shadow stop summary; `main` silence rules and fail-open; corrupt state; report output; judge profile (inherited, configured, missing → fail open); journal content and id join; review listing, `--all`, `--days`, prefix marking, errors; report agreement; journal write failure |
+| `tests/test_guard.py` (30 tests) | extraction and matching; `trivial`; folder resolution and settings; config parsing and the ignore list; shadow background spawn and spawn failure; `force:` and widening; enforce pivot blocking without widening the scope; first-prompt rule; late verdicts; each judge failure mode; rules file; no-op outside request folders; no target matching on calls; other-request reads noted once per folder, writes there denied in enforce, unless declared or named; safe roots; loops (denied from the 3rd call, logged once); stop blocking once, shadow stop summary; `main` silence rules and fail-open; corrupt state; report output; judge profile (inherited, configured, missing → fail open); journal content and id join; review listing, `--all`, `--days`, prefix marking, errors; report agreement; journal write failure |
 | `tests/test_shell.py` | `claude-new` goal/done flags, interactive prompts and the non-interactive default; `claude-goal` show, re-anchor, scope reset, log line, done-only change and the error outside a folder; `install.sh` registers the guard hooks with their matchers and timeouts and seeds `guard-rules.md`; `uninstall.sh` removes them |
 | `tests/test_quality.py` | `claude-hook-notfound` ignores Bash stdout and still catches stderr and MCP output |
 
@@ -780,7 +771,7 @@ at 99% (`claude-guard` 99%).
 | `CWS_GUARD_IGNORE_NAMES` | config | — | extra code-object first parts to ignore |
 | `_config/guard-rules.md` | work root | example | the judge's criteria |
 | `LOOP_AFTER` | code | 3 | identical calls per request that make a loop |
-| `INVESTIGATION` | code | 3 reading calls (or any read outside) | when proposals are expected |
+| `INVESTIGATION` | code | 3 reading calls (or any read in another request) | when proposals are expected |
 | `BRIEF` | code | just, only, one line, … | prompts that asked for brevity: no proposals expected |
 | `VERDICT_WAIT` / `VERDICT_STALE` | code | 15 s / 30 s | warn: how long the end of an answer waits for its prompt's verdict |
 | proposal window | code (`on_stop`) | last 800 chars | where proposals are looked for |

@@ -187,7 +187,7 @@ by side.
 | arrows icon (top) | sort by **last activity** (a resumed session moves up), **started** (newest first; resuming moves nothing) or **name**; remembered. By day always lists days newest first |
 | a session | open it in a tab (`claude-resume -p <profile> --resume <id>`), or go to its tab if open |
 | **+** on a request | a new session in that request's folder, with its profile |
-| **Active** (top) | the sessions a Claude process has open right now — in a tab here, a terminal or the Claude Code panel; they also read *active* with a pulse icon wherever they're listed |
+| **Active** (top) | the sessions a Claude process has open right now — in a tab here, a terminal or the Claude Code panel; they also read *active* with a pulse icon wherever they're listed. Under **Active**, a session opens onto its request's **Files** |
 | pin on a session or request | **Pin** it: a **Pinned** group at the top lists it whatever the grouping and sort (also right-click → Pin / Unpin). Pins live in `<work root>/_config/pinned.json`, so they follow the work root to other machines |
 | folder on a request | reveal it in the Explorer (right-click: in Finder, a new window, set task type) |
 | **Files** under a request | the request folder's files as a tree, with their count and size (**Files 4 · 21 KB**; each file's size on hover) — click to open (Markdown in the preview), right-click to reveal in Finder or copy the path |
@@ -344,8 +344,8 @@ objective. Three hooks, registered by `install.sh`, that do nothing until
 | hook | checks | enforce |
 |---|---|---|
 | `claude-guard prompt` (`UserPromptSubmit`) | a judge — a clean `claude -p` on `CWS_GUARD_MODEL` that sees only the goal, done-when, the request folder's file names, the session's last few prompts that stayed on the goal (as typed), the end of Claude's last answer and the new prompt — calls it *continuation*, *extension* or *pivot*, and gives its literal scope and targets. Paths, URLs and dotted names in the prompt are targets too | a pivot is blocked with the options: a new session, `claude-goal`, or resend with `force:`. Otherwise Claude is told the literal scope |
-| `claude-guard tool` (`PreToolUse`: reads, web, Bash, MCP) | does the call reach something outside the targets (the session folder, scratchpad and temp dirs are always fine)? The same call a third time in one request is a loop | the call is denied, and Claude is told to list it as a next step |
-| `claude-guard stop` (`Stop`) | after an investigation (three or more reads, or a read outside the request), unless the prompt asked for brevity, does the answer end by proposing the next level? | Claude is asked once to add them |
+| `claude-guard tool` (`PreToolUse`: reads, writes, web, Bash, MCP) | the same call a third time in one request (a loop), or work in another request's folder. Scope itself is the prompt check's call: calls are never judged against the prompt's targets | a loop or a write in another request is denied; a read there is only noted |
+| `claude-guard stop` (`Stop`) | after an investigation (three or more reads, or a read in another request's folder), unless the prompt asked for brevity, does the answer end by proposing the next level? | Claude is asked once to add them |
 
 - `force:` at the start of a prompt skips the checks for that request, logged as an override.
   (Not `!force` — a leading `!` runs a shell command in Claude Code.)
@@ -377,7 +377,7 @@ material for tuning `guard-rules.md`. `CWS_GUARD_PROFILE` picks the profile the 
 under.
 
 Counts by event, type and decision, the judge's median and p90 time and failures,
-overrides, and the latest pivots, out-of-scope calls and loops with their reasons — the
+overrides, and the latest pivots, work in other requests and loops with their reasons — the
 basis for tuning the rules and deciding when to switch to `enforce`.
 
 ## claude-md-email

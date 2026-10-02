@@ -255,7 +255,12 @@ class Sidebar {
     }
     if (el.kind === "files" || el.kind === "dir") {
       const files = M.shownFiles(el.request, this.filter);
-      return M.fileChildren(files, el.kind === "dir" ? el.prefix : "").map(x => ({ ...x, request: el.request, inPinned }));
+      return M.fileChildren(files, el.kind === "dir" ? el.prefix : "")
+        .map(x => ({ ...x, request: el.request, inPinned, inActive: !!el.inActive }));
+    }
+    // an active session opens onto its request's files, so the work in progress is one click away
+    if (el.kind === "session" && el.inActive && el.request && !el.request.root && (el.request.files || []).length) {
+      return [{ kind: "files", request: el.request, inActive: true }];
     }
     return [];
   }
@@ -376,7 +381,8 @@ class Sidebar {
       return it;
     }
     const s = el.session, r = el.request, open = this.isOpen(s.id), live = !!s.active;
-    const it = new vscode.TreeItem(M.sessionLabel(s), C.None);
+    const withFiles = el.inActive && r && !r.root && (r.files || []).length;
+    const it = new vscode.TreeItem(M.sessionLabel(s), withFiles ? (searching ? C.Expanded : C.Collapsed) : C.None);
     it.id = idp + "s|" + s.id + (el.showRequest ? "|flat" : "");
     const pinnedSes = M.isPinnedSession(this.pins, s.id);
     it.contextValue = (pinnedSes ? "session-pinned" : "session") + (s.deletable && s.deletable.ok ? "-del" : "");

@@ -88,7 +88,7 @@ JSON payload on stdin and answer with JSON on stdout (spec: https://code.claude.
 | Component | Responsibility |
 |---|---|
 | `bin/claude-guard prompt` | `UserPromptSubmit` hook. Classifies the prompt (override, trivial, go-deeper, needs a judge), keeps the request's *contract* (literal scope + targets) in `.scope.json`, runs the judge, and in enforce blocks pivots. |
-| `bin/claude-guard tool` | `PreToolUse` hook on reading tools (`Read`, `Glob`, `Grep`, `WebFetch`, `WebSearch`, `Bash`, `mcp__*`). Extracts what the call reaches, compares it with the targets, counts repeats. In enforce, denies out-of-scope calls and loops. |
+| `bin/claude-guard tool` | `PreToolUse` hook on reading and writing tools. Counts repeats, and notes work in another request's folder. In enforce, denies loops and writes in another request. |
 | `bin/claude-guard stop` | `Stop` hook. After an investigation, checks that the answer ends with next-level proposals. In enforce, asks once for them. |
 | `bin/claude-guard judge` | Internal. The background half of a prompt check in shadow mode. |
 | `bin/claude-guard report` | Summary of `.quality.jsonl` across the work root, for review and tuning, plus how many judge decisions were reviewed and which were wrong. |
@@ -143,19 +143,20 @@ sequenceDiagram
 
 ### 6.3 Tool call
 
-The call is hashed; a third identical call in one request is a **loop**. The identifiers the
-call reaches (paths, including `./` and `../` ones, URLs, three-part dotted names, search
-queries; not the text of commit or PR messages) are extracted. Those in safe places (the
-session folder, the scratchpad, temp dirs, Claude's config dirs) are ignored. A path is also in
-scope when it's in a folder the request declares (`--path`), in a git repo Claude has edited in
-this session, or in a git repo named in the goal or a prompt. The rest are matched loosely
-against the targets; a path matching nothing is outside even before the judge has answered. Unmatched ones are
-**out of scope**, logged once per request. In enforce, the call is denied with a reason that
-tells the agent to list it as a next step.
+The call is hashed; a third identical call in one request is a **loop**, denied in enforce. The
+paths the call reaches (including `./` and `../` ones; not the text of commit or PR messages)
+are checked for one fact: are they in **another request's folder**? A read there gives one
+notice per folder and is never blocked; a write there is denied in enforce. Neither applies when
+the request declares that folder (`--path`) or a prompt named it.
+
+Calls are **not** judged against the prompt's targets. That check (D14) string-matched every
+read, search and command against the targets: it flagged hundreds of calls, mostly wrongly, and
+in enforce a deny only made Claude reword the call until it matched. Scope is decided once, by
+the judge, on the prompt.
 
 ### 6.4 Stop
 
-If the request was an investigation (3 or more reading calls, or a read outside the request),
+If the request was an investigation (3 or more reading calls, or a read in another request's folder),
 the prompt didn't ask for brevity ("just the SQL"), and the last answer does not end with
 next-level proposals (a phrase such as "next step", "want me to", or a closing question),
 the stop is logged as `depth`. In enforce, Claude is asked once to add them.
@@ -183,7 +184,7 @@ work, so the audit trail stays next to the work it describes.
 | `off` | — | — | — | not called |
 | `shadow` | log only | log only | log only | background, no delay to the user |
 | `warn` | log; a one-line notice to the user on a pivot | log; a notice on a new out-of-scope read or a loop (the call goes ahead) | log; a notice when next steps are missing; waits up to 15 s for the prompt's verdict | background, no delay to the prompt; its verdict is shown with the answer (or at the next tool call or prompt) |
-| `enforce` | blocks pivots; injects the literal scope | denies out-of-scope calls and loops | asks once for proposals | synchronous, bounded by the timeout |
+| `enforce` | blocks pivots; injects the literal scope | denies loops and writes in another request | asks once for proposals | synchronous, bounded by the timeout |
 
 In every mode, `decision` in the log is what **enforce** does (or would do), so shadow
 data shows directly what enforcement would have blocked.
@@ -203,6 +204,7 @@ data shows directly what enforcement would have blocked.
 | D9 | `CWS_` prefix for config keys | `GUARD_MODE` | Matches every other claude-worksessions setting; environment overrides work the same way. |
 | D10 | A central judge journal in `_audit/guard/`, besides the per-folder log | per-folder log only | Reviewing and learning happen across sessions. One file holding the judge's full input and output makes each decision reviewable on its own and gives a labelled set for tuning the rules. `_audit/` is already the infrastructure folder for audit data. |
 | D13 | A `warn` mode between shadow and enforce | only shadow and enforce | Shadow is invisible, so trying the guard felt like nothing happened; enforce gets in the way. Warn shows what enforce would do, as a UI message Claude doesn't see, with no added delay |
+| D14 | No target matching on tool calls (2.21.0; replaces D5–D6 for calls) | match each call against the targets | It overlapped the judge and contradicted it: an on-goal search was denied because its words weren't the target's exact text, and the deny only made Claude reword the query. Per call, only facts are checked: loops and other request folders |
 | D14 | Extensions add up: past `CWS_GUARD_MAX_EXTENSIONS` (2) per goal, one more is a pivot; a different product or platform is a pivot, not an extension | judge each prompt alone | Seen in testing: "Databricks API" → Snowflake → SQL Server were three extensions, each allowed. Drift is a property of the sequence, not of one prompt |
 | D12 | The request's scope is its folder, plus repos it **edits**, repos it **names** and folders it **declares** | a global list of allowed folders; any git repo | Measured in shadow: most false flags were reads of the repo the work was in. Edits and names follow the work itself; a declaration covers the rest; a global list would let every session read everywhere |
 | D11 | Configurable judge profile (`CWS_GUARD_PROFILE`) | always the session's profile | Keeps the judge's authentication, endpoint and cost under the user's control, for example judging every session on one profile's subscription. The session's profile stays the default. |

@@ -228,39 +228,46 @@ def test_outside_a_session_folder_nothing_happens(guard, tmp_path):
 
 
 # --- tool ------------------------------------------------------------------------------------
-def test_tool_flags_calls_outside_the_targets(guard, sdir, monkeypatch):
+@pytest.fixture
+def other(home):
+    d = home / "work_sessions" / "2026" / "09" / "29" / "23-00-00_platform-plan"
+    d.mkdir(parents=True)
+    (d / ".session.json").write_text("{}")
+    return d
+
+
+def test_tool_never_judges_scope_by_targets(guard, sdir, monkeypatch):
     monkeypatch.setattr(guard.subprocess, "Popen", lambda *a, **k: None)
-    monkeypatch.setattr(guard, "TEMP_ROOTS", ("/tmp", "/private/tmp"))               # /tmp/x below is scratch
     prompt(guard, sdir, "list the sources of sales_db.core.orders_daily", cfg(guard))
-    sql = {"statement": "select * from sales_db.staging.orders"}
-    assert tool(guard, sdir, "mcp__sql__run", sql, cfg(guard)) is None        # shadow: log only
-    assert tool(guard, sdir, "mcp__sql__run", sql, cfg(guard)) is None        # logged once
-    r, = records(sdir)
-    assert r["type"] == "depth" and r["reached"] == ["sales_db.staging.orders"] and r["initiated_by"] == "agent"
-    out = tool(guard, sdir, "Read", {"file_path": "/etc/other.conf"}, cfg(guard, "enforce"))
-    reason = out["hookSpecificOutput"]["permissionDecisionReason"]
-    assert out["hookSpecificOutput"]["permissionDecision"] == "deny" and "/etc/other.conf" in reason
-    again = tool(guard, sdir, "Read", {"file_path": "/etc/other.conf"}, cfg(guard, "enforce"))
-    assert again["hookSpecificOutput"]["permissionDecision"] == "deny" and len(records(sdir)) == 2
-    for ok in ({"file_path": str(sdir / "notes.md")}, {"file_path": "/tmp/x"}):
-        assert tool(guard, sdir, "Read", ok, cfg(guard, "enforce")) is None
-    assert tool(guard, sdir, "Bash", {"command": "dbcli tables get sales_db.core.orders_daily"},
-                cfg(guard, "enforce")) is None
-    assert tool(guard, sdir, "Edit", {"file_path": "/etc/x"}, cfg(guard, "enforce")) is None     # not a read
-    assert state(sdir)["turn"]["reach"] == 7
-
-
-def test_tool_is_open_without_targets_or_after_go_deeper(guard, sdir, monkeypatch):
-    monkeypatch.setattr(guard.subprocess, "Popen", lambda *a, **k: None)
     c = cfg(guard, "enforce")
-    # no targets yet: a table or URL can't be judged and passes; a path outside the folder can
-    assert tool(guard, sdir, "Bash", {"command": "dbcli get other_db.x.y"}, c) is None
-    assert tool(guard, sdir, "WebFetch", {"url": "https://example.com/x"}, c) is None
-    assert tool(guard, sdir, "Read", {"file_path": "/etc/a"}, c)["hookSpecificOutput"]["permissionDecision"] == "deny"
-    prompt(guard, sdir, "go deeper into sales_db.core lineage", cfg(guard))
-    assert tool(guard, sdir, "Read", {"file_path": "/etc/a"}, cfg(guard, "enforce")) is None
-    assert [r.get("widened") for r in records(sdir) if r["event"] == "prompt"] == [True]
+    for name, inp in (("mcp__sql__run", {"statement": "select * from sales_db.staging.orders"}),
+                      ("Read", {"file_path": "/etc/other.conf"}),
+                      ("WebSearch", {"query": "Databricks REST API reference documentation Azure"}),
+                      ("WebFetch", {"url": "https://example.com/x"}),
+                      ("Bash", {"command": "dbcli tables get other_db.core.orders_daily"}),
+                      ("Edit", {"file_path": "/etc/x"})):
+        assert tool(guard, sdir, name, inp, c) is None
+    assert [r for r in records(sdir) if r["event"] == "tool"] == []                 # nothing to log either
+    assert state(sdir)["turn"]["reach"] == 5 and state(sdir)["turn"]["outside"] == []
 
+def test_go_deeper_and_named_folders_open_another_request(guard, sdir, other, monkeypatch):
+    monkeypatch.setattr(guard.subprocess, "Popen", lambda *a, **k: None)
+    w = cfg(guard, "warn")
+    with guard.scope(str(sdir), "s1") as st:
+        st.update(prompt_no=1, turn=guard.new_turn())
+    assert "another request" in tool(guard, sdir, "Read", {"file_path": str(other / "a.md")}, w)["systemMessage"]
+    prompt(guard, sdir, "go deeper into sales_db.core lineage", cfg(guard))
+    assert tool(guard, sdir, "Read", {"file_path": str(other / "b.md")}, w) is None
+    assert [r.get("widened") for r in records(sdir) if r["event"] == "prompt"] == [True]
+    # declared with claude-goal --path: part of this request
+    (sdir / ".session.json").write_text(json.dumps({"name": "x", "paths": [str(other), 7, " "]}))
+    with guard.scope(str(sdir), "s1") as st:
+        st.update(open=False, turn=guard.new_turn())
+    assert tool(guard, sdir, "Read", {"file_path": str(other / "c.md")}, w) is None
+    assert tool(guard, sdir, "Write", {"file_path": str(other / "c.md")}, cfg(guard, "enforce")) is None
+    assert guard.declared_paths(str(sdir)) == [os.path.realpath(str(other)).lower()]
+    (sdir / ".session.json").write_text(json.dumps({"name": "x", "paths": "not a list"}))
+    assert guard.declared_paths(str(sdir)) == []
 
 def test_tool_catches_a_loop(guard, sdir):
     c = cfg(guard, "enforce")
@@ -293,24 +300,22 @@ def test_stop_asks_once_for_next_level_proposals(guard, sdir, monkeypatch):
         ("stop", "block", False), ("stop", "allow", True)]
 
 
-def test_stop_in_shadow_logs_and_lets_go(guard, sdir, monkeypatch):
+def test_stop_in_shadow_logs_and_lets_go(guard, sdir, other, monkeypatch):
     monkeypatch.setattr(guard.subprocess, "Popen", lambda *a, **k: None)
     c = cfg(guard)
     assert stop(guard, sdir, c, "hi") is None and records(sdir)[-1]["type"] == "ok"                 # no investigation
     prompt(guard, sdir, "list the sources of sales_db.core.orders_daily", c)
-    tool(guard, sdir, "Read", {"file_path": "/etc/x"}, c)
-    tool(guard, sdir, "Read", {"file_path": "/etc/y"}, c)
+    tool(guard, sdir, "Read", {"file_path": str(other / "x")}, c)
+    tool(guard, sdir, "Read", {"file_path": str(other / "y")}, c)
     assert stop(guard, sdir, c, "Done.") is None
     r = records(sdir)[-1]
-    assert r["type"] == "depth" and r["decision"] == "block" and r["outside"] == 2 and "/etc/x" in r["reason"]
+    assert r["type"] == "depth" and r["decision"] == "block" and r["outside"] == 2 and "another request" in r["reason"]
     prompt(guard, sdir, "and the columns of sales_db.core.orders_daily?", c)
     tool(guard, sdir, "Read", {"file_path": str(sdir / "a")}, c)
     tool(guard, sdir, "Read", {"file_path": str(sdir / "b")}, c)
     assert stop(guard, sdir, c, "Columns: a, b. Want me to check the lineage too?") is None
     assert records(sdir)[-1]["type"] == "ok"
 
-
-# --- main and report ---------------------------------------------------------------------------
 def test_main_is_quiet_and_fails_open(guard, sdir, monkeypatch, capsys):
     run = lambda argv, data: (guard.main(argv, io.StringIO(data), io.StringIO()))
     payload = json.dumps({"session_id": "s1", "cwd": str(sdir), "tool_name": "Bash", "tool_input": {"command": "ls"}})
@@ -444,16 +449,15 @@ def repo(tmp_path, name="proj"):
     return r
 
 
-def test_relative_paths_are_resolved(guard, sdir, tmp_path):
-    c = cfg(guard, "enforce")
-    (tmp_path / "elsewhere").mkdir()
-    esc = os.path.relpath(tmp_path / "elsewhere" / "x.md", sdir)
-    out = tool(guard, sdir, "Bash", {"command": "cat " + esc}, c)
-    assert out and str(tmp_path / "elsewhere" / "x.md").lower() in out["hookSpecificOutput"]["permissionDecisionReason"].lower()
-    assert tool(guard, sdir, "Bash", {"command": "cat ./notes.md ../" + sdir.name + "/a.md"}, c) is None   # still inside
-    assert tool(guard, sdir, "Glob", {"pattern": "*", "path": esc.rsplit("/", 1)[0]}, c) is not None
+def test_relative_paths_are_resolved(guard, sdir, other):
+    w = cfg(guard, "warn")
+    with guard.scope(str(sdir), "s1") as st:
+        st.update(prompt_no=1, turn=guard.new_turn())
+    esc = os.path.relpath(other / "x.md", sdir)
+    assert "another request" in tool(guard, sdir, "Bash", {"command": "cat " + esc}, w)["systemMessage"]
+    assert records(sdir)[-1]["reached"] == [str(other / "x.md")]
+    assert tool(guard, sdir, "Bash", {"command": "cat ./notes.md ../" + sdir.name + "/a.md"}, w) is None   # inside
     assert guard.resolve("~/x", "/w") == os.path.expanduser("~/x") and guard.resolve("a/../b", "/w") == "/w/b"
-
 
 def test_messages_in_commands_are_not_reached(guard, sdir, tmp_path):
     c = cfg(guard, "enforce")
@@ -464,59 +468,16 @@ def test_messages_in_commands_are_not_reached(guard, sdir, tmp_path):
     assert guard.anchors("python3 -c 'import importlib.machinery.sourcefileloader'") == set()
 
 
-def test_editing_a_repo_puts_it_in_scope(guard, sdir, tmp_path):
-    c = cfg(guard, "enforce")
-    r = repo(tmp_path)
-    assert tool(guard, sdir, "Read", {"file_path": str(r / "src" / "a.py")}, c) is not None    # not yet
-    assert tool(guard, sdir, "Edit", {"file_path": str(r / "src" / "a.py")}, c) is None
-    assert tool(guard, sdir, "Read", {"file_path": str(r / "README.md")}, c) is None           # now in scope
-    assert tool(guard, sdir, "Bash", {"command": "ls " + str(r / "src")}, c) is None
-    assert tool(guard, sdir, "Write", {"file_path": str(r / "b.py")}, c) is None               # learned once
-    assert tool(guard, sdir, "Write", {"file_path": str(sdir / "notes.md")}, c) is None        # own folder: nothing
-    assert tool(guard, sdir, "Write", {"file_path": str(tmp_path / "loose.txt")}, c) is None   # no repo: nothing
-    assert tool(guard, sdir, "NotebookEdit", {}, c) is None
-    learned = [x for x in records(sdir) if x.get("learned")]
-    assert len(learned) == 1 and learned[0]["learned"] == str(r) and learned[0]["decision"] == "allow"
-    assert state(sdir)["paths"] == [os.path.realpath(str(r)).lower()]
-    assert tool(guard, sdir, "Read", {"file_path": str(tmp_path / "Repos" / "other" / "x")}, c) is not None
-
-
-def test_a_named_repo_is_in_scope(guard, sdir, tmp_path, monkeypatch):
-    monkeypatch.setattr(guard.subprocess, "Popen", lambda *a, **k: None)
-    c = cfg(guard, "enforce")
-    r = repo(tmp_path, "claude-worksessions")
-    assert tool(guard, sdir, "Read", {"file_path": str(r / "src" / "a.py")}, c) is not None
-    prompt(guard, sdir, "fix the installer in claude-worksessions", cfg(guard))
-    assert "claude-worksessions" in state(sdir)["words"]
-    assert tool(guard, sdir, "Read", {"file_path": str(r / "src" / "a.py")}, c) is None
-    # named in the goal works too
-    other = repo(tmp_path, "sales-etl")
-    (sdir / ".session.json").write_text(json.dumps({"name": "x", "goal": "speed up the sales-etl job"}))
-    assert tool(guard, sdir, "Read", {"file_path": str(other / "src" / "job.py")}, c) is None
-
-
-def test_declared_paths_are_in_scope(guard, sdir, tmp_path):
-    c = cfg(guard, "enforce")
-    d = tmp_path / "shared-docs"
-    d.mkdir()
-    assert tool(guard, sdir, "Read", {"file_path": str(d / "a.md")}, c) is not None
-    (sdir / ".session.json").write_text(json.dumps({"name": "x", "paths": [str(d), 7, " "]}))
-    assert tool(guard, sdir, "Read", {"file_path": str(d / "b.md")}, c) is None
-    assert guard.declared_paths(str(sdir)) == [os.path.realpath(str(d)).lower()]
-    (sdir / ".session.json").write_text(json.dumps({"name": "x", "paths": "not a list"}))
-    assert guard.declared_paths(str(sdir)) == []
-
-
 def test_subagent_calls_are_labelled(guard, sdir):
-    guard.on_tool({"session_id": "s1", "cwd": str(sdir), "tool_name": "Read", "tool_input": {"file_path": "/etc/q"},
-                   "agent_id": "a1", "agent_type": "Explore"}, cfg(guard))
+    c = cfg(guard)
+    for _ in range(guard.LOOP_AFTER):
+        guard.on_tool({"session_id": "s1", "cwd": str(sdir), "tool_name": "Read", "tool_input": {"file_path": "/etc/q"},
+                       "agent_id": "a1", "agent_type": "Explore"}, c)
     r = records(sdir)[-1]
-    assert (r["initiated_by"], r["agent_type"], r["type"]) == ("subagent", "Explore", "depth")
-
+    assert (r["initiated_by"], r["agent_type"], r["type"]) == ("subagent", "Explore", "loop")
 
 def test_rules_say_questions_about_the_answer_continue(guard):
     assert "previous answer" in guard.DEFAULT_RULES
-    assert guard.git_root("/") is None
 
 
 # --- warn mode and drift ------------------------------------------------------------------
@@ -540,7 +501,7 @@ def test_drift_extensions_add_up(guard, sdir, monkeypatch):
     assert "Snowflake" in guard.DEFAULT_RULES and "different product" in guard.DEFAULT_RULES
 
 
-def test_warn_mode_tells_the_user_and_never_blocks(guard, sdir, monkeypatch):
+def test_warn_mode_tells_the_user_and_never_blocks(guard, sdir, other, monkeypatch):
     monkeypatch.setattr(guard.subprocess, "Popen", lambda *a, **k: None)
     w = cfg(guard, "warn")
     assert prompt(guard, sdir, "fix the row filter on sales_db.core.orders", w) is None   # judged in the background
@@ -556,9 +517,10 @@ def test_warn_mode_tells_the_user_and_never_blocks(guard, sdir, monkeypatch):
     assert "looks like a new objective" in out["systemMessage"] and "snowflake" in out["systemMessage"]
     assert tool(guard, sdir, "Read", {"file_path": str(sdir / "b")}, w) is None
     # out of scope and loops: shown, not denied, once
-    out = tool(guard, sdir, "Read", {"file_path": "/etc/elsewhere.md"}, w)
-    assert out == {"systemMessage": "claude-guard: Claude is reading /etc/elsewhere.md, outside this request."}
-    assert tool(guard, sdir, "Read", {"file_path": "/etc/elsewhere.md"}, w) is None
+    assert tool(guard, sdir, "Read", {"file_path": "/etc/elsewhere.md"}, w) is None       # not a scope question
+    out = tool(guard, sdir, "Read", {"file_path": str(other / "plan.md")}, w)
+    assert "working in another request, 2026/09/29/23-00-00_platform-plan" in out["systemMessage"]
+    assert tool(guard, sdir, "Read", {"file_path": str(other / "plan.md")}, w) is None
     for _ in range(2):
         tool(guard, sdir, "Bash", {"command": "ls"}, w)
     assert "same Bash call 3 times" in tool(guard, sdir, "Bash", {"command": "ls"}, w)["systemMessage"]
@@ -592,7 +554,7 @@ def test_shadow_never_shows_anything(guard, sdir):
 
 
 # --- when next steps are expected; waiting for the verdict (warn) ---------------------------
-def test_next_steps_only_after_an_investigation_and_not_when_brief(guard, sdir, monkeypatch):
+def test_next_steps_only_after_an_investigation_and_not_when_brief(guard, sdir, other, monkeypatch):
     monkeypatch.setattr(guard.subprocess, "Popen", lambda *a, **k: None)
     c = cfg(guard, "enforce")
     ask = lambda text: prompt(guard, sdir, text, cfg(guard))
@@ -605,7 +567,7 @@ def test_next_steps_only_after_an_investigation_and_not_when_brief(guard, sdir, 
         tool(guard, sdir, "Read", {"file_path": str(sdir / f)}, c)
     assert stop(guard, sdir, c, "SELECT 1") is None                                # asked for brevity
     ask("what feeds the orders model?")
-    tool(guard, sdir, "Read", {"file_path": "/etc/elsewhere.md"}, cfg(guard))       # one read, but outside
+    tool(guard, sdir, "Read", {"file_path": str(other / "a.md")}, cfg(guard))       # one read, in another request
     assert stop(guard, sdir, c, "It's X.")["decision"] == "block"
     assert guard.BRIEF.search("responde só com o SQL") and not guard.BRIEF.search("explain the lineage")
 
@@ -712,10 +674,7 @@ def test_warn_pivot_is_repeated_at_the_end_of_the_answer(guard, sdir, monkeypatc
 
 
 # --- work in another request's folder: one notice per folder (#37) ----------------------------
-def test_reads_and_writes_in_another_request_are_named_once(guard, sdir, home, monkeypatch):
-    other = home / "work_sessions" / "2026" / "09" / "29" / "23-00-00_platform-plan"
-    other.mkdir(parents=True)
-    (other / ".session.json").write_text("{}")
+def test_reads_and_writes_in_another_request_are_named_once(guard, sdir, home, other, monkeypatch):
     w = cfg(guard, "warn")
     with guard.scope(str(sdir), "s1") as st:
         st.update(prompt_no=1, turn=guard.new_turn())
@@ -723,8 +682,7 @@ def test_reads_and_writes_in_another_request_are_named_once(guard, sdir, home, m
     assert "working in another request, 2026/09/29/23-00-00_platform-plan" in out
     assert "not this session's (2026/09/26/10-00-00_access-policy)" in out and "reading" not in out
     assert tool(guard, sdir, "Read", {"file_path": str(other / "handoff.md")}, w) is None
-    out = tool(guard, sdir, "Bash", {"command": "cat {} /etc/hosts".format(other / "v2.md")}, w)["systemMessage"]
-    assert out == "claude-guard: Claude is reading /etc/hosts, outside this request."
+    assert tool(guard, sdir, "Bash", {"command": "cat {} /etc/hosts".format(other / "v2.md")}, w) is None
     assert records(sdir)[0]["elsewhere"] == ["2026/09/29/23-00-00_platform-plan"]
     assert tool(guard, sdir, "Write", {"file_path": str(other / "plan.md")}, w) is None      # said already
     # a new request: said again, for a write too; enforce denies it

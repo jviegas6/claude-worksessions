@@ -6,8 +6,8 @@ by install.sh in each profile's settings.json, plus a report for reviewing what 
                             goal, a wider version of it, or a new objective (pivot)?
                             Writes the request's contract -- literal scope and targets -- to
                             .scope.json in the session folder
-    claude-guard tool       PreToolUse (reads, web, Bash, MCP): does the call stay on the
-                            contract's targets, and is it not the same call again and again?
+    claude-guard tool       PreToolUse: is the call the same one again and again, or work in
+                            another request's folder? (Scope itself is the prompt check's call.)
     claude-guard stop       Stop: after an investigation, does the answer end by proposing
                             the next level instead of having done it?
     claude-guard report [--days N] [PATH]
@@ -29,8 +29,8 @@ _config/guard-rules.md.
 
 CWS_GUARD_MODE decides what happens: `off`, `shadow` (decide and log to .quality.jsonl,
 never block; the judge runs in the background so prompts are not held up), `warn` (as shadow,
-and show the user a one-line notice where enforce would act) or `enforce` (block pivots and
-out-of-scope calls, ask once for next-level proposals). Extensions of the goal add up: past
+and show the user a one-line notice where enforce would act) or `enforce` (block pivots, loops
+and writes in another request's folder, ask once for next-level proposals). Extensions of the goal add up: past
 CWS_GUARD_MAX_EXTENSIONS (2) in a session, one more counts as a new objective. Everything fails
 open: an error or a slow judge lets the action through and is logged.
 
@@ -81,7 +81,6 @@ FILE_EXT = {"py", "md", "json", "jsonl", "txt", "csv", "yml", "yaml", "sh", "zsh
             "toml", "ts", "js", "tsx", "ipynb", "env", "xml", "png", "pdf", "zip", "tar"}
 TEMP_ROOTS = ("/tmp", "/private/tmp")      # scratch space, besides the system temp dir
 REACH_TOOLS = re.compile(r"^(Read|Glob|Grep|WebFetch|WebSearch|Bash|mcp__.*)$")
-WORDS = re.compile(r"[a-z0-9][a-z0-9._-]{2,}")
 LOOP_AFTER = 3                      # the same call this many times in one request is a loop
 INVESTIGATION = 3                   # reads in one request that make it an investigation (next steps expected)
 VERDICT_WAIT = 15.0                 # warn: how long the end of an answer waits for its prompt's verdict
@@ -254,16 +253,6 @@ def declared_paths(sdir):
     return [os.path.realpath(os.path.expanduser(p)).lower() for p in paths if isinstance(p, str) and p.strip()]
 
 
-def git_root(path):
-    """The git repository a path is in (the nearest folder with a .git), or None."""
-    d = path if os.path.isdir(path) else os.path.dirname(path)
-    while d and d != os.path.dirname(d):
-        if os.path.exists(os.path.join(d, ".git")):
-            return d
-        d = os.path.dirname(d)
-    return None
-
-
 @contextlib.contextmanager
 def scope(sdir, sid):
     """This session's state in .scope.json, locked for the read-modify-write; saved on exit.
@@ -318,7 +307,7 @@ def anchors(text, ignore=CODE_NAMES):
             out.add(m.lower())
     for p in PATH.findall(text):
         if len(p) > 2:
-            out.add(os.path.expanduser(p).rstrip("/.,;:"))        # paths keep their case: git_root needs it
+            out.add(os.path.expanduser(p).rstrip("/.,;:"))        # paths keep their case
     return out
 
 
@@ -621,8 +610,6 @@ def on_prompt(payload, cfg):
         literal, recent = st.get("literal") or "", list(st.get("recent") or [])
         last_answer = st.get("last_answer") or ""
         st.pop("stop_notice", None)                 # a new request: the last one's pivot has been said
-        if not trivial(prompt):                     # words that can name a repo: "claude-worksessions"
-            st["words"] = sorted(set(st.get("words") or []) | set(WORDS.findall(prompt.lower())))[-400:]
         if FORCE.match(prompt):
             st.update(open=True, turn=new_turn(), literal=FORCE.sub("", prompt)[:300], prompt=prompt[:300])
             log(sdir, dict(base, decision="allow", type="ok", override=True, reason="force: prefix"))
@@ -700,19 +687,17 @@ def on_tool(payload, cfg):
     if payload.get("agent_type"):
         base["agent_type"] = payload["agent_type"]
     pending = notices(sdir, sid, cfg)
-    goal = session_goal(sdir)[0]
+    # Scope is the judge's call, on the prompt. Calls are only checked for facts, not readings:
+    # work in another request's folder (a write is denied in enforce, a read only noted) and loops
     declared = declared_paths(sdir)
-    area_of = lambda st: {"paths": declared + (st.get("paths") or []),
-                          "words": set(st.get("words") or []) | set(WORDS.findall(goal.lower()))}
     if tool in WRITE_TOOLS:
         path = resolve(tool_input.get(WRITE_TOOLS[tool]) or "", cwd)
-        learn(sdir, sid, path, roots, base)
         other = other_request(path, sdir, cfg["root"])
         if not other:
             return show(pending, cfg)
         with scope(sdir, sid) as st:
             turn = st.setdefault("turn", new_turn())
-            off = not st.get("open") and outside(path, st.get("targets") or [], area_of(st))
+            off = not st.get("open") and outside(path, st.get("targets") or [], declared)
             first = off and other not in turn.setdefault("elsewhere", [])
             if first:
                 turn["elsewhere"].append(other)
@@ -733,17 +718,14 @@ def on_tool(payload, cfg):
         calls[key] = calls.get(key, 0) + 1
         repeats = calls[key]
         targets = st.get("targets") or []
-        area = area_of(st)
         idents = {i for i in reached(tool, tool_input, cfg["ignore"], cwd) if not safe(i, roots)}
-        off = [] if st.get("open") else sorted(i for i in idents if outside(i, targets, area))
+        others = {i: other_request(i, sdir, cfg["root"]) for i in idents}
+        off = [] if st.get("open") else sorted(i for i, o in others.items() if o and outside(i, targets, declared))
         new_off = [i for i in off if i not in turn.setdefault("outside", [])]
         turn["outside"] += new_off
-        # reads in another request's folder: said once per request folder, not once per file
-        others = {i: other_request(i, sdir, cfg["root"]) for i in new_off}
-        seen = turn.setdefault("elsewhere", [])
-        new_other = sorted({o for o in others.values() if o and o not in seen})
+        seen = turn.setdefault("elsewhere", [])     # said once per request folder, not once per file
+        new_other = sorted({others[i] for i in new_off} - set(seen))
         seen += new_other
-        literal = st.get("literal") or ""
     base["prompt_no"] = st.get("prompt_no")
     if repeats >= LOOP_AFTER:                    # denied every time from then on, logged once
         if repeats == LOOP_AFTER:
@@ -751,17 +733,10 @@ def on_tool(payload, cfg):
             pending.append("claude-guard: Claude ran the same {} call {} times in this request.".format(tool, repeats))
         return deny(cfg, "claude-guard: this is the same {} call {} times in this request. Change approach or ask "
                          "the user instead of repeating it.".format(tool, repeats), pending)
-    if off:                                      # denied every time, logged once per identifier
-        if new_off:
-            log(sdir, dict(base, decision="deny", type="depth", reason="outside the request's scope",
-                           reached=new_off[:5], targets=targets[:20], **({"elsewhere": new_other} if new_other else {})))
-            plain = [i for i in new_off if not others[i]]
-            if plain:
-                pending.append("claude-guard: Claude is reading {}, outside this request.".format(", ".join(plain[:3])))
-            pending += [elsewhere_notice(o, sdir, cfg["root"]) for o in new_other]
-        return deny(cfg, "claude-guard: out of scope. This request is: {} -- and {} is outside it (its folder, the "
-                         "repos it works in, and what it names). Don't open it now; list it as a possible next "
-                         "step.".format(literal or "(see the prompt)", ", ".join(off[:3])), pending)
+    if new_off:                                  # logged and said once per identifier; never denied
+        log(sdir, dict(base, decision="allow", type="depth", reason="reads in another request",
+                       reached=new_off[:5], elsewhere=new_other))
+        pending += [elsewhere_notice(o, sdir, cfg["root"]) for o in new_other]
     return show(pending, cfg)
 
 
@@ -779,35 +754,13 @@ def elsewhere_notice(other, sdir, root):
                 other, os.path.relpath(sdir, root)))
 
 
-def outside(ident, targets, area):
-    """Is what a call reaches outside the request? A path is inside when it's under a declared or
-    learned folder, in a git repo the goal or a prompt names, or on a target. Anything else --
-    a table, a URL, a search -- can only be judged against targets, so with none it passes."""
-    if ident.startswith("/"):
-        low = os.path.realpath(ident).lower()
-        if any(low == p or low.startswith(p + "/") for p in area["paths"]):
-            return False
-        repo = git_root(ident)
-        if repo and os.path.basename(repo).lower() in area["words"]:
-            return False
-        return not (targets and matches(ident, targets))
-    return bool(targets) and not matches(ident, targets)
-
-
-def learn(sdir, sid, path, roots, base):
-    """A write inside a git repo puts that repo in the session's scope: that's where the work is."""
-    repo = git_root(path) if path else None
-    if not repo or safe(repo, roots):
-        return None
-    low = os.path.realpath(repo).lower()
-    with scope(sdir, sid) as st:
-        paths = st.setdefault("paths", [])
-        if low in paths:
-            return None
-        paths.append(low)
-        base["prompt_no"] = st.get("prompt_no")
-    log(sdir, dict(base, decision="allow", type="ok", learned=repo, reason="edits a file in this repo: now in scope"))
-    return None
+def outside(path, targets, declared):
+    """Is a path in another request's folder not part of this request? It is part of it when the
+    request declares that folder (claude-goal --path) or a prompt named it (a target)."""
+    low = os.path.realpath(path).lower()
+    if any(low == p or low.startswith(p + "/") for p in declared):
+        return False
+    return not (targets and matches(path, targets))
 
 
 def await_verdict(sdir, sid):
@@ -859,7 +812,7 @@ def on_stop(payload, cfg):
     missing = investigated and not payload.get("stop_hook_active") and not (
         PROPOSALS.search(text[-800:]) or text.rstrip().endswith("?"))
     typ = "depth" if (turn.get("outside") or missing) else "ok"
-    reasons = (["went outside the targets: " + ", ".join(turn["outside"][:5])] if turn.get("outside") else []) + \
+    reasons = (["worked in another request: " + ", ".join(turn["outside"][:5])] if turn.get("outside") else []) + \
               (["no next-level proposals at the end"] if missing else [])
     log(sdir, {"event": "stop", "session_id": sid, "prompt_no": no, "initiated_by": "agent", "mode": cfg["mode"],
                "decision": "block" if missing else "allow", "type": typ, "reason": "; ".join(reasons) or "ok",

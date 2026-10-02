@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.21.0] — 2026-10-03
+
+- **claude-guard no longer judges tool calls against the prompt's targets** (#44, fixes #43).
+  That per-call check string-matched every read, search and command against what the prompt
+  named. It overlapped the judge and could contradict it: an on-goal search was denied
+  ("Error: … out of scope") because its words weren't the target's exact text, and the deny
+  only made Claude reword the query until it matched. Scope is now decided once, by the judge,
+  on the prompt. Per call, only facts are checked: **loops** (denied in enforce) and work in
+  **another request's folder** (a read gets one notice, never blocked; a write is denied in
+  enforce), unless the prompt named that folder or the request declares it (`--path`).
+  Learning repos from edits and from names in prompts is gone with it.
+- **VS Code: files under Active sessions** (#45). In the **Active** group a session opens onto
+  its request's **Files** (count, size, the same tree), so what a running session is producing
+  is one click away.
+
 ## [2.20.1] — 2026-09-30
 
 - **claude-guard: follow-ups to Claude's last answer are no longer pivots** (#40). The judge

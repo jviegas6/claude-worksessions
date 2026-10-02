@@ -31,8 +31,8 @@ bar shows it — **Guard: warn** — and a click changes it.
 |---|---|
 | `off` | nothing; the guard does nothing |
 | `shadow` | **nothing**. It decides everything and writes it to a log, but never blocks or slows you down |
-| `warn` | a one-line **notice** from `claude-guard` where enforce would act: a new objective, a read outside the request, a loop, missing next steps. Never blocks, never slows prompts; a verdict on your prompt appears with Claude's answer (the end of a short answer can take a few seconds more while the judge finishes) |
-| `enforce` | it blocks new objectives, stops Claude reading things outside the request, and asks Claude for next-step proposals. Prompts take a few seconds longer while the judge decides |
+| `warn` | a one-line **notice** from `claude-guard` where enforce would act: a new objective, work in another request's folder, a loop, missing next steps. Never blocks, never slows prompts; a verdict on your prompt appears with Claude's answer (the end of a short answer can take a few seconds more while the judge finishes) |
+| `enforce` | it blocks new objectives, loops and writes in another request's folder, and asks Claude for next-step proposals. Prompts take a few seconds longer while the judge decides |
 
 The mode is read on every hook call, so changing it takes effect on the next prompt with no
 restart. Start with **shadow** for a week or two, review it (§6), then switch to **enforce**.
@@ -104,28 +104,22 @@ These don't count as a new objective:
 
 The **first** prompt of a session is never blocked, because it defines the scope.
 
-### 3.2 Claude reaches outside the request
+### 3.2 Claude works in another request's folder
 
-You ask *"list the sources of the orders model"*, and Claude tries to open one of those
-sources to look inside. That read is denied, and Claude is told to list it as a possible next
-step instead. You see the denial in the transcript, and the answer ends with suggestions like
-"Next: open `db.staging.orders_raw` to check its freshness".
+Scope is decided on your prompt (3.1), not on each call: Claude's reads, searches, commands
+and tool calls are never judged against what the prompt named. The one thing checked per call
+is a fact: work in **another request's folder**.
 
-Always allowed:
-- files in the session folder, the scratchpad and temp folders, and Claude's own config;
-- anything named in your prompts (paths, URLs, `db.schema.table` names, snake_case names) or
-  identified by the judge as a target;
-- **a git repo Claude edits** in this session: from its first edit there, the whole repo is in scope;
-- **a git repo you name** in the goal or a prompt, by its folder name ("fix the installer in
-  claude-worksessions");
-- **folders you declare**: `claude-new --path ~/Repos/sales-etl`, or later
-  `claude-goal --path ~/Repos/sales-etl`.
+- **Reads** there give one notice per request folder ("Claude is working in another request,
+  2026/09/29/…, not this session's"). They are never blocked.
+- **Writes** there give the same notice, and in enforce they are denied.
 
-Everything else outside the session folder is out of scope, including `../` paths.
+Neither applies when your prompt named that folder, or the request declares it:
+`claude-new --path DIR`, or later `claude-goal --path DIR`.
 
 ### 3.3 You *want* it to go further
 
-Say so in the prompt, and the target check is lifted until your next request:
+Say so in the prompt, and the other-request notice is lifted until your next request:
 
 - English: *go deeper*, *dig into*, *deep dive*, *explore*, *in depth*, *expand on*
 - Portuguese: *aprofunda*, *mais a fundo*, *explora*
@@ -165,7 +159,7 @@ Inside a prompt:
 | Prefix / words | Effect |
 |---|---|
 | `force:` at the start | this prompt skips the guard (recorded as an override) |
-| *go deeper*, *aprofunda*, … | lifts the target check until the next request |
+| *go deeper*, *aprofunda*, … | lifts the other-request notice until the next request |
 
 > Use `force:`, not `!force`. In Claude Code a prompt starting with `!` runs as a shell command.
 
@@ -196,7 +190,7 @@ A line in `.quality.jsonl` looks like this:
  "reason": "a platform-wide survey is a different deliverable from fixing one policy", "judge_ms": 7056}
 ```
 
-- `type`: `ok`, `pivot` (new objective), `depth` (outside the request), `loop`.
+- `type`: `ok`, `pivot` (new objective), `depth` (work in another request, or no next steps), `loop`.
 - `decision`: what enforce does, or **would** do in shadow.
 - `initiated_by`: `user` for prompts and goal changes, `agent` for Claude's tool calls and answers.
 

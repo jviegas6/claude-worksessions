@@ -122,7 +122,7 @@ Work as you normally would with Claude. A few things happen on their own:
 - **When something turns out not to exist** (a table, a group, a resource), Claude is told to
   confirm the name and environment with you instead of hunting for alternatives.
 - **claude-guard**, when switched on, keeps the session on its goal. It flags a prompt that
-  starts a new objective, reads outside the request, and repeated calls. See the
+  starts a new objective, work in another request's folder, and repeated calls. See the
   [claude-guard user guide](guard/user-guide.md).
 
 When the work **changes kind** (what looked like a job error was really a permissions

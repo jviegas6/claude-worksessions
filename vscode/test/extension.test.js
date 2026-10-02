@@ -925,6 +925,18 @@ test("active sessions, file sizes, retro and the guard mode (#25 #26 #27 #38)", 
   assert.match(inRequest.tooltip.value, /— \*active\*/);
   assert.strictEqual(items.find(([c]) => c.kind === "request")[1].iconPath.id, "folder-active");
   assert.strictEqual(items.find(([c]) => c.session && c.session.id === "idle")[1].iconPath.id, "comment-discussion");
+  // an active session opens onto its request's files; elsewhere sessions stay leaves
+  assert.deepStrictEqual([inGroup.collapsibleState, inRequest.collapsibleState], [1, 0]);
+  const activeFiles = items.filter(([c]) => c.inActive && (c.kind === "files" || c.kind === "file"));
+  assert.deepStrictEqual(activeFiles.map(([c, it]) => c.kind === "files" ? it.description : c.rel),
+                         ["2 · 2 KB", "big.md", "notes.md"]);
+  const ids = items.map(([, it]) => it.id);
+  assert.strictEqual(new Set(ids).size, ids.length);                               // no clashes with the request's
+  // a root session or a request with no files: nothing to open
+  assert.deepStrictEqual(p.getChildren({ kind: "session", inActive: true, session: data.sessions[0],
+                                         request: { ...A, files: [] } }), []);
+  assert.deepStrictEqual(p.getChildren({ kind: "session", inActive: true, session: data.sessions[0],
+                                         request: { ...A, root: true } }), []);
   // groups: the first real group is still the one expanded
   assert.strictEqual(items.find(([c]) => c.kind === "group")[1].collapsibleState, 2);
 
@@ -932,11 +944,12 @@ test("active sessions, file sizes, retro and the guard mode (#25 #26 #27 #38)", 
   const files = items.find(([c]) => c.kind === "files")[1];
   assert.strictEqual(files.description, "2 · 2 KB");
   assert.match(items.find(([c]) => c.kind === "request")[1].tooltip.value, /files: 2 · 2 KB/);
-  assert.deepStrictEqual(items.filter(([c]) => c.kind === "file").map(([, it]) => it.tooltip),
+  assert.deepStrictEqual(items.filter(([c]) => c.kind === "file" && !c.inActive).map(([, it]) => it.tooltip),
                          ["big.md · 2 KB", "notes.md · 5 B"]);
   p.setFilter("notes.md");
   items = allItems(p);
-  assert.strictEqual(items.find(([c]) => c.kind === "files")[1].description, "1 of 2 · 5 B");
+  assert.deepStrictEqual(items.filter(([c]) => c.kind === "files").map(([, it]) => it.description),
+                         ["1 of 2 · 5 B", "1 of 2 · 5 B"]);                       // under Active and the request
   p.setFilter("");
 
   // retro: the period picks the arguments; each runs in a tab

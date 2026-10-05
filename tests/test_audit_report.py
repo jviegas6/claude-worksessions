@@ -819,3 +819,16 @@ def test_help_all_shows_advanced_options(mod, capsys):
         run(mod, "--help-all")
     out = capsys.readouterr().out
     assert "--propose" in out and "advanced -- used by the weekly-review skill" in out
+
+
+def test_apply_decisions_book_on(mod, tmp_path):
+    ledger = tmp_path / "ledger.json"
+    decisions = tmp_path / "d.json"
+    decisions.write_text(json.dumps({"book_on": [{"key": "sid-1", "date": "2026-10-04"}]}))
+    mod.apply_decisions(str(decisions), str(ledger))
+    assert json.loads(ledger.read_text())["book_on"] == {"sid-1": "2026-10-04"}
+    bad = tmp_path / "bad.json"
+    bad.write_text(json.dumps({"book_on": [{"key": "sid-2", "date": "04/10/2026"}]}))
+    with pytest.raises(ValueError):
+        mod.apply_decisions(str(bad), str(ledger))
+    assert "sid-2" not in json.loads(ledger.read_text())["book_on"]

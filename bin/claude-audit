@@ -320,6 +320,29 @@ def worked_seconds(events, turns, busy_cap, read_cap):
     return total
 
 
+def rebook(row, day):
+    """Count a session row on another day (e.g. work done on a bank holiday).
+
+    The hours are unchanged; only the date moves, by whole days, so the row lands in
+    the week of `day`. The title keeps the real date, so the detail view stays honest.
+    """
+    target = dt.date.fromisoformat(day)
+    worked_on = row["_start"].date()
+    shift = dt.timedelta(days=(target - worked_on).days)
+    if not shift:
+        return row
+    row["_start"] += shift
+    row["_end"] += shift
+    row["_stamps"] = [s + shift for s in row["_stamps"]]
+    row["date"] = row["_start"].strftime("%Y-%m-%d")
+    row["weekday"] = row["_start"].strftime("%a")
+    row["start"] = row["_start"].strftime("%Y-%m-%d %H:%M:%S")
+    row["end"] = row["_end"].strftime("%Y-%m-%d %H:%M:%S")
+    row["title"] = "{} [worked {}, booked on {}]".format(
+        row["title"], worked_on.strftime("%a %d %b"), target.strftime("%a %d %b"))
+    return row
+
+
 def split_by_day(session):
     """Split one session into per-calendar-day slices."""
     buckets = defaultdict(list)
@@ -694,7 +717,7 @@ MAIL_PREFIX = re.compile(r"^\s*((re|fw|fwd|aw|tr|sv|accepted|tentative|declined|
 
 def empty_ledger():
     return {"version": 1, "leave_task": "Leave", "default_task": "", "jira_prefixes": [], "ignore_tickets": [], "tasks": [],
-            "assign": {}, "reject": [], "subjects": {}, "weeks": {}}
+            "assign": {}, "reject": [], "subjects": {}, "weeks": {}, "book_on": {}}
 
 
 def load_ledger(path):
@@ -1417,6 +1440,10 @@ def apply_decisions(path, ledger_path):
     for a in decisions.get("assign") or []:
         ledger["assign"][a["key"]] = {"subject": a["subject"].strip(), "status": "confirmed", "at": stamp}
         counts["items linked"] += 1
+    for b in decisions.get("book_on") or []:
+        dt.date.fromisoformat(b["date"])  # a bad date fails here, before the ledger is written
+        ledger.setdefault("book_on", {})[b["key"]] = b["date"]
+        counts["sessions rebooked"] += 1
     for pair in decisions.get("reject") or []:
         pair = sorted(pair)
         if pair not in ledger["reject"]:
@@ -1606,6 +1633,7 @@ def gather(args, first, last, busy_cap, read_cap):
     """Everything that happened from first to last: day-split sessions plus activity."""
     rows = []
     skip = no_audit_ids()
+    book_on = load_ledger(args.ledger).get("book_on") or {}
     for path in transcript_files():
         if os.path.basename(path)[:-6] in skip:
             continue
@@ -1614,6 +1642,8 @@ def gather(args, first, last, busy_cap, read_cap):
             continue
         for part in split_by_day(session):
             row = build_row(part, busy_cap, read_cap, args.round_to * 60)
+            if row["session_id"] in book_on:
+                rebook(row, book_on[row["session_id"]])
             if first <= row["_start"].date() <= last:
                 rows.append(row)
     rows.sort(key=lambda r: r["_start"])

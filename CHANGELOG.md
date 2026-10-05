@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.22.0] — 2026-10-05
+
+- **claude-audit: book a session on another day** (`book_on`). Work done on a bank holiday
+  can count in the week before: a decisions file passed to `--apply` takes
+  `"book_on": [{"key": "<session id>", "date": "YYYY-MM-DD"}]`, and that session's rows move to
+  that date with their hours unchanged. The detail title keeps the real date
+  (`[worked Mon 05 Oct, booked on Sun 04 Oct]`). A malformed date is rejected before the
+  ledger is written.
+
 ## [2.21.0] — 2026-10-03
 
 - **claude-guard no longer judges tool calls against the prompt's targets** (#44, fixes #43).

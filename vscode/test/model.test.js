@@ -260,9 +260,9 @@ test("pins: stored in the work root, toggled, and shown first", () => {
   assert.deepStrictEqual(M.pinned(d, pins, { filter: "beta" }).sessions.map(x => x.session.id), ["s2"]);
 
   for (const g of M.GROUPINGS) {
-    const t = M.tree(d, g, { pins, now: 1000 });            // now: the topics window covers these old sessions
+    const t = M.tree(d, g, { pins });
     assert.strictEqual(t[0].kind, "pinned");
-    assert.strictEqual(t[1].kind, { recent: "session", topics: "topic" }[g] || "group");
+    assert.strictEqual(t[1].kind, g === "recent" ? "session" : "group");
   }
   assert.notStrictEqual(M.tree(d, "day", { pins: { sessions: {}, requests: {} } })[0].kind, "pinned");
   assert.notStrictEqual(M.tree(d, "day", { pins, filter: "nothing matches" })[0]?.kind, "pinned");
@@ -413,22 +413,24 @@ test("latestRetro: the newest _audit/quality/*_retro.md", () => {
 });
 
 // --- waiting: the Attention view's data ------------------------------------------------------
-test("attention lists flagged requests by group, longest wait first, ignoring search and filters", () => {
+test("sections: open topics split by who is waiting, ignoring search and filters", () => {
+  const now = Date.parse("2026-10-12T10:00:00Z") / 1000;
   const W1 = req("2026/10/12/10-00-00_w1", { ticket: "BTPA-1", waiting: { on: "me", who: "Ana", what: "the IP", since: "2026-10-12T08:00:00Z", where: "teams", link: "https://t/1" } });
-  const W2 = req("2026/10/11/10-00-00_w2", { waiting: { on: "me", who: "Bo", what: "", since: "2026-10-10T08:00:00Z" } });
-  const W3 = req("2026/10/12/11-00-00_w3", { waiting: { on: "other", who: "Cy", what: "a quote", since: "garbage" }, started: 50 });
-  const bad = req("2026/10/12/12-00-00_bad", { waiting: { on: "them" } });
-  const d = { work_root: ROOT, sessions: [ses("w1s", 100, W1), ses("root", 400, null)], requests: [W2, W3, bad] };
-  const a = M.attention(d, { filter: "nothing-matches", filters: { day: { preset: "today" } } });
-  assert.deepStrictEqual(a.me.map(r => r.name), ["10-00-00_w2", "10-00-00_w1"]);
-  assert.deepStrictEqual(a.other.map(r => r.name), ["11-00-00_w3"]);
+  const W2 = req("2026/10/11/10-00-00_w2", { waiting: { on: "me", who: "Bo", what: "", since: "2026-10-10T08:00:00Z" }, mtime: now - 86400 });
+  const W3 = req("2026/10/12/11-00-00_w3", { waiting: { on: "other", who: "Cy", what: "a quote", since: "garbage" }, started: 50, mtime: 50 });
+  const bad = req("2026/10/12/12-00-00_bad", { waiting: { on: "them" }, mtime: now - 60 });
+  const d = { work_root: ROOT, sessions: [ses("w1s", now - 7200, W1), ses("root", now, null)], requests: [W2, W3, bad] };
+  const a = M.sections(d, { filter: "nothing-matches", filters: { day: { preset: "today" } } });
+  assert.deepStrictEqual(a.me.map(t => t.key), ["BTPA-1", "10-00-00_w2"]);
+  assert.deepStrictEqual(a.other.map(t => t.key), ["11-00-00_w3"]);       // old, but flagged
+  assert.deepStrictEqual(a.none.map(t => t.key), ["12-00-00_bad"]);        // recent, no (valid) flag
   assert.strictEqual(M.waitingOf(bad), null);
   assert.strictEqual(M.waitingOf({ waiting: "me" }), null);
-  const now = Date.parse("2026-10-12T10:00:00Z") / 1000;
-  assert.strictEqual(M.waitingText(a.me[1], now), "Ana · the IP · 2h");
-  assert.strictEqual(M.waitingText(a.me[0], now), "Bo · 2d");
-  assert.strictEqual(M.waitingText(a.other[0], now), "Cy · a quote");
+  assert.strictEqual(M.waitingText(W1, now), "Ana · the IP · 2h");
+  assert.strictEqual(M.waitingText(W2, now), "Bo · 2d");
+  assert.strictEqual(M.waitingText(W3, now), "Cy · a quote");
   assert.strictEqual(M.waitingText(bad, now), "");
+  assert.deepStrictEqual(M.SECTION_LABELS, { me: "Waiting on me", other: "Waiting on someone", none: "In progress" });
   assert.deepStrictEqual(M.WAITING_LABELS, { me: "Needs my reply", other: "Waiting on others" });
 });
 
@@ -475,7 +477,7 @@ test("open topics: one per ticket, recent or flagged, what needs me first (#49)"
     ses("a", now - day, T1a), ses("b", now - 40 * day, T1b), ses("c", now - 2 * day, T2),
     ses("d", now - 20 * day, old), ses("e", now - 3 * day, none), ses("root", now, null),
   ] };
-  const t = M.tree(d, "topics", { now });
+  const t = M.topics(d, { now });
   assert.deepStrictEqual(t.map(x => [x.kind, x.key, x.requests.map(r => r.name), x.waiting.map(w => w.on)]), [
     ["topic", "BTPA-2", ["10-00-00_t2"], ["me"]],
     ["topic", "BTPA-1", ["10-00-00_t1a", "10-00-00_t1b"], ["other"]],
@@ -487,8 +489,7 @@ test("open topics: one per ticket, recent or flagged, what needs me first (#49)"
   assert.strictEqual(M.topicWaiting(t[1]), "waiting on Bo");
   assert.strictEqual(M.topicWaiting(t[2]), "");
   assert.strictEqual(M.topicWaiting({ waiting: [{ on: "me" }, { on: "other", who: "" }] }), "needs my reply · waiting on others");
-  assert.strictEqual(M.GROUPINGS[0], "topics");
-  assert.strictEqual(M.GROUPING_LABELS.topics, "Open topics");
+  assert.deepStrictEqual(M.GROUPINGS, ["day", "ticket", "recent"]);           // topics are a view, not a grouping
   // the search still narrows it
-  assert.deepStrictEqual(M.tree(d, "topics", { now, filter: "t2" }).map(x => x.key), ["BTPA-2"]);
+  assert.deepStrictEqual(M.topics(d, { now, filter: "t2" }).map(x => x.key), ["BTPA-2"]);
 });

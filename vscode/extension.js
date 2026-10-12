@@ -316,8 +316,8 @@ class Sidebar {
       return it;
     }
     if (el.kind === "topic") {
-      // a topic opens up when something is waiting on it, or it is the first; the rest fold
-      const it = new vscode.TreeItem(el.key, el.first || searching || el.waiting.length ? C.Expanded : C.Collapsed);
+      // a topic opens up when something is waiting on it; the rest fold
+      const it = new vscode.TreeItem(el.key, el.waiting.length ? C.Expanded : C.Collapsed);
       it.id = idp + "t|" + el.key;
       const n = el.requests.length, state = M.topicWaiting(el);
       it.description = [state, `${n} request${n > 1 ? "s" : ""}`, M.ago(el.mtime, now)].filter(Boolean).join(" · ");
@@ -345,16 +345,17 @@ class Sidebar {
       it.id = idp + "r|" + r.path;
       const pinnedReq = M.isPinnedRequest(this.pins, this.data.work_root, r);
       const w = M.waitingOf(r);
-      it.contextValue = r.root ? "root" : el.inAttention ? "request-waiting" + (w && w.link ? "-link" : "")
+      it.contextValue = r.root ? "root" : el.inAttention && w ? "request-waiting" + (w.link ? "-link" : "")
         : pinnedReq ? "request-pinned" : "request";
-      it.description = el.inAttention ? M.waitingText(r, now)
-        : [pinnedReq && !el.inPinned && "pinned", this.grouping !== "ticket" && this.grouping !== "topics" && r.ticket,
+      it.description = el.inAttention
+        ? [el.withTicket && r.ticket && r.ticket !== "Other" && r.ticket, M.waitingText(r, now) || M.ago(r.mtime, now)].filter(Boolean).join(" · ")
+        : [pinnedReq && !el.inPinned && "pinned", this.grouping !== "ticket" && r.ticket,
            r.task_type, r.profile, M.ago(r.mtime, now)].filter(Boolean).join(" · ");
       const live = r.sessions.some(s => this.isOpen(s.id) || s.active);
-      it.iconPath = el.inAttention
+      it.iconPath = el.inAttention && w
         ? new vscode.ThemeIcon(w.on === "me" ? "bell-dot" : "watch", new vscode.ThemeColor(w.on === "me" ? "charts.orange" : "charts.blue"))
         : new vscode.ThemeIcon(live ? "folder-active" : "folder");
-      // in the Attention view a click opens the request: its latest session, or a new one
+      // in Open topics a click opens the request: its latest session, or a new one
       if (el.inAttention) it.command = { command: "claudeWorksessions.openAttention", title: "Open", arguments: [el] };
       const md = new vscode.MarkdownString();
       md.appendMarkdown("**").appendText(r.name).appendMarkdown("**\n\n");
@@ -442,11 +443,12 @@ class Sidebar {
   }
 }
 
-// --- the Attention view: what needs my reply, and what I am waiting on ---------------------
-// Two groups of flagged requests (.session.json "waiting", set by claude-wait, claude-inbox or
-// Set waiting…). Rows are the Sidebar's request rows with inAttention, so they open, expand and
-// right-click the same way.
-class Attention {
+// --- the Open topics view: what waits on me, what waits on someone, what is in progress -----
+// A topic per ticket (a request with no ticket is its own), kept while it had activity in the
+// last TOPIC_DAYS days or carries a waiting flag (.session.json "waiting", set by claude-wait,
+// claude-inbox or Set waiting…). A topic with one request shows as that request; rows are the
+// Sidebar's rows with inAttention, so they open, expand and right-click the same way.
+class Topics {
   constructor(bar) {
     this.bar = bar;
     this.emitter = new vscode.EventEmitter();
@@ -454,35 +456,40 @@ class Attention {
     bar.emitter.event(() => this.emitter.fire());
   }
 
-  lists() { return M.attention(this.bar.data, this.bar.opts()); }
+  sections() { return M.sections(this.bar.data, this.bar.opts()); }
 
-  counts() { const a = this.lists(); return { me: a.me.length, other: a.other.length }; }
+  counts() { const s = this.sections(); return { me: s.me.length, other: s.other.length, none: s.none.length }; }
 
   getChildren(el) {
     if (!el) {
-      const a = this.lists();
-      return ["me", "other"].filter(k => a[k].length).map(k => ({ kind: "waiting", on: k, requests: a[k] }));
+      const s = this.sections();
+      return ["me", "other", "none"].filter(k => s[k].length).map(k => ({ kind: "section", on: k, topics: s[k] }));
     }
-    if (el.kind === "waiting") return el.requests.map(r => ({ kind: "request", request: r, inAttention: true }));
+    if (el.kind === "section") {
+      return el.topics.map(t => (t.requests.length === 1 ? { kind: "request", request: t.requests[0], inAttention: true, withTicket: true }
+                                                          : { ...t, inAttention: true }));
+    }
     return this.bar.getChildren(el).map(c => ({ ...c, inAttention: true }));
   }
 
   getTreeItem(el) {
-    if (el.kind === "waiting") {
-      const it = new vscode.TreeItem(M.WAITING_LABELS[el.on], vscode.TreeItemCollapsibleState.Expanded);
+    if (el.kind === "section") {
+      const it = new vscode.TreeItem(M.SECTION_LABELS[el.on], vscode.TreeItemCollapsibleState.Expanded);
       it.id = "w|" + el.on;
-      it.description = String(el.requests.length);
-      it.iconPath = new vscode.ThemeIcon(el.on === "me" ? "bell-dot" : "watch",
-                                         new vscode.ThemeColor(el.on === "me" ? "charts.orange" : "charts.blue"));
-      it.tooltip = el.on === "me" ? "Requests where someone is waiting for your reply — oldest first."
-                                  : "Requests where you are waiting for someone else — oldest first.";
+      it.description = String(el.topics.length);
+      it.iconPath = el.on === "me" ? new vscode.ThemeIcon("bell-dot", new vscode.ThemeColor("charts.orange"))
+        : el.on === "other" ? new vscode.ThemeIcon("watch", new vscode.ThemeColor("charts.blue"))
+        : new vscode.ThemeIcon("folder-library");
+      it.tooltip = { me: "Topics where someone is waiting for your reply.",
+                     other: "Topics where you are waiting for someone else.",
+                     none: `Topics with activity in the last ${M.TOPIC_DAYS} days and nobody waiting.` }[el.on];
       return it;
     }
     return this.bar.getTreeItem(el);
   }
 }
 
-// A click in Attention: the request's latest session, or a new one in its folder.
+// A click in Open topics: the request's latest session, or a new one in its folder.
 function openAttention(bar, el) {
   const r = el.request;
   if (r.sessions && r.sessions.length) return bar.open(r.sessions[0], r);
@@ -964,16 +971,16 @@ function activate(context) {
   bar.restore();
   const view = vscode.window.createTreeView("claudeWorksessions.sessions", { treeDataProvider: bar });
   const box = new SearchBox(bar, q => searchSessions(bar, q));
-  const attention = new Attention(bar);
+  const attention = new Topics(bar);
   const attentionView = vscode.window.createTreeView("claudeWorksessions.attention", { treeDataProvider: attention });
   const inboxDir = M.inboxDir(process.env, HOME);
   const attentionChanged = () => {
-    const { me, other } = attention.counts();
+    const { me, other, none } = attention.counts();
     const st = M.inboxState(inboxDir);
     const scanned = st && st.at ? ` · scanned ${st.at.slice(11) || st.at}${st.error ? " (failed)" : ""}` : "";
-    attentionView.description = `${me} for me · ${other} on others${scanned}`;
-    attentionView.message = me + other ? undefined
-      : "Nothing is waiting. claude-wait flags a request; claude-inbox scans Teams and mail for what needs a reply.";
+    attentionView.description = `${me} on me · ${other} on someone · ${none} in progress${scanned}`;
+    attentionView.message = me + other + none ? undefined
+      : `No open topic: nothing active in the last ${M.TOPIC_DAYS} days and nothing waiting. claude-wait flags a request; claude-inbox scans Teams and mail for what needs a reply.`;
   };
   bar.onChange = () => {
     attentionChanged();
@@ -1005,7 +1012,7 @@ function activate(context) {
     cmd("grouping", async () => {
       const pick = await vscode.window.showQuickPick(
         M.GROUPINGS.map(g => ({ label: M.GROUPING_LABELS[g], g, description: g === bar.grouping ? "current" : "" })),
-        { placeHolder: "Group sessions — Open topics: one per ticket, active in the last 14 days or waiting on someone" });
+        { placeHolder: "Group sessions" });
       if (!pick) return;
       bar.grouping = pick.g;
       context.globalState.update("grouping", pick.g);
@@ -1104,7 +1111,7 @@ function activate(context) {
     w.onDidCreate(soon); w.onDidDelete(soon);
     context.subscriptions.push(w);
   }
-  // claude-inbox ran (here, or on the hour): the Attention subtitle says when
+  // claude-inbox ran (here, or on the hour): the Open topics subtitle says when
   try { fs.mkdirSync(inboxDir, { recursive: true }); } catch {}
   const inboxWatch = vscode.workspace.createFileSystemWatcher(
     new vscode.RelativePattern(vscode.Uri.file(inboxDir), "state.json"));

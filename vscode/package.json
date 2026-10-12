@@ -33,7 +33,7 @@
       "claudeWorksessions": [
         {
           "id": "claudeWorksessions.attention",
-          "name": "Attention",
+          "name": "Open topics",
           "initialSize": 4
         },
         {

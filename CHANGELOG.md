@@ -2,26 +2,25 @@
 
 ## [2.23.0] — 2026-10-12
 
-- **Attention: what needs my reply, what I am waiting on** (#49). A request folder can carry a
-  `waiting` flag in `.session.json` — who the ball is with (`me` | `other`), who the other party
-  is, what for, since when, where (teams, mail, jira) and a link to the thread. The VS Code
-  sidebar gets an **Attention** view on top with two groups, **Needs my reply** and **Waiting on
-  others**, longest wait first; a click opens the request's latest session, or starts one; the
-  bell clears the flag, the link opens the thread; **Set waiting…** (right-click, also in the
-  palette) sets it by hand.
+- **Open topics: what waits on me, what waits on someone, what is in progress** (#49). A
+  request folder can carry a `waiting` flag in `.session.json` — who the ball is with (`me` |
+  `other`), who the other party is, what for, since when, where (teams, mail, jira) and a link
+  to the thread. The VS Code sidebar gets an **Open topics** view on top: one topic per ticket
+  (a request with no ticket is a topic of its own), kept while it had activity in the last 14
+  days or carries a flag, in three sections — **Waiting on me**, **Waiting on someone**,
+  **In progress**. A click opens the request's latest session, or starts one; the tick clears
+  the flag, the link opens the thread; **Set waiting…** (right-click, also in the palette)
+  sets it by hand.
 - **`claude-wait`** sets or clears the flag from a session folder (`claude-wait them "Ana"
   "confirm the IP" --where teams --link URL`; `claude-wait me`; `claude-wait none`), and the
   rendered `CLAUDE.md` asks Claude to run it when a session leaves the ball with someone.
 - **`claude-inbox`** scans Teams and mail for what needs a reply from you and puts each one on
-  the Attention list: a headless Claude (`claude -p`, the Microsoft 365 connector, read tools
-  only, no transcript) answers with the list; the script finds the newest request folder on the
+  the list: a headless Claude (`claude -p`, the Microsoft 365 connector, read tools only, no
+  transcript) answers with the messages; the script finds the newest request folder on the
   same ticket and flips it to *me*, or creates `YYYY/MM/DD/HH-mm-ss_reply-<who>-<subject>` with
   the flag. Nothing is drafted or sent. `--install` runs it every hour (launchd on macOS, cron
   elsewhere); `--dry-run`, `--hours N`, `--status`. New config keys: `CWS_INBOX_PROFILE`,
   `CWS_INBOX_HOURS`, `CWS_INBOX_TASK_TYPE`, `CWS_INBOX_MODEL`, `CWS_INBOX_TIMEOUT`.
-- **Open topics grouping** in the Sessions tree: one row per ticket (a request with no ticket is
-  a topic of its own), kept while it had activity in the last 14 days or carries a waiting flag;
-  what needs my reply first, then what waits on others, then by activity.
 - `claude-sessions --json`: each request carries its `waiting` flag (or `null`).
 
 ## [2.21.0] — 2026-10-03

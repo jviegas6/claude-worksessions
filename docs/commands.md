@@ -125,8 +125,8 @@ claude-wait none                                  settled: clear the flag
 
 Run anywhere inside the session folder. The flag lives in `.session.json` as
 `waiting: { on: "me" | "other", who, what, since, where, link }`; the previous flag goes to
-`waiting_history` with an `until`. The VS Code sidebar's **Attention** view lists flagged
-requests, longest wait first. The rendered `CLAUDE.md` asks Claude to run it when a session
+`waiting_history` with an `until`. The VS Code sidebar's **Open topics** view lists the topic under
+*Waiting on me* or *Waiting on someone*. The rendered `CLAUDE.md` asks Claude to run it when a session
 leaves the ball with someone, and to clear it when the matter is settled.
 
 ## claude-audit
@@ -199,7 +199,7 @@ by side.
 | in the sidebar | does |
 |---|---|
 | **+** (top) | new request: a tab running `claude-new`, with its usual prompts |
-| list icon (top) | group by **open topics** (one row per ticket — a request with no ticket is a topic of its own — kept while it had activity in the last 14 days or carries a waiting flag; what needs your reply first, then what waits on others; the row says *needs my reply · Ana · 2 requests · 1h* and opens up when something is waiting), by **day**, by **ticket**, or a flat list of **recent** sessions; remembered |
+| list icon (top) | group by **day**, by **ticket**, or a flat list of **recent** sessions; remembered |
 | funnel icon (top) | **filter** by **day** (today, yesterday, last 7 days, this or last week, this month, or a date — a session counts on every day it was active), **ticket** (tick one or more, or *(no ticket)*) and **artifacts** (with / without). Combines with the search box; remembered; shown in the subtitle. The icon fills while filters are on; *Clear filters* in the `…` menu |
 | arrows icon (top) | sort by **last activity** (a resumed session moves up), **started** (newest first; resuming moves nothing) or **name**; remembered. By day always lists days newest first |
 | a session | open it in a tab (`claude-resume -p <profile> --resume <id>`), or go to its tab if open |
@@ -208,7 +208,7 @@ by side.
 | pin on a session or request | **Pin** it: a **Pinned** group at the top lists it whatever the grouping and sort (also right-click → Pin / Unpin). Pins live in `<work root>/_config/pinned.json`, so they follow the work root to other machines |
 | folder on a request | reveal it in the Explorer (right-click: in Finder, a new window, set task type) |
 | **Files** under a request | the request folder's files as a tree, with their count and size (**Files 4 · 21 KB**; each file's size on hover) — click to open (Markdown in the preview), right-click to reveal in Finder or copy the path |
-| **Attention** (view on top) | the requests whose `.session.json` carries a `waiting` flag, in two groups: **Needs my reply** (bell) and **Waiting on others** (watch), longest wait first, each row *who · what · age* with the thread on hover. Click: the request's latest session in a tab, or a new session in its folder. Inline: clear the flag (tick), open the thread (link). Its `…` menu runs `claude-inbox`. Subtitle: *1 for me · 2 on others · scanned 14:00* |
+| **Open topics** (view on top) | one topic per ticket (a request with no ticket is a topic of its own), kept while it had activity in the last 14 days or carries a `waiting` flag, in three sections: **Waiting on me** (bell), **Waiting on someone** (watch) and **In progress**. A topic row reads *needs my reply · Ana · 2 requests · 1h* and opens onto its requests; a topic with one request shows as that request. Flagged rows read *who · what · age* with the thread on hover. Click a request: its latest session in a tab, or a new session in its folder. Inline: clear the flag (tick), open the thread (link). Its `…` menu runs `claude-inbox`. Subtitle: *1 on me · 2 on someone · 3 in progress · scanned 14:00* |
 | **Set waiting…** on a request or session | who the ball is with, who and what for — `claude-wait` from the sidebar |
 | **Guard:** in the status bar | `claude-guard`'s mode; click to change it (`claude-guard mode`). The panel's subtitle ends with it too (`· guard: warn`), and its `…` menu has *Guard mode: warn…* |
 
@@ -281,10 +281,10 @@ For each message the script then finds the newest request folder on the same tic
 was waiting on that person now needs your reply — or creates
 `YYYY/MM/DD/HH-mm-ss_reply-<who>-<subject>/` with a `.session.json` (ticket from the
 thread or `Other`, type `CWS_INBOX_TASK_TYPE`, goal "reply to … about …", the flag with the
-link to the thread). It shows under **Needs my reply**; a click starts a session in it.
+link to the thread). It shows under **Waiting on me**; a click starts a session in it.
 Messages already placed are remembered in `~/.local/share/claude-worksessions/inbox/seen.json`,
 so clearing a flag does not bring the same message back. `state.json` next to it holds the
-last run, shown in the Attention view's subtitle; `inbox.log` is the hourly run's output.
+last run, shown in the Open topics view's subtitle; `inbox.log` is the hourly run's output.
 
 ## claude-delete
 

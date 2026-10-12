@@ -6,9 +6,8 @@
 const fs = require("fs");
 const path = require("path");
 
-const GROUPINGS = ["topics", "day", "ticket", "recent"];
+const GROUPINGS = ["day", "ticket", "recent"];
 const GROUPING_LABELS = {
-  topics: "Open topics",
   day: "By day",
   ticket: "By ticket",
   recent: "Recent sessions",
@@ -330,7 +329,6 @@ function topicWaiting(t) {
 }
 
 function grouped(data, grouping, opts) {
-  if (grouping === "topics") return topics(data, opts);
   if (grouping === "recent") {
     const reqs = requests(data, opts);
     const reqOf = new Map();
@@ -512,17 +510,15 @@ const waitingOf = r => {
 };
 const sinceEpoch = w => { const t = Date.parse((w && w.since) || ""); return isNaN(t) ? undefined : t / 1000; };
 
-// The Attention view: every flagged request, the longest wait first: { me: [requests], other: [requests] }.
-// The search box and filters do not apply -- what is waiting is waiting.
-function attention(data, opts) {
-  const out = { me: [], other: [] };
-  for (const r of requests(data, { ...(opts || {}), showEmpty: true, filter: "", filters: null })) {
-    const w = waitingOf(r);
-    if (w && !r.root) out[w.on].push(r);
+// The Open topics view: the open topics in three sections -- what waits on me, what waits on
+// someone else, and the rest in progress -- { me: [topics], other: [topics], none: [topics] }.
+// The search box and filters do not apply: what is open is open.
+const SECTION_LABELS = { me: "Waiting on me", other: "Waiting on someone", none: "In progress" };
+function sections(data, opts) {
+  const out = { me: [], other: [], none: [] };
+  for (const t of topics(data, { ...(opts || {}), showEmpty: true, filter: "", filters: null })) {
+    out[t.waiting.some(w => w.on === "me") ? "me" : t.waiting.length ? "other" : "none"].push(t);
   }
-  const at = r => { const t = sinceEpoch(r.waiting); return t === undefined ? r.started || 0 : t; };
-  const by = (a, b) => at(a) - at(b);
-  out.me.sort(by); out.other.sort(by);
   return out;
 }
 
@@ -574,5 +570,5 @@ module.exports = { NO_TICKET, DAY_PRESETS, ARTIFACT_LABELS, dayRange, passes, fi
                    isPinnedSession, isPinnedRequest, pinned, matches, shownFiles, fileChildren, visible, requests, dayOf, tree,
                    sessionLabel, tabName, ago, matchPending, parseCsv, taskTypes, setTaskType,
                    readSkills, auditArgs, active, formatSize, latestRetro, retroArgs, GUARD_MODES, guardMode,
-                   WAITING_LABELS, waitingOf, attention, waitingText, setWaiting, inboxDir, inboxState,
+                   WAITING_LABELS, waitingOf, SECTION_LABELS, sections, waitingText, setWaiting, inboxDir, inboxState,
                    TOPIC_DAYS, topics, topicWaiting };

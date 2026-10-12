@@ -112,6 +112,23 @@ changes it itself when a session's subject clearly shifts, and says so. `--backf
 guesses from the session name — it prints what it would set, and only writes with
 `--apply`.
 
+## claude-wait
+
+```
+claude-wait                                       show who this request is waiting on
+claude-wait them "Ana" "confirm the new IP" --where teams --link URL
+                                                  I am waiting on Ana: "Waiting on others"
+claude-wait me "Ana" "the firewall change"        Ana is waiting on me: "Needs my reply"
+claude-wait me                                    the reply came: flip it, keeping who, where and link
+claude-wait none                                  settled: clear the flag
+```
+
+Run anywhere inside the session folder. The flag lives in `.session.json` as
+`waiting: { on: "me" | "other", who, what, since, where, link }`; the previous flag goes to
+`waiting_history` with an `until`. The VS Code sidebar's **Attention** view lists flagged
+requests, longest wait first. The rendered `CLAUDE.md` asks Claude to run it when a session
+leaves the ball with someone, and to clear it when the matter is settled.
+
 ## claude-audit
 
 ```
@@ -191,6 +208,8 @@ by side.
 | pin on a session or request | **Pin** it: a **Pinned** group at the top lists it whatever the grouping and sort (also right-click → Pin / Unpin). Pins live in `<work root>/_config/pinned.json`, so they follow the work root to other machines |
 | folder on a request | reveal it in the Explorer (right-click: in Finder, a new window, set task type) |
 | **Files** under a request | the request folder's files as a tree, with their count and size (**Files 4 · 21 KB**; each file's size on hover) — click to open (Markdown in the preview), right-click to reveal in Finder or copy the path |
+| **Attention** (view on top) | the requests whose `.session.json` carries a `waiting` flag, in two groups: **Needs my reply** (bell) and **Waiting on others** (watch), longest wait first, each row *who · what · age* with the thread on hover. Click: the request's latest session in a tab, or a new session in its folder. Inline: clear the flag (tick), open the thread (link). Its `…` menu runs `claude-inbox`. Subtitle: *1 for me · 2 on others · scanned 14:00* |
+| **Set waiting…** on a request or session | who the ball is with, who and what for — `claude-wait` from the sidebar |
 | **Guard:** in the status bar | `claude-guard`'s mode; click to change it (`claude-guard mode`). The panel's subtitle ends with it too (`· guard: warn`), and its `…` menu has *Guard mode: warn…* |
 
 Every request folder is listed, including one with no session yet (just created, closed
@@ -221,6 +240,8 @@ panel), the terminal commands and your skills:
 | Run retrospective… | `claude-retro` for last week, the last 7 or N days, or the week of a day, in a tab |
 | Open latest retrospective report | the newest `_audit/quality/*_retro.md` in the Markdown preview |
 | Guard mode… | `claude-guard mode`: off, shadow, warn or enforce (also the status-bar item) |
+| Set waiting on… | `claude-wait`: on a request (right-click), a session's request, the focused tab's, or pick one |
+| Scan inbox… | `claude-inbox` in a tab: now, the last 24 hours, a dry run, status, install or remove the hourly run |
 | Focus the search box · Clear search | |
 
 Sessions are named by Claude's auto-title, else their first prompt; hovering shows the
@@ -236,6 +257,34 @@ still open in VS Code, since Claude in VS Code's terminal connects to it (`/ide`
 
 Settings: `claudeWorksessions.sessionsCommand` (default `~/.local/bin/claude-sessions`),
 `claudeWorksessions.showEmptySessions` (sessions closed without a prompt; off).
+
+## claude-inbox
+
+```
+claude-inbox                 what needs a reply from me, from the last CWS_INBOX_HOURS (3) hours
+claude-inbox --hours 24      a longer window: the first run, or after a day off
+claude-inbox --dry-run       say what would be created or flagged, change nothing
+claude-inbox --install       run it every hour (launchd on macOS, cron elsewhere); --uninstall stops it
+claude-inbox --status        when it last ran and what it found
+```
+
+A headless Claude (`claude -p` under `CWS_INBOX_PROFILE`, whose claude.ai login needs the
+Microsoft 365 connector) reads the recent Teams chats and mail with the connector's read
+tools only — built-in tools off, hooks off, no transcript saved, so the run is not a
+session in the sidebar — and answers with the messages that still need you: a question
+addressed to you, a request only you can act on, a decision or approval, a thread where
+someone is waiting on your answer. FYI, thanks, notifications, invites and anything you
+already answered are left out. Nothing is drafted and nothing is sent.
+
+For each message the script then finds the newest request folder on the same ticket
+(a `PREFIX-123` in the thread, within 45 days) and flips its flag to *me* — a folder that
+was waiting on that person now needs your reply — or creates
+`YYYY/MM/DD/HH-mm-ss_reply-<who>-<subject>/` with a `.session.json` (ticket from the
+thread or `Other`, type `CWS_INBOX_TASK_TYPE`, goal "reply to … about …", the flag with the
+link to the thread). It shows under **Needs my reply**; a click starts a session in it.
+Messages already placed are remembered in `~/.local/share/claude-worksessions/inbox/seen.json`,
+so clearing a flag does not bring the same message back. `state.json` next to it holds the
+last run, shown in the Attention view's subtitle; `inbox.log` is the hourly run's output.
 
 ## claude-delete
 

@@ -1,5 +1,26 @@
 # Changelog
 
+## [2.23.0] — 2026-10-12
+
+- **Attention: what needs my reply, what I am waiting on** (#49). A request folder can carry a
+  `waiting` flag in `.session.json` — who the ball is with (`me` | `other`), who the other party
+  is, what for, since when, where (teams, mail, jira) and a link to the thread. The VS Code
+  sidebar gets an **Attention** view on top with two groups, **Needs my reply** and **Waiting on
+  others**, longest wait first; a click opens the request's latest session, or starts one; the
+  bell clears the flag, the link opens the thread; **Set waiting…** (right-click, also in the
+  palette) sets it by hand.
+- **`claude-wait`** sets or clears the flag from a session folder (`claude-wait them "Ana"
+  "confirm the IP" --where teams --link URL`; `claude-wait me`; `claude-wait none`), and the
+  rendered `CLAUDE.md` asks Claude to run it when a session leaves the ball with someone.
+- **`claude-inbox`** scans Teams and mail for what needs a reply from you and puts each one on
+  the Attention list: a headless Claude (`claude -p`, the Microsoft 365 connector, read tools
+  only, no transcript) answers with the list; the script finds the newest request folder on the
+  same ticket and flips it to *me*, or creates `YYYY/MM/DD/HH-mm-ss_reply-<who>-<subject>` with
+  the flag. Nothing is drafted or sent. `--install` runs it every hour (launchd on macOS, cron
+  elsewhere); `--dry-run`, `--hours N`, `--status`. New config keys: `CWS_INBOX_PROFILE`,
+  `CWS_INBOX_HOURS`, `CWS_INBOX_TASK_TYPE`, `CWS_INBOX_MODEL`, `CWS_INBOX_TIMEOUT`.
+- `claude-sessions --json`: each request carries its `waiting` flag (or `null`).
+
 ## [2.21.0] — 2026-10-03
 
 - **claude-guard no longer judges tool calls against the prompt's targets** (#44, fixes #43).

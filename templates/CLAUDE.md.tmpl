@@ -66,6 +66,16 @@ The ticket is what lets the weekly functional review put a session on the right
 tracker row without asking. If a session sitting in a request folder has no
 ticket in its `.session.json` and the work clearly belongs to one, say so.
 
+**Who is the ball with?** `.session.json` can carry a `waiting` flag; the VS Code sidebar's
+**Attention** view lists flagged requests under *Needs my reply* and *Waiting on others*.
+When a session ends with someone else owing an answer (a question sent on Teams or mail, a
+ticket handed over, a request for approval), run
+`claude-wait them "<who>" "<what for>" --where teams|mail|jira [--link URL]` in the session
+folder and say in one line that you did. When the user owes the reply, `claude-wait me ...`.
+When it is settled, `claude-wait none`. `claude-wait` alone shows the current flag. A folder
+named `reply-<who>-<subject>` with the flag already set was created by `claude-inbox` from a
+message that needs a reply: the link in the flag points at it.
+
 If a session was started some other way and is sitting in this root, create the
 request folder yourself before writing anything.
 

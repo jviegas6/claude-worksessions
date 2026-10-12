@@ -1,6 +1,9 @@
 // node --test vscode/test — run from tests/test_vscode.py as part of pytest.
 const test = require("node:test");
 const assert = require("node:assert");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
 const M = require("../model");
 
 const ROOT = "/w";
@@ -407,4 +410,56 @@ test("latestRetro: the newest _audit/quality/*_retro.md", () => {
   }
   fs.symlinkSync(path.join(q, "nowhere"), path.join(q, "broken_retro.md"));
   assert.strictEqual(M.latestRetro(root), path.join(q, "2026-09-21_2026-09-27_retro.md"));
+});
+
+// --- waiting: the Attention view's data ------------------------------------------------------
+test("attention lists flagged requests by group, longest wait first, ignoring search and filters", () => {
+  const W1 = req("2026/10/12/10-00-00_w1", { ticket: "BTPA-1", waiting: { on: "me", who: "Ana", what: "the IP", since: "2026-10-12T08:00:00Z", where: "teams", link: "https://t/1" } });
+  const W2 = req("2026/10/11/10-00-00_w2", { waiting: { on: "me", who: "Bo", what: "", since: "2026-10-10T08:00:00Z" } });
+  const W3 = req("2026/10/12/11-00-00_w3", { waiting: { on: "other", who: "Cy", what: "a quote", since: "garbage" }, started: 50 });
+  const bad = req("2026/10/12/12-00-00_bad", { waiting: { on: "them" } });
+  const d = { work_root: ROOT, sessions: [ses("w1s", 100, W1), ses("root", 400, null)], requests: [W2, W3, bad] };
+  const a = M.attention(d, { filter: "nothing-matches", filters: { day: { preset: "today" } } });
+  assert.deepStrictEqual(a.me.map(r => r.name), ["10-00-00_w2", "10-00-00_w1"]);
+  assert.deepStrictEqual(a.other.map(r => r.name), ["11-00-00_w3"]);
+  assert.strictEqual(M.waitingOf(bad), null);
+  assert.strictEqual(M.waitingOf({ waiting: "me" }), null);
+  const now = Date.parse("2026-10-12T10:00:00Z") / 1000;
+  assert.strictEqual(M.waitingText(a.me[1], now), "Ana · the IP · 2h");
+  assert.strictEqual(M.waitingText(a.me[0], now), "Bo · 2d");
+  assert.strictEqual(M.waitingText(a.other[0], now), "Cy · a quote");
+  assert.strictEqual(M.waitingText(bad, now), "");
+  assert.deepStrictEqual(M.WAITING_LABELS, { me: "Needs my reply", other: "Waiting on others" });
+});
+
+test("setWaiting writes, flips and clears the flag in .session.json", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cws-wait-"));
+  const p = path.join(dir, ".session.json");
+  fs.writeFileSync(p, JSON.stringify({ name: "x" }));
+  const at = new Date("2026-10-12T10:00:00.123Z");
+  let [old, now] = M.setWaiting(dir, { on: "other", who: "Ana", what: "the IP", where: "teams", link: "https://t/1" }, at);
+  assert.strictEqual(old, null);
+  assert.deepStrictEqual(now, { on: "other", who: "Ana", what: "the IP", since: "2026-10-12T10:00:00Z", where: "teams", link: "https://t/1" });
+  [old, now] = M.setWaiting(dir, { on: "me", who: "Ana", what: "" , since: "2026-10-12T11:00:00Z" }, at);
+  assert.strictEqual(old.on, "other");
+  assert.deepStrictEqual(now, { on: "me", who: "Ana", what: "", since: "2026-10-12T11:00:00Z", where: "teams", link: "https://t/1" });
+  const d = JSON.parse(fs.readFileSync(p, "utf8"));
+  assert.strictEqual(d.waiting_history.length, 1);
+  assert.strictEqual(d.waiting_history[0].until, "2026-10-12T10:00:00Z");
+  [old, now] = M.setWaiting(dir, null, at);
+  assert.strictEqual(old.on, "me");
+  assert.strictEqual(now, null);
+  assert.ok(!("waiting" in JSON.parse(fs.readFileSync(p, "utf8"))));
+  assert.strictEqual(JSON.parse(fs.readFileSync(p, "utf8")).name, "x");
+});
+
+test("inbox state and dir", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cws-inbox-"));
+  assert.strictEqual(M.inboxState(dir), null);
+  fs.writeFileSync(path.join(dir, "state.json"), "[1]");
+  assert.strictEqual(M.inboxState(dir), null);
+  fs.writeFileSync(path.join(dir, "state.json"), JSON.stringify({ at: "2026-10-12 14:00", found: 2, new: 1 }));
+  assert.deepStrictEqual(M.inboxState(dir), { at: "2026-10-12 14:00", found: 2, new: 1 });
+  assert.strictEqual(M.inboxDir({}, "/h"), path.join("/h", ".local", "share", "claude-worksessions", "inbox"));
+  assert.strictEqual(M.inboxDir({ XDG_DATA_HOME: "/x" }, "/h"), path.join("/x", "claude-worksessions", "inbox"));
 });

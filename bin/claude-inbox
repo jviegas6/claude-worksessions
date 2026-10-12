@@ -1,0 +1,390 @@
+#!/usr/bin/env python3
+"""claude-inbox: find the Teams messages and mail that need a reply from you, and put each
+one on the sidebar's Attention list as a request folder flagged "waiting on me".
+
+  claude-inbox                  scan the last CWS_INBOX_HOURS (default 3) hours
+  claude-inbox --hours 24       a longer window (e.g. the first run, or after a holiday)
+  claude-inbox --dry-run        say what would be created or flagged, change nothing
+  claude-inbox --install        run it every hour (launchd on macOS, cron elsewhere)
+  claude-inbox --uninstall      stop the hourly run
+  claude-inbox --status         when it last ran and what it found
+
+A headless Claude (`claude -p`, under CWS_INBOX_PROFILE) reads the recent chats and mail
+through the Microsoft 365 connector and answers with a JSON list of what needs you: a
+question or request addressed to you that you have not answered. Nothing is drafted and
+nothing is sent. For each item this script then:
+
+  - finds the newest request folder on the same ticket (a PREFIX-123 in the message), or
+    creates one (YYYY/MM/DD/HH-mm-ss_reply-<who>-<subject>) with a .session.json;
+  - sets its "waiting" flag to {"on": "me", "who", "what", "since", "where", "link"} --
+    a folder that was waiting on that person flips to waiting on you.
+
+The VS Code sidebar's Attention view lists the flagged folders; claude-wait sets or clears
+the flag by hand. Messages already handled are remembered (seen.json), so clearing the
+flag does not bring the same message back.
+"""
+
+import argparse
+import datetime as dt
+import glob
+import json
+import os
+import re
+import socket
+import subprocess
+import sys
+
+HOME = os.path.expanduser("~")
+DATA_DIR = os.path.join(os.environ.get("XDG_DATA_HOME") or os.path.join(HOME, ".local", "share"),
+                        "claude-worksessions", "inbox")
+LABEL = "com.claude-worksessions.inbox"
+TICKET_RE = re.compile(r"\b([A-Z][A-Z0-9]+-\d+)\b")
+
+SCHEMA = {
+    "type": "object",
+    "properties": {
+        "items": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "who": {"type": "string", "description": "who is waiting for the reply (person or team)"},
+                    "subject": {"type": "string", "description": "the thread's subject or topic, a few words"},
+                    "what": {"type": "string", "description": "what they need from me, one line"},
+                    "where": {"type": "string", "enum": ["teams", "mail"]},
+                    "link": {"type": "string", "description": "web link to the message or thread, or the chat id"},
+                    "message_id": {"type": "string", "description": "the message's id, to recognise it again"},
+                    "received": {"type": "string", "description": "when it arrived, ISO 8601"},
+                    "ticket": {"type": "string", "description": "a PREFIX-123 ticket named in the thread, else empty"},
+                },
+                "required": ["who", "subject", "what", "where", "link", "message_id", "received", "ticket"],
+            },
+        },
+    },
+    "required": ["items"],
+}
+
+PROMPT = """Look at my Microsoft Teams chats and channel messages and my Outlook mail from the last {hours} hours.
+Use the Microsoft 365 tools: get_me for who I am, teams_list_chats / teams_list_channel_messages /
+chat_message_search for Teams, outlook_email_search for mail. Read only; send nothing, draft nothing.
+
+List every message that still needs a reply from me: a question addressed to me, a request for
+something only I can do, a decision or approval asked of me, or a thread where someone is clearly
+waiting on my answer. Leave out: FYI and thanks, automated notifications and newsletters, meeting
+invites, group messages that do not ask me anything, and anything I have already answered after it
+arrived (check whether my own message is the latest in the thread).
+
+For each one give who is waiting, the subject, what they need from me in one line, where it is
+(teams or mail), a link to it, its message id, when it arrived (ISO 8601) and the ticket
+(PREFIX-123) if the thread names one, else an empty string. If nothing needs me, answer with an
+empty list."""
+
+READ_TOOLS = [
+    "mcp__claude_ai_Microsoft_365__get_me", "mcp__claude_ai_Microsoft_365__read_resource",
+    "mcp__claude_ai_Microsoft_365__search_people", "mcp__claude_ai_Microsoft_365__chat_message_search",
+    "mcp__claude_ai_Microsoft_365__teams_list_chats", "mcp__claude_ai_Microsoft_365__teams_list_teams",
+    "mcp__claude_ai_Microsoft_365__teams_list_channels", "mcp__claude_ai_Microsoft_365__teams_list_channel_messages",
+    "mcp__claude_ai_Microsoft_365__outlook_email_search",
+]
+
+
+# --- config --------------------------------------------------------------------------------
+def read_config(path=None):
+    """config.env as a dict (KEY="value" lines, $HOME expanded) -- the same file the shell reads."""
+    path = path or os.environ.get("CWS_CONFIG") or os.path.join(HOME, ".config", "claude-worksessions", "config.env")
+    out = {}
+    try:
+        with open(path) as fh:
+            for line in fh:
+                m = re.match(r'^\s*([A-Za-z_][A-Za-z0-9_]*)=["\']?([^"\'#\n]*)["\']?', line)
+                if m:
+                    out[m.group(1)] = m.group(2).strip().replace("${HOME}", HOME).replace("$HOME", HOME)
+    except OSError:
+        pass
+    for k, v in os.environ.items():
+        if k.startswith("CWS_"):
+            out[k] = v
+    return out
+
+
+def settings(conf):
+    root = conf.get("CLAUDE_WORK_ROOT") or conf.get("CWS_WORK_ROOT") or os.path.join(HOME, "work_sessions")
+    profile = conf.get("CWS_INBOX_PROFILE") or conf.get("CWS_DEFAULT_PROFILE") or \
+        (conf.get("CWS_PROFILES") or "personal").split()[0]
+    return {"root": root, "profile": profile,
+            "hours": float(conf.get("CWS_INBOX_HOURS") or 3),
+            "task_type": conf.get("CWS_INBOX_TASK_TYPE") or "support",
+            "model": conf.get("CWS_INBOX_MODEL") or "sonnet",
+            "timeout": float(conf.get("CWS_INBOX_TIMEOUT") or 600)}
+
+
+# --- the scan: a headless Claude with the connector --------------------------------------
+def scan(cfg, hours):
+    """Ask Claude what needs a reply. Returns (items, error)."""
+    env = dict(os.environ)
+    d = os.path.join(HOME, ".claude-" + cfg["profile"])
+    if not os.path.isdir(d):
+        return [], "profile dir {} not found".format(d)
+    env["CLAUDE_CONFIG_DIR"] = d
+    # built-in tools off, only the connector's read tools allowed; anything else is denied, not asked;
+    # hooks off so the guard never runs; no transcript, so the run is not a session in the sidebar
+    cmd = ["claude", "-p", "--settings", json.dumps({"disableAllHooks": True}), "--tools", "",
+           "--allowedTools", ",".join(READ_TOOLS), "--permission-mode", "dontAsk", "--no-session-persistence",
+           "--model", cfg["model"], "--output-format", "json", "--json-schema", json.dumps(SCHEMA),
+           PROMPT.format(hours=int(hours) if hours == int(hours) else hours)]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=cfg["timeout"], cwd=DATA_DIR, env=env)
+        out = json.loads(r.stdout or "{}")
+    except subprocess.TimeoutExpired:
+        return [], "timeout after {:g}s".format(cfg["timeout"])
+    except (OSError, ValueError) as e:
+        return [], str(e)[:300]
+    ans = out.get("structured_output") if isinstance(out, dict) else None
+    if not isinstance(out, dict) or out.get("is_error") or not isinstance(ans, dict) or not isinstance(ans.get("items"), list):
+        return [], ((out.get("result") if isinstance(out, dict) else None) or r.stderr or "no answer").strip()[:300]
+    items = []
+    for it in ans["items"]:
+        if not isinstance(it, dict) or not (it.get("who") or it.get("subject")):
+            continue
+        text = lambda k: " ".join(str(it.get(k) or "").split())
+        where = text("where").lower()
+        items.append({"who": text("who"), "subject": text("subject"), "what": text("what"),
+                      "where": where if where in ("teams", "mail") else "mail", "link": text("link"),
+                      "message_id": text("message_id"), "received": text("received"),
+                      "ticket": ticket_of(text("ticket")) or ticket_of(text("subject") + " " + text("what"))})
+    return items, None
+
+
+def ticket_of(text):
+    m = TICKET_RE.search((text or "").upper())
+    return m.group(1) if m else ""
+
+
+# --- request folders -----------------------------------------------------------------------
+def load_json(path, default):
+    try:
+        with open(path) as fh:
+            v = json.load(fh)
+        return v if isinstance(v, type(default)) else default
+    except (OSError, ValueError):
+        return default
+
+
+def save_json(path, data):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w") as fh:
+        json.dump(data, fh, indent=2)
+    os.replace(tmp, path)
+
+
+def request_folders(root):
+    """Every request folder with its .session.json, newest first: [(folder, meta)]."""
+    pattern = os.path.join(root, "[0-9]" * 4, "[0-9][0-9]", "[0-9][0-9]", "*", ".session.json")
+    out = []
+    for meta in sorted(glob.glob(pattern), reverse=True):
+        d = load_json(meta, {})
+        if d:
+            out.append((os.path.dirname(meta), d))
+    return out
+
+
+def folder_for_ticket(folders, ticket, days=45):
+    """The newest request folder on this ticket, if it started in the last `days`."""
+    if not ticket or ticket.upper() == "OTHER":
+        return None
+    cutoff = (dt.datetime.now() - dt.timedelta(days=days)).strftime("%Y/%m/%d")
+    for folder, meta in folders:
+        if (meta.get("ticket") or "").strip().upper() == ticket.upper():
+            rel = folder.replace(os.sep, "/")
+            m = re.search(r"(\d{4}/\d{2}/\d{2})/[^/]+$", rel)
+            return folder if m and m.group(1) >= cutoff else None
+    return None
+
+
+def slugify(text, limit=60):
+    s = re.sub(r"[^a-z0-9]+", "-", (text or "").lower()).strip("-")
+    s = s[:limit].rstrip("-")
+    return s or "reply"
+
+
+def new_folder(root, item, cfg, now=None):
+    """Create YYYY/MM/DD/HH-mm-ss_reply-<who>-<subject>/.session.json for a message. Returns the folder."""
+    now = now or dt.datetime.now()
+    slug = slugify("reply-" + item["who"] + "-" + item["subject"])
+    base = os.path.join(root, now.strftime("%Y/%m/%d/%H-%M-%S") + "_" + slug)
+    folder, n = base, 2
+    while os.path.exists(folder):
+        folder, n = "{}-{}".format(base, n), n + 1
+    os.makedirs(folder)
+    name = "Reply to {}: {}".format(item["who"], item["subject"])
+    save_json(os.path.join(folder, ".session.json"), {
+        "name": name, "slug": slug, "profile": cfg["profile"], "ticket": item["ticket"] or "Other",
+        "task_type": cfg["task_type"], "goal": "reply to {} about {}".format(item["who"], item["subject"]),
+        "done_when": "the reply is sent", "paths": [], "audit": True,
+        "started_at": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "ended_at": None,
+        "host": socket.gethostname(), "path": folder, "source": "claude-inbox",
+        "waiting": waiting(item),
+    })
+    return folder
+
+
+def waiting(item):
+    return {"on": "me", "who": item["who"], "what": item["what"] or item["subject"],
+            "since": item["received"] or dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "where": item["where"], "link": item["link"]}
+
+
+def flag_folder(folder, item):
+    """Set an existing folder's waiting flag to "me" for this message. Returns what changed:
+    "flipped" (it was waiting on them), "set" (no flag), or "kept" (already waiting on me)."""
+    p = os.path.join(folder, ".session.json")
+    d = load_json(p, {})
+    old = d.get("waiting") if isinstance(d.get("waiting"), dict) else None
+    if old and old.get("on") == "me":
+        return "kept"
+    if old:
+        d.setdefault("waiting_history", []).append(dict(old, until=dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")))
+    d["waiting"] = waiting(item)
+    save_json(p, d)
+    return "flipped" if old else "set"
+
+
+def seen_key(item):
+    return "{}:{}".format(item["where"], item["message_id"] or item["link"] or (item["who"] + "|" + item["subject"]))
+
+
+def place(items, cfg, dry_run=False, now=None):
+    """Put each item on the Attention list. Returns the log lines."""
+    seen_path = os.path.join(DATA_DIR, "seen.json")
+    seen = load_json(seen_path, {})
+    folders = request_folders(cfg["root"])
+    lines = []
+    for it in items:
+        key = seen_key(it)
+        label = "{} · {}{}".format(it["who"], it["subject"], " · " + it["ticket"] if it["ticket"] else "")
+        if key in seen:
+            lines.append("seen     {}".format(label))
+            continue
+        folder = folder_for_ticket(folders, it["ticket"])
+        rel = lambda f: os.path.relpath(f, cfg["root"])
+        if dry_run:
+            lines.append("would {} {} -> {}".format("flag  " if folder else "create", label,
+                                                    rel(folder) if folder else "a new folder"))
+            continue
+        if folder:
+            how = flag_folder(folder, it)
+            lines.append("{:<8} {} -> {}".format(how, label, rel(folder)))
+        else:
+            folder = new_folder(cfg["root"], it, cfg, now)
+            folders.insert(0, (folder, load_json(os.path.join(folder, ".session.json"), {})))
+            lines.append("created  {} -> {}".format(label, rel(folder)))
+        seen[key] = {"folder": folder, "at": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+    if not dry_run:
+        save_json(seen_path, seen)
+    return lines
+
+
+# --- the hourly run ------------------------------------------------------------------------
+def plist(exe):
+    return """<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>{label}</string>
+  <key>ProgramArguments</key>
+  <array><string>{exe}</string></array>
+  <key>StartInterval</key><integer>3600</integer>
+  <key>RunAtLoad</key><true/>
+  <key>EnvironmentVariables</key>
+  <dict><key>PATH</key><string>{path}</string></dict>
+  <key>StandardOutPath</key><string>{log}</string>
+  <key>StandardErrorPath</key><string>{log}</string>
+</dict>
+</plist>
+""".format(label=LABEL, exe=exe, log=os.path.join(DATA_DIR, "inbox.log"),
+           path=":".join(p for p in [os.path.join(HOME, ".local", "bin"), "/opt/homebrew/bin", "/usr/local/bin",
+                                     "/usr/bin", "/bin"] if p))
+
+
+def plist_path():
+    return os.path.join(HOME, "Library", "LaunchAgents", LABEL + ".plist")
+
+
+def install(exe, uninstall=False, run=subprocess.run, platform=sys.platform):
+    """Schedule (or unschedule) the hourly run. Returns a message."""
+    os.makedirs(DATA_DIR, exist_ok=True)
+    if platform == "darwin":
+        p = plist_path()
+        if uninstall:
+            run(["launchctl", "unload", p], capture_output=True)
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+            return "claude-inbox: hourly run removed ({})".format(p)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        run(["launchctl", "unload", p], capture_output=True)
+        with open(p, "w") as fh:
+            fh.write(plist(exe))
+        r = run(["launchctl", "load", p], capture_output=True, text=True)
+        if r.returncode:
+            return "claude-inbox: launchctl load failed: {}".format((r.stderr or r.stdout).strip())
+        return "claude-inbox: runs every hour while the Mac is awake ({}); log: {}".format(p, os.path.join(DATA_DIR, "inbox.log"))
+    # elsewhere: a crontab line
+    r = run(["crontab", "-l"], capture_output=True, text=True)
+    lines = [ln for ln in (r.stdout if not r.returncode else "").splitlines() if LABEL not in ln]
+    if not uninstall:
+        lines.append("0 * * * * {} >> {} 2>&1  # {}".format(exe, os.path.join(DATA_DIR, "inbox.log"), LABEL))
+    run(["crontab", "-"], input="\n".join(lines) + "\n", text=True)
+    return "claude-inbox: hourly cron entry {}".format("removed" if uninstall else "installed")
+
+
+def status():
+    sched = "hourly run " + ("installed" if os.path.exists(plist_path()) else "not installed")
+    st = load_json(os.path.join(DATA_DIR, "state.json"), {})
+    if not st:
+        return "claude-inbox: never run; " + sched
+    return "claude-inbox: last run {} ({}): {} item(s), {} new; {}".format(
+        st.get("at", "?"), "ok" if not st.get("error") else "error: " + str(st.get("error")),
+        st.get("found", 0), st.get("new", 0), sched)
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(prog="claude-inbox", description=__doc__.split("\n\n")[0].split(": ", 1)[1],
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--hours", type=float, help="how far back to look (default CWS_INBOX_HOURS or 3)")
+    ap.add_argument("--dry-run", action="store_true", help="scan and say what would change, change nothing")
+    ap.add_argument("--install", action="store_true", help="run every hour (launchd / cron)")
+    ap.add_argument("--uninstall", action="store_true", help="stop the hourly run")
+    ap.add_argument("--status", action="store_true", help="when it last ran and what it found")
+    args = ap.parse_args(argv)
+    conf = read_config()
+    cfg = settings(conf)
+    if args.install or args.uninstall:
+        print(install(os.path.abspath(__file__), uninstall=args.uninstall))
+        return 0
+    if args.status:
+        print(status())
+        return 0
+    os.makedirs(DATA_DIR, exist_ok=True)
+    hours = args.hours or cfg["hours"]
+    at = dt.datetime.now().strftime("%Y-%m-%d %H:%M")
+    items, err = scan(cfg, hours)
+    if err:
+        if not args.dry_run:
+            save_json(os.path.join(DATA_DIR, "state.json"), {"at": at, "error": err, "found": 0, "new": 0})
+        print("claude-inbox {}: scan failed: {}".format(at, err), file=sys.stderr)
+        return 1
+    lines = place(items, cfg, dry_run=args.dry_run)
+    new = sum(1 for ln in lines if not ln.startswith("seen"))
+    if not args.dry_run:
+        save_json(os.path.join(DATA_DIR, "state.json"), {"at": at, "error": None, "found": len(items), "new": new, "hours": hours})
+    print("claude-inbox {}: {} item(s) need a reply in the last {:g}h, {} new".format(at, len(items), hours, new))
+    for ln in lines:
+        print("  " + ln)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

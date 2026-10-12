@@ -275,7 +275,7 @@ class Sidebar {
     const now = Date.now() / 1000;
     // While searching everything opens up; ids carry the search so that takes effect.
     const searching = !!this.filter;
-    const idp = `${this.grouping}|${this.filter}|${el.inPinned ? "p|" : ""}${el.inActive ? "a|" : ""}`;
+    const idp = `${this.grouping}|${this.filter}|${el.inPinned ? "p|" : ""}${el.inActive ? "a|" : ""}${el.inAttention ? "w|" : ""}`;
     if (el.kind === "deleted") {
       const it = new vscode.TreeItem("Deleted", C.Collapsed);
       it.id = idp + "deleted";
@@ -328,12 +328,25 @@ class Sidebar {
       const it = new vscode.TreeItem(r.name, empty ? C.None : searching ? C.Expanded : C.Collapsed);
       it.id = idp + "r|" + r.path;
       const pinnedReq = M.isPinnedRequest(this.pins, this.data.work_root, r);
-      it.contextValue = r.root ? "root" : pinnedReq ? "request-pinned" : "request";
-      it.description = [pinnedReq && !el.inPinned && "pinned", this.grouping !== "ticket" && r.ticket,
-                        r.task_type, r.profile, M.ago(r.mtime, now)].filter(Boolean).join(" · ");
-      it.iconPath = new vscode.ThemeIcon(r.sessions.some(s => this.isOpen(s.id) || s.active) ? "folder-active" : "folder");
+      const w = M.waitingOf(r);
+      it.contextValue = r.root ? "root" : el.inAttention ? "request-waiting" + (w && w.link ? "-link" : "")
+        : pinnedReq ? "request-pinned" : "request";
+      it.description = el.inAttention ? M.waitingText(r, now)
+        : [pinnedReq && !el.inPinned && "pinned", this.grouping !== "ticket" && r.ticket,
+           r.task_type, r.profile, M.ago(r.mtime, now)].filter(Boolean).join(" · ");
+      const live = r.sessions.some(s => this.isOpen(s.id) || s.active);
+      it.iconPath = el.inAttention
+        ? new vscode.ThemeIcon(w.on === "me" ? "bell-dot" : "watch", new vscode.ThemeColor(w.on === "me" ? "charts.orange" : "charts.blue"))
+        : new vscode.ThemeIcon(live ? "folder-active" : "folder");
+      // in the Attention view a click opens the request: its latest session, or a new one
+      if (el.inAttention) it.command = { command: "claudeWorksessions.openAttention", title: "Open", arguments: [el] };
       const md = new vscode.MarkdownString();
       md.appendMarkdown("**").appendText(r.name).appendMarkdown("**\n\n");
+      if (w) {
+        md.appendMarkdown(`**${M.WAITING_LABELS[w.on]}** — `).appendText([w.who, w.what].filter(Boolean).join(": ") || "—")
+          .appendMarkdown("  \n").appendText([w.where, w.since ? "since " + w.since.slice(0, 16).replace("T", " ") : ""]
+                                               .filter(Boolean).join(" · ")).appendMarkdown("\n\n");
+      }
       for (const [k, v] of [["ticket", r.ticket], ["type", r.task_type], ["profile", r.profile],
                             ["sessions", String(r.sessions.length)], ["last activity", M.ago(r.mtime, now) + " ago"]]) {
         md.appendMarkdown(`${k}: `).appendText(v || "—").appendMarkdown("  \n");
@@ -411,6 +424,107 @@ class Sidebar {
     it.tooltip = md;
     return it;
   }
+}
+
+// --- the Attention view: what needs my reply, and what I am waiting on ---------------------
+// Two groups of flagged requests (.session.json "waiting", set by claude-wait, claude-inbox or
+// Set waiting…). Rows are the Sidebar's request rows with inAttention, so they open, expand and
+// right-click the same way.
+class Attention {
+  constructor(bar) {
+    this.bar = bar;
+    this.emitter = new vscode.EventEmitter();
+    this.onDidChangeTreeData = this.emitter.event;
+    bar.emitter.event(() => this.emitter.fire());
+  }
+
+  lists() { return M.attention(this.bar.data, this.bar.opts()); }
+
+  counts() { const a = this.lists(); return { me: a.me.length, other: a.other.length }; }
+
+  getChildren(el) {
+    if (!el) {
+      const a = this.lists();
+      return ["me", "other"].filter(k => a[k].length).map(k => ({ kind: "waiting", on: k, requests: a[k] }));
+    }
+    if (el.kind === "waiting") return el.requests.map(r => ({ kind: "request", request: r, inAttention: true }));
+    return this.bar.getChildren(el).map(c => ({ ...c, inAttention: true }));
+  }
+
+  getTreeItem(el) {
+    if (el.kind === "waiting") {
+      const it = new vscode.TreeItem(M.WAITING_LABELS[el.on], vscode.TreeItemCollapsibleState.Expanded);
+      it.id = "w|" + el.on;
+      it.description = String(el.requests.length);
+      it.iconPath = new vscode.ThemeIcon(el.on === "me" ? "bell-dot" : "watch",
+                                         new vscode.ThemeColor(el.on === "me" ? "charts.orange" : "charts.blue"));
+      it.tooltip = el.on === "me" ? "Requests where someone is waiting for your reply — oldest first."
+                                  : "Requests where you are waiting for someone else — oldest first.";
+      return it;
+    }
+    return this.bar.getTreeItem(el);
+  }
+}
+
+// A click in Attention: the request's latest session, or a new one in its folder.
+function openAttention(bar, el) {
+  const r = el.request;
+  if (r.sessions && r.sessions.length) return bar.open(r.sessions[0], r);
+  return bar.addSession(r);
+}
+
+// Set waiting…: on a request (right-click), a session's request, the focused tab's, or pick one.
+async function setWaiting(bar, el) {
+  let r = el && el.request;
+  if (!r && el && el.session) r = bar.requestOf(el.session.id);
+  if (!r) { const s = bar.activeSession() || await pickSession(bar, "Set what request is waiting on which session?"); if (!s) return; r = bar.requestOf(s.id); }
+  if (!r || r.root) return vscode.window.showWarningMessage("That session has no request folder to flag.");
+  if (!fs.existsSync(path.join(r.path, ".session.json"))) return vscode.window.showWarningMessage(`No .session.json in ${path.basename(r.path)}.`);
+  const w = M.waitingOf(r);
+  const pick = await vscode.window.showQuickPick([
+    { label: "$(bell-dot) Needs my reply", description: w && w.on === "me" ? "current" : "", on: "me" },
+    { label: "$(watch) Waiting on others", description: w && w.on === "other" ? "current" : "", on: "other" },
+    ...(w ? [{ label: "$(check) Nobody — clear the flag", on: null }] : []),
+  ], { placeHolder: `${r.name} — who is the ball with?` });
+  if (!pick) return;
+  let who = "", what = "";
+  if (pick.on) {
+    who = await vscode.window.showInputBox({ prompt: pick.on === "me" ? "Who is waiting for your reply?" : "Who are you waiting on?",
+                                             value: (w && w.who) || "", placeHolder: "a person or team" });
+    if (who === undefined) return;
+    what = await vscode.window.showInputBox({ prompt: "What for? (one line)", value: (w && w.what) || "" });
+    if (what === undefined) return;
+  }
+  M.setWaiting(r.path, pick.on ? { on: pick.on, who: who.trim(), what: what.trim() } : null);
+  vscode.window.showInformationMessage(pick.on ? `${r.name}: ${M.WAITING_LABELS[pick.on].toLowerCase()} — ${who.trim() || "?"}`
+                                               : `${r.name}: waiting flag cleared.`);
+  bar.refresh();
+}
+
+function clearWaiting(bar, el) {
+  M.setWaiting(el.request.path, null);
+  bar.refresh();
+}
+
+function openWaitingLink(el) {
+  const w = M.waitingOf(el.request);
+  if (!w || !w.link) return vscode.window.showInformationMessage("This request's flag has no link to the thread.");
+  return vscode.env.openExternal(vscode.Uri.parse(w.link));
+}
+
+// claude-inbox: scan Teams and mail for what needs a reply, in a terminal tab.
+async function inbox(bar) {
+  const p = await vscode.window.showQuickPick([
+    { label: "Scan now", description: "the last few hours (CWS_INBOX_HOURS)", args: [] },
+    { label: "Scan the last 24 hours", args: ["--hours", "24"] },
+    { label: "Dry run", description: "say what would be flagged, change nothing", args: ["--dry-run"] },
+    { label: "Status", description: "when it last ran, and whether the hourly run is installed", args: ["--status"] },
+    { label: "Install the hourly run", args: ["--install"] },
+    { label: "Remove the hourly run", args: ["--uninstall"] },
+  ], { placeHolder: "claude-inbox — what needs a reply from me?" });
+  if (!p) return;
+  bar.terminal(`inbox${p.args.length ? " · " + p.args.join(" ") : ""}`, bar.data.work_root,
+               ["claude-inbox", ...p.args].join(" "), "inbox");
 }
 
 // --- the search box above the tree --------------------------------------------------------
@@ -834,7 +948,19 @@ function activate(context) {
   bar.restore();
   const view = vscode.window.createTreeView("claudeWorksessions.sessions", { treeDataProvider: bar });
   const box = new SearchBox(bar, q => searchSessions(bar, q));
+  const attention = new Attention(bar);
+  const attentionView = vscode.window.createTreeView("claudeWorksessions.attention", { treeDataProvider: attention });
+  const inboxDir = M.inboxDir(process.env, HOME);
+  const attentionChanged = () => {
+    const { me, other } = attention.counts();
+    const st = M.inboxState(inboxDir);
+    const scanned = st && st.at ? ` · scanned ${st.at.slice(11) || st.at}${st.error ? " (failed)" : ""}` : "";
+    attentionView.description = `${me} for me · ${other} on others${scanned}`;
+    attentionView.message = me + other ? undefined
+      : "Nothing is waiting. claude-wait flags a request; claude-inbox scans Teams and mail for what needs a reply.";
+  };
   bar.onChange = () => {
+    attentionChanged();
     const filtered = M.describeFilters(bar.filters);
     view.description = `${M.GROUPING_LABELS[bar.grouping]} · ${M.SORT_LABELS[bar.sort] || M.SORT_LABELS.activity}` +
       (filtered ? ` · only ${filtered}` : "") + (status && status.mode ? ` · guard: ${status.mode}` : "");
@@ -852,9 +978,14 @@ function activate(context) {
   status = new GuardStatus(() => bar.onChange());
   const cmd = (name, fn) => vscode.commands.registerCommand("claudeWorksessions." + name, fn);
   context.subscriptions.push(
-    view, status,
+    view, status, attentionView,
     vscode.window.registerWebviewViewProvider("claudeWorksessions.search", box),
     cmd("refresh", () => bar.refresh()),
+    cmd("openAttention", el => openAttention(bar, el)),
+    cmd("setWaiting", el => setWaiting(bar, el)),
+    cmd("clearWaiting", el => clearWaiting(bar, el)),
+    cmd("openWaitingLink", el => openWaitingLink(el)),
+    cmd("inbox", () => inbox(bar)),
     cmd("grouping", async () => {
       const pick = await vscode.window.showQuickPick(
         M.GROUPINGS.map(g => ({ label: M.GROUPING_LABELS[g], g, description: g === bar.grouping ? "current" : "" })),
@@ -957,6 +1088,12 @@ function activate(context) {
     w.onDidCreate(soon); w.onDidDelete(soon);
     context.subscriptions.push(w);
   }
+  // claude-inbox ran (here, or on the hour): the Attention subtitle says when
+  try { fs.mkdirSync(inboxDir, { recursive: true }); } catch {}
+  const inboxWatch = vscode.workspace.createFileSystemWatcher(
+    new vscode.RelativePattern(vscode.Uri.file(inboxDir), "state.json"));
+  inboxWatch.onDidChange(soon); inboxWatch.onDidCreate(soon);
+  context.subscriptions.push(inboxWatch);
   // the guard's mode, changed here, in a terminal or on another machine
   const confFile = process.env.CWS_CONFIG || path.join(HOME, ".config/claude-worksessions/config.env");
   let confReal = confFile;

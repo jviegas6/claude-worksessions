@@ -281,6 +281,76 @@ if has_done:
 PYEOF
 }
 
+# claude-wait [me|them|none] ["WHO"] ["WHAT"] [--where teams|mail|jira] [--link URL] [--since DATE]
+#   show or set who this request is waiting on; the VS Code sidebar's Attention view lists it
+#   under "Needs my reply" (me) or "Waiting on others" (them). none clears it.
+claude-wait() {
+  emulate -L zsh
+  local dir="$PWD" meta="" on="" who="" what="" where="" link="" since=""
+  local -a rest=()
+  while (( $# )); do
+    case "$1" in
+      --where) where="$2"; shift 2 ;;
+      --link)  link="$2";  shift 2 ;;
+      --since) since="$2"; shift 2 ;;
+      -h|--help)
+        print -r -- 'claude-wait [me|them|none] ["WHO"] ["WHAT"] [--where teams|mail|jira] [--link URL] [--since DATE]   show or set who the request waits on'
+        return 0 ;;
+      *) rest+=("$1"); shift ;;
+    esac
+  done
+  if (( ${#rest} )); then
+    case "${rest[1]:l}" in
+      me|mine)            on="me" ;;
+      them|other|others)  on="other" ;;
+      none|clear|nobody)  on="none" ;;
+      *) print -u2 -- "claude-wait: first argument must be me, them or none"; return 1 ;;
+    esac
+    who="${rest[2]:-}"; what="${(j: :)rest[3,-1]}"
+  fi
+  while [[ "$dir" == "$CLAUDE_WORK_ROOT"/* ]]; do
+    if [[ -f "$dir/.session.json" ]]; then meta="$dir/.session.json"; break; fi
+    dir="${dir:h}"
+  done
+  if [[ -z "$meta" ]]; then
+    print -u2 -- "claude-wait: no .session.json here (not inside a session folder)"; return 1
+  fi
+  WS_ON="$on" WS_WHO="$who" WS_WHAT="$what" WS_WHERE="$where" WS_LINK="$link" WS_SINCE="$since" \
+    "$CWS_PYTHON" - "$meta" <<'PYEOF'
+import datetime, json, os, sys
+p = sys.argv[1]
+d = json.load(open(p))
+old = d.get("waiting") if isinstance(d.get("waiting"), dict) and d["waiting"].get("on") in ("me", "other") else None
+
+def show(w):
+    if not w:
+        return "waiting: nobody"
+    return "waiting on {}: {}{}{}{}".format(
+        "me" if w["on"] == "me" else "them", w.get("who") or "?",
+        " -- " + w["what"] if w.get("what") else "", " (" + w["where"] + ")" if w.get("where") else "",
+        " since " + w["since"][:10] if w.get("since") else "")
+
+on = os.environ["WS_ON"]
+if not on:
+    print(show(old))
+    raise SystemExit(0)
+now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+if old:
+    d.setdefault("waiting_history", []).append(dict(old, until=now))
+if on == "none":
+    d.pop("waiting", None)
+else:
+    who, what = os.environ["WS_WHO"].strip(), os.environ["WS_WHAT"].strip()
+    keep = old or {}
+    d["waiting"] = {"on": on, "who": who or keep.get("who", ""), "what": what or keep.get("what", ""),
+                    "since": os.environ["WS_SINCE"].strip() or now,
+                    "where": os.environ["WS_WHERE"].strip() or keep.get("where", ""),
+                    "link": os.environ["WS_LINK"].strip() or keep.get("link", "")}
+json.dump(d, open(p, "w"), indent=2)
+print("{} -> {}".format(show(old), show(d.get("waiting"))))
+PYEOF
+}
+
 # --- claude-new --------------------------------------------------------------------
 _claude_new_ticket() {
   # Normalise a ticket to PREFIX-123 or Other; non-zero if it is neither.

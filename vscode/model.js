@@ -469,6 +469,65 @@ function guardMode(conf) {
   return m in GUARD_MODES ? m : "off";
 }
 
+// --- waiting: who the ball is with (claude-wait, claude-inbox) ----------------------------
+//   request.waiting: { on: "me" | "other", who, what, since (ISO), where, link } | null
+const WAITING_LABELS = { me: "Needs my reply", other: "Waiting on others" };
+const waitingOf = r => {
+  const w = r && r.waiting;
+  return w && typeof w === "object" && (w.on === "me" || w.on === "other") ? w : null;
+};
+const sinceEpoch = w => { const t = Date.parse((w && w.since) || ""); return isNaN(t) ? undefined : t / 1000; };
+
+// The Attention view: every flagged request, the longest wait first: { me: [requests], other: [requests] }.
+// The search box and filters do not apply -- what is waiting is waiting.
+function attention(data, opts) {
+  const out = { me: [], other: [] };
+  for (const r of requests(data, { ...(opts || {}), showEmpty: true, filter: "", filters: null })) {
+    const w = waitingOf(r);
+    if (w && !r.root) out[w.on].push(r);
+  }
+  const at = r => { const t = sinceEpoch(r.waiting); return t === undefined ? r.started || 0 : t; };
+  const by = (a, b) => at(a) - at(b);
+  out.me.sort(by); out.other.sort(by);
+  return out;
+}
+
+// "who · what · 3d" for a flagged request.
+function waitingText(r, now) {
+  const w = waitingOf(r);
+  if (!w) return "";
+  const t = sinceEpoch(w);
+  return [w.who, w.what, t !== undefined ? ago(t, now) : ""].filter(Boolean).join(" · ");
+}
+
+// Set or clear a request's waiting flag in its .session.json, as claude-wait does:
+// w = { on, who, what, where?, link?, since? } or null to clear. Returns [old, new].
+function setWaiting(folder, w, now = new Date()) {
+  const p = path.join(folder, ".session.json");
+  const d = JSON.parse(fs.readFileSync(p, "utf8"));
+  const iso = now.toISOString().replace(/\.\d+Z$/, "Z");
+  const old = waitingOf(d);
+  if (old) (d.waiting_history ||= []).push({ ...old, until: iso });
+  if (w) {
+    d.waiting = { on: w.on, who: w.who || "", what: w.what || "", since: w.since || iso,
+                  where: w.where || (old && old.where) || "", link: w.link || (old && old.link) || "" };
+  } else delete d.waiting;
+  fs.writeFileSync(p, JSON.stringify(d, null, 2));
+  return [old, d.waiting || null];
+}
+
+// claude-inbox's state: CWS_INBOX_DIR, else $XDG_DATA_HOME (or ~/.local/share)/claude-worksessions/inbox,
+// with state.json from its last run ({ at, error, found, new }) or null.
+function inboxDir(env, home) {
+  return path.join(env.XDG_DATA_HOME || path.join(home, ".local", "share"), "claude-worksessions", "inbox");
+}
+function inboxState(dir) {
+  try {
+    const d = JSON.parse(fs.readFileSync(path.join(dir, "state.json"), "utf8"));
+    return d && typeof d === "object" && !Array.isArray(d) ? d : null;
+  } catch { return null; }
+}
+
 // claude-audit arguments for a period and view.
 function auditArgs(period, detail, date) {
   const args = { today: ["--day"], week: ["--week"], lastweek: ["--week", date], month: ["--month"],
@@ -480,4 +539,5 @@ module.exports = { NO_TICKET, DAY_PRESETS, ARTIFACT_LABELS, dayRange, passes, fi
                    describeFilters, ticketsInUse, binDir, readDeleted, GROUPINGS, GROUPING_LABELS, SORTS, SORT_LABELS, ROOT_KEY, readPins, togglePin, requestKey,
                    isPinnedSession, isPinnedRequest, pinned, matches, shownFiles, fileChildren, visible, requests, dayOf, tree,
                    sessionLabel, tabName, ago, matchPending, parseCsv, taskTypes, setTaskType,
-                   readSkills, auditArgs, active, formatSize, latestRetro, retroArgs, GUARD_MODES, guardMode };
+                   readSkills, auditArgs, active, formatSize, latestRetro, retroArgs, GUARD_MODES, guardMode,
+                   WAITING_LABELS, waitingOf, attention, waitingText, setWaiting, inboxDir, inboxState };

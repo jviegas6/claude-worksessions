@@ -33,8 +33,9 @@ function fakeVscode(settings) {
     StatusBarAlignment: { Left: 1, Right: 2 },
     ProgressLocation: { Notification: 15 },
     RelativePattern: class { constructor(base, pattern) { this.base = base; this.pattern = pattern; } },
-    Uri: { file: p => ({ fsPath: p }) },
-    env: { clipboard: { writeText: async t => executed.push(["clipboard", t]) } },
+    Uri: { file: p => ({ fsPath: p }), parse: s => ({ external: s }) },
+    env: { clipboard: { writeText: async t => executed.push(["clipboard", t]) },
+           openExternal: async u => executed.push(["open", u.external]) },
     workspace: {
       textDocuments: [],
       getConfiguration: () => ({ get: (k, d) => (k in settings ? settings[k] : d) }),
@@ -1019,4 +1020,129 @@ test("active sessions, file sizes, retro and the guard mode (#25 #26 #27 #38)", 
   assert.doesNotMatch(view.description, /guard/);
   // a session starting or stopping refreshes the list
   assert.ok(fake.listeners["watch:*.json"].length >= 2);
+});
+
+test("Attention: what needs my reply and what I am waiting on (#49)", async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cws-attn-"));
+  const root = path.join(dir, "ws");
+  const savedXdg = process.env.XDG_DATA_HOME;
+  process.env.XDG_DATA_HOME = path.join(dir, "data");
+  t.after(() => { if (savedXdg === undefined) delete process.env.XDG_DATA_HOME; else process.env.XDG_DATA_HOME = savedXdg; });
+  const A = { path: path.join(root, "2026/10/12/10-00-00_a"), name: "firewall", ticket: "ABC-1", task_type: "", profile: "work",
+              waiting: { on: "me", who: "Ana", what: "confirm the IP", since: "2026-10-12T08:00:00Z", where: "teams", link: "https://t/1" } };
+  const B = { path: path.join(root, "2026/10/11/10-00-00_b"), name: "Reply to Bo: quote", ticket: "Other", task_type: "support", profile: "",
+              files: [], files_truncated: false, size: 0, mtime: 1, started: 1,
+              waiting: { on: "other", who: "Bo", what: "a quote", since: "2026-10-10T08:00:00Z", where: "mail", link: "" } };
+  for (const r of [A, B]) { fs.mkdirSync(r.path, { recursive: true }); fs.writeFileSync(path.join(r.path, ".session.json"), JSON.stringify({ name: r.name, waiting: r.waiting })); }
+  const now = Date.now() / 1000;
+  const data = { work_root: root, sessions: [
+    { id: "s1", mtime: now - 60, cwd: A.path, in_work_root: true, title: "Fix the rule", first_prompt: "f", last_prompt: "l", request: A },
+  ], requests: [B] };
+  const { bin, json } = stubSessions(dir, data);
+  const fake = fakeVscode({ sessionsCommand: bin });
+  const ctx = context();
+  await load(fake).activate(ctx);
+  await settle(ctx);
+  const view = ctx.subscriptions[2], p = view.provider, bar = ctx.subscriptions[0].provider;
+  assert.strictEqual(view.id, "claudeWorksessions.attention");
+  const run = (name, ...a) => fake.commands.get("claudeWorksessions." + name)(...a);
+
+  // two groups, each a flagged request with who · what · age, and the thread on hover
+  let items = allItems(p);
+  const groups = items.filter(([c]) => c.kind === "waiting");
+  assert.deepStrictEqual(groups.map(([c, it]) => [c.on, it.label, it.description, it.iconPath.id, it.collapsibleState]),
+                         [["me", "Needs my reply", "1", "bell-dot", 2], ["other", "Waiting on others", "1", "watch", 2]]);
+  const [a, aIt] = items.find(([c]) => c.kind === "request" && c.request.name === "firewall");
+  const [b, bIt] = items.find(([c]) => c.kind === "request" && c.request.name !== "firewall");
+  assert.ok(a.inAttention && b.inAttention);
+  assert.ok(aIt.description.startsWith("Ana · confirm the IP · "));
+  assert.ok(bIt.description.startsWith("Bo · a quote · "));
+  assert.deepStrictEqual([aIt.iconPath.id, aIt.contextValue, aIt.command.command], ["bell-dot", "request-waiting-link", "claudeWorksessions.openAttention"]);
+  assert.deepStrictEqual([bIt.iconPath.id, bIt.contextValue], ["watch", "request-waiting"]);
+  assert.match(aIt.tooltip.value, /\*\*Needs my reply\*\* — Ana: confirm the IP/);
+  assert.match(aIt.tooltip.value, /teams · since 2026-10-12 08:00/);
+  // its sessions show under it, with ids of their own
+  assert.ok(items.some(([c]) => c.kind === "session" && c.inAttention && c.session.id === "s1"));
+  const ids = items.map(([, it]) => it.id);
+  assert.strictEqual(new Set(ids).size, ids.length);
+  assert.strictEqual(view.description, "1 for me · 1 on others");
+  assert.strictEqual(view.message, undefined);
+  // the main tree is untouched by the flag
+  assert.strictEqual(allItems(bar).find(([c]) => c.kind === "request" && c.request.name === "firewall")[1].iconPath.id, "folder");
+
+  // a click: the latest session in a tab; a session-less request starts one in its folder
+  await run("openAttention", a);
+  assert.strictEqual(fake.terminals.length, 1);
+  assert.match(fake.terminals[0].sent[0], /claude-resume -p 'work' --resume 's1'/);
+  await run("openAttention", b);
+  assert.strictEqual(fake.terminals.length, 2);
+  assert.strictEqual(fake.terminals[1].sent[0], "claude");
+  assert.strictEqual(fake.terminals[1].cwd, B.path);
+
+  // the thread link opens in the browser; none to open says so
+  await run("openWaitingLink", a);
+  assert.deepStrictEqual(fake.executed.at(-1), ["open", "https://t/1"]);
+  await run("openWaitingLink", b);
+  assert.strictEqual(fake.messages.at(-1)[1], "This request's flag has no link to the thread.");
+
+  // Set waiting…: pick the group, who and what; the file changes and the history keeps the old flag
+  fake.answers.push(items => items[0], "Bo", "the signed quote");
+  await run("setWaiting", b);
+  let meta = JSON.parse(fs.readFileSync(path.join(B.path, ".session.json"), "utf8"));
+  assert.deepStrictEqual([meta.waiting.on, meta.waiting.who, meta.waiting.what, meta.waiting.where, meta.waiting_history[0].on],
+                         ["me", "Bo", "the signed quote", "mail", "other"]);
+  assert.strictEqual(fake.messages.at(-1)[1], "Reply to Bo: quote: needs my reply — Bo");
+  // Esc at any step changes nothing
+  fake.answers.push(undefined);
+  await run("setWaiting", b);
+  fake.answers.push(items => items[1], undefined);
+  await run("setWaiting", b);
+  fake.answers.push(items => items[1], "Bo", undefined);
+  await run("setWaiting", b);
+  assert.strictEqual(JSON.parse(fs.readFileSync(path.join(B.path, ".session.json"), "utf8")).waiting.on, "me");
+  // from a session row (its request), and with nothing picked: the focused tab's session, else a pick
+  fake.answers.push(items => items[2]);
+  await run("setWaiting", { kind: "session", session: data.sessions[0] });
+  meta = JSON.parse(fs.readFileSync(path.join(A.path, ".session.json"), "utf8"));
+  assert.ok(!meta.waiting && meta.waiting_history[0].who === "Ana");
+  assert.strictEqual(fake.messages.at(-1)[1], "firewall: waiting flag cleared.");
+  fake.vscode.window.activeTerminal = undefined;
+  fake.answers.push(items => items[0], items => items[1], "Ana", "");   // pick s1, then "waiting on others"
+  await run("setWaiting");
+  assert.strictEqual(JSON.parse(fs.readFileSync(path.join(A.path, ".session.json"), "utf8")).waiting.on, "other");
+  fake.answers.push(undefined);
+  await run("setWaiting");                                                // no session picked
+  await run("clearWaiting", b);
+  assert.ok(!JSON.parse(fs.readFileSync(path.join(B.path, ".session.json"), "utf8")).waiting);
+  // a root session, or a folder with no .session.json
+  await run("setWaiting", { kind: "request", request: { root: true, path: root, name: "root" } });
+  assert.match(fake.messages.at(-1)[1], /no request folder/);
+  await run("setWaiting", { kind: "request", request: { path: path.join(root, "nowhere"), name: "x" } });
+  assert.match(fake.messages.at(-1)[1], /No \.session\.json/);
+
+  // claude-inbox: a pick runs it in a tab; its state shows in the subtitle
+  fake.answers.push(items => items[2]);
+  await run("inbox");
+  assert.strictEqual(fake.terminals.at(-1).sent[0], "claude-inbox --dry-run");
+  assert.strictEqual(fake.terminals.at(-1).name, "inbox · --dry-run");
+  fake.answers.push(items => items[0]);
+  await run("inbox");
+  assert.deepStrictEqual([fake.terminals.at(-1).sent[0], fake.terminals.at(-1).name], ["claude-inbox", "inbox"]);
+  fake.answers.push(undefined);
+  await run("inbox");
+  const inboxDir = path.join(dir, "data", "claude-worksessions", "inbox");
+  fs.writeFileSync(path.join(inboxDir, "state.json"), JSON.stringify({ at: "2026-10-12 14:00", found: 1, new: 1 }));
+  await bar.refresh();
+  assert.strictEqual(view.description, "1 for me · 1 on others · scanned 14:00");
+  fs.writeFileSync(path.join(inboxDir, "state.json"), JSON.stringify({ at: "2026-10-12 15:00", error: "x" }));
+  for (const f of fake.listeners["watch:state.json"]) f();
+  await bar.refresh();
+  assert.strictEqual(view.description, "1 for me · 1 on others · scanned 15:00 (failed)");
+
+  // nothing flagged: the view says what to do
+  fs.writeFileSync(json, JSON.stringify({ work_root: root, sessions: [{ ...data.sessions[0], request: { ...A, waiting: null } }], requests: [] }));
+  await bar.refresh();
+  assert.deepStrictEqual(p.getChildren(), []);
+  assert.match(view.message, /^Nothing is waiting\./);
+  assert.strictEqual(view.description, "0 for me · 0 on others · scanned 15:00 (failed)");
 });

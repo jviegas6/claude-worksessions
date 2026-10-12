@@ -671,3 +671,31 @@ def test_claude_goal_shows_and_reanchors(tmp_path):
     with pytest.raises(subprocess.CalledProcessError) as e:
         zsh('cd "{}" && claude-goal x'.format(tmp_path), tmp_path)
     assert "no .session.json here" in e.value.stderr
+
+
+def test_claude_wait_shows_sets_flips_and_clears(tmp_path):
+    d = tmp_path / "2026" / "10" / "12" / "10-00-00_x"
+    (d / "sub").mkdir(parents=True)
+    (d / ".session.json").write_text(json.dumps({"name": "x"}))
+    wait = lambda args, cwd=d: zsh('cd "{}" && claude-wait {}'.format(cwd, args), tmp_path)
+    assert wait("") == "waiting: nobody\n"
+    out = wait("them Ana 'confirm the new IP' --where teams --link https://t/1 --since 2026-10-12T08:00:00Z", d / "sub")
+    assert out == "waiting: nobody -> waiting on them: Ana -- confirm the new IP (teams) since 2026-10-12\n"
+    meta = json.loads((d / ".session.json").read_text())
+    assert meta["waiting"] == {"on": "other", "who": "Ana", "what": "confirm the new IP",
+                               "since": "2026-10-12T08:00:00Z", "where": "teams", "link": "https://t/1"}
+    # the reply came: flip to me, keeping who, where and link; the old flag goes to the history
+    out = wait("me")
+    assert out.startswith("waiting on them: Ana -- confirm the new IP (teams) since 2026-10-12 -> waiting on me: Ana -- confirm the new IP (teams) since ")
+    meta = json.loads((d / ".session.json").read_text())
+    assert meta["waiting"]["on"] == "me" and meta["waiting"]["link"] == "https://t/1"
+    assert meta["waiting_history"][0]["on"] == "other" and meta["waiting_history"][0]["until"]
+    assert wait("none").endswith("-> waiting: nobody\n")
+    assert "waiting" not in json.loads((d / ".session.json").read_text())
+    assert wait("--help").startswith("claude-wait [me|them|none]")
+    with pytest.raises(subprocess.CalledProcessError) as e:
+        wait("sideways")
+    assert "must be me, them or none" in e.value.stderr
+    with pytest.raises(subprocess.CalledProcessError) as e:
+        zsh('cd "{}" && claude-wait me'.format(tmp_path), tmp_path)
+    assert "no .session.json here" in e.value.stderr

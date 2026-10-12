@@ -6,8 +6,9 @@
 const fs = require("fs");
 const path = require("path");
 
-const GROUPINGS = ["day", "ticket", "recent"];
+const GROUPINGS = ["topics", "day", "ticket", "recent"];
 const GROUPING_LABELS = {
+  topics: "Open topics",
   day: "By day",
   ticket: "By ticket",
   recent: "Recent sessions",
@@ -296,7 +297,40 @@ function tree(data, grouping, opts) {
           ...grouped(data, grouping, opts)];
 }
 
+// Open topics: one per ticket (a request with no ticket is a topic of its own), kept while it
+// had activity in the last TOPIC_DAYS days or carries a waiting flag. What needs my reply comes
+// first, then what waits on others, then the rest by activity. Each: { kind: "topic", key,
+// requests, mtime, waiting: [flags], ticket }.
+const TOPIC_DAYS = 14;
+const topicRank = t => (t.waiting.some(w => w.on === "me") ? 0 : t.waiting.length ? 1 : 2);
+function topics(data, opts) {
+  const now = (opts && opts.now) || Date.now() / 1000;
+  const groups = new Map();
+  for (const r of requests(data, opts)) {
+    if (r.root) continue;
+    const ticket = r.ticket && r.ticket !== "Other" ? r.ticket : "";
+    const k = ticket || r.name;
+    if (!groups.has(k)) groups.set(k, { kind: "topic", key: k, ticket, requests: [], mtime: 0, waiting: [] });
+    const g = groups.get(k);
+    g.requests.push(r);
+    g.mtime = Math.max(g.mtime, r.mtime || 0);
+    const w = waitingOf(r);
+    if (w) g.waiting.push(w);
+  }
+  return [...groups.values()].filter(g => g.waiting.length || g.mtime >= now - TOPIC_DAYS * 86400)
+    .sort((a, b) => topicRank(a) - topicRank(b) || b.mtime - a.mtime);
+}
+
+// "needs my reply · Ana" / "waiting on Bo" for a topic's row, or "".
+function topicWaiting(t) {
+  const me = t.waiting.filter(w => w.on === "me"), other = t.waiting.filter(w => w.on === "other");
+  const who = ws => [...new Set(ws.map(w => w.who).filter(Boolean))].join(", ");
+  return [me.length && ("needs my reply" + (who(me) ? " · " + who(me) : "")),
+          other.length && ("waiting on " + (who(other) || "others"))].filter(Boolean).join(" · ");
+}
+
 function grouped(data, grouping, opts) {
+  if (grouping === "topics") return topics(data, opts);
   if (grouping === "recent") {
     const reqs = requests(data, opts);
     const reqOf = new Map();
@@ -540,4 +574,5 @@ module.exports = { NO_TICKET, DAY_PRESETS, ARTIFACT_LABELS, dayRange, passes, fi
                    isPinnedSession, isPinnedRequest, pinned, matches, shownFiles, fileChildren, visible, requests, dayOf, tree,
                    sessionLabel, tabName, ago, matchPending, parseCsv, taskTypes, setTaskType,
                    readSkills, auditArgs, active, formatSize, latestRetro, retroArgs, GUARD_MODES, guardMode,
-                   WAITING_LABELS, waitingOf, attention, waitingText, setWaiting, inboxDir, inboxState };
+                   WAITING_LABELS, waitingOf, attention, waitingText, setWaiting, inboxDir, inboxState,
+                   TOPIC_DAYS, topics, topicWaiting };

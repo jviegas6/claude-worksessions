@@ -19,6 +19,9 @@
   the flag. Nothing is drafted or sent. `--install` runs it every hour (launchd on macOS, cron
   elsewhere); `--dry-run`, `--hours N`, `--status`. New config keys: `CWS_INBOX_PROFILE`,
   `CWS_INBOX_HOURS`, `CWS_INBOX_TASK_TYPE`, `CWS_INBOX_MODEL`, `CWS_INBOX_TIMEOUT`.
+- **Open topics grouping** in the Sessions tree: one row per ticket (a request with no ticket is
+  a topic of its own), kept while it had activity in the last 14 days or carries a waiting flag;
+  what needs my reply first, then what waits on others, then by activity.
 - `claude-sessions --json`: each request carries its `waiting` flag (or `null`).
 
 ## [2.21.0] — 2026-10-03

@@ -247,7 +247,7 @@ class Sidebar {
       return el.sessions.map(x => ({ kind: "session", session: x.session, request: x.request,
                                      showRequest: true, inActive: true }));
     }
-    if (el.kind === "group") return el.requests.map(r => ({ kind: "request", request: r }));
+    if (el.kind === "group" || el.kind === "topic") return el.requests.map(r => ({ kind: "request", request: r }));
     if (el.kind === "request") {
       const r = el.request, files = r.files || [];
       return [...r.sessions.map(s => ({ kind: "session", session: s, request: r, inPinned })),
@@ -315,6 +315,22 @@ class Sidebar {
       it.tooltip = "Sessions a Claude process has open right now — in a tab here, a terminal or the Claude Code panel.";
       return it;
     }
+    if (el.kind === "topic") {
+      // a topic opens up when something is waiting on it, or it is the first; the rest fold
+      const it = new vscode.TreeItem(el.key, el.first || searching || el.waiting.length ? C.Expanded : C.Collapsed);
+      it.id = idp + "t|" + el.key;
+      const n = el.requests.length, state = M.topicWaiting(el);
+      it.description = [state, `${n} request${n > 1 ? "s" : ""}`, M.ago(el.mtime, now)].filter(Boolean).join(" · ");
+      const me = el.waiting.some(w => w.on === "me");
+      it.iconPath = me ? new vscode.ThemeIcon("bell-dot", new vscode.ThemeColor("charts.orange"))
+        : el.waiting.length ? new vscode.ThemeIcon("watch", new vscode.ThemeColor("charts.blue"))
+        : new vscode.ThemeIcon(el.ticket ? "tag" : "folder");
+      it.contextValue = "topic";
+      it.tooltip = (el.ticket ? `Ticket ${el.ticket}` : "A request with no ticket") +
+        ` — ${n} request${n > 1 ? "s" : ""}, last activity ${M.ago(el.mtime, now)} ago.` +
+        (state ? `\n${state}.` : "") + `\nOpen topics: activity in the last ${M.TOPIC_DAYS} days, or a waiting flag.`;
+      return it;
+    }
     if (el.kind === "group") {
       const it = new vscode.TreeItem(el.key, el.first || searching ? C.Expanded : C.Collapsed);
       it.id = idp + "g|" + el.key;
@@ -332,7 +348,7 @@ class Sidebar {
       it.contextValue = r.root ? "root" : el.inAttention ? "request-waiting" + (w && w.link ? "-link" : "")
         : pinnedReq ? "request-pinned" : "request";
       it.description = el.inAttention ? M.waitingText(r, now)
-        : [pinnedReq && !el.inPinned && "pinned", this.grouping !== "ticket" && r.ticket,
+        : [pinnedReq && !el.inPinned && "pinned", this.grouping !== "ticket" && this.grouping !== "topics" && r.ticket,
            r.task_type, r.profile, M.ago(r.mtime, now)].filter(Boolean).join(" · ");
       const live = r.sessions.some(s => this.isOpen(s.id) || s.active);
       it.iconPath = el.inAttention
@@ -989,7 +1005,7 @@ function activate(context) {
     cmd("grouping", async () => {
       const pick = await vscode.window.showQuickPick(
         M.GROUPINGS.map(g => ({ label: M.GROUPING_LABELS[g], g, description: g === bar.grouping ? "current" : "" })),
-        { placeHolder: "Group sessions" });
+        { placeHolder: "Group sessions — Open topics: one per ticket, active in the last 14 days or waiting on someone" });
       if (!pick) return;
       bar.grouping = pick.g;
       context.globalState.update("grouping", pick.g);

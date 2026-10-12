@@ -1146,3 +1146,42 @@ test("Attention: what needs my reply and what I am waiting on (#49)", async t =>
   assert.match(view.message, /^Nothing is waiting\./);
   assert.strictEqual(view.description, "0 for me · 0 on others · scanned 15:00 (failed)");
 });
+
+test("Open topics grouping: rows per ticket with their waiting state (#49)", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cws-topics-"));
+  const root = path.join(dir, "ws");
+  const now = Date.now() / 1000;
+  const A = { path: path.join(root, "2026/10/12/10-00-00_a"), name: "a", ticket: "ABC-1", task_type: "", profile: "",
+              waiting: { on: "me", who: "Ana", what: "x", since: "2026-10-12T08:00:00Z" } };
+  const B = { path: path.join(root, "2026/10/12/11-00-00_b"), name: "b", ticket: "ABC-1", task_type: "", profile: "" };
+  const C = { path: path.join(root, "2026/10/12/12-00-00_c"), name: "c", ticket: "Other", task_type: "", profile: "" };
+  const data = { work_root: root, sessions: [
+    { id: "s1", mtime: now - 60, cwd: A.path, in_work_root: true, title: "A", first_prompt: "f", last_prompt: "l", request: A },
+    { id: "s2", mtime: now - 120, cwd: B.path, in_work_root: true, title: "B", first_prompt: "f", last_prompt: "l", request: B },
+    { id: "s3", mtime: now - 180, cwd: C.path, in_work_root: true, title: "C", first_prompt: "f", last_prompt: "l", request: C },
+    { id: "s4", mtime: now - 30 * 86400, cwd: root, in_work_root: true, title: "old root", first_prompt: "f", last_prompt: "l", request: null },
+  ] };
+  const { bin } = stubSessions(dir, data);
+  const fake = fakeVscode({ sessionsCommand: bin });
+  const ctx = context();
+  await load(fake).activate(ctx);
+  await settle(ctx);
+  const view = ctx.subscriptions[0], p = view.provider;
+  fake.answers.push(items => items.find(i => i.g === "topics"));
+  await fake.commands.get("claudeWorksessions.grouping")();
+  assert.strictEqual(view.description, "Open topics · Last activity");
+  const items = allItems(p);
+  const tops = items.filter(([c]) => c.kind === "topic");
+  assert.deepStrictEqual(tops.map(([, it]) => [it.label, it.description, it.iconPath.id, it.collapsibleState, it.contextValue]), [
+    ["ABC-1", "needs my reply · Ana · 2 requests · 1m", "bell-dot", 2, "topic"],
+    ["c", "1 request · 3m", "folder", 1, "topic"],
+  ]);
+  assert.match(tops[0][1].tooltip, /Ticket ABC-1 — 2 requests, last activity 1m ago\.\nneeds my reply · Ana\.\nOpen topics: activity in the last 14 days/);
+  assert.match(tops[1][1].tooltip, /^A request with no ticket/);
+  // requests sit under their topic, without repeating the ticket; the work root is not a topic
+  const reqs = items.filter(([c]) => c.kind === "request");
+  assert.deepStrictEqual(reqs.map(([c, it]) => [c.request.name, it.description]), [["a", "1m"], ["b", "2m"], ["c", "3m"]]);
+  assert.ok(!items.some(([c]) => c.kind === "group"));
+  const ids = items.map(([, it]) => it.id);
+  assert.strictEqual(new Set(ids).size, ids.length);
+});

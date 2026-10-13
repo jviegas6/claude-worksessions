@@ -302,6 +302,11 @@ what the thread said before it (as the scan summarised it), the message itself a
 needs, with the link. So when the thread comes back after your reply, the follow-up lands in
 the same folder, under the earlier messages and your `claude-wait --note` entries, and the
 session that picks it up has the whole exchange.
+The scan also reports the threads where **your** message is now the latest. A folder of such
+a thread that was *Waiting on me* flips to *Waiting on someone* — who, what you are now
+waiting for (what your message asked, else "their answer to: …"), since your reply — and
+`thread.md` gets "I replied: …" with the link. A folder already waiting on them, or a thread
+with no folder, is not news. Settling a topic for good is still `claude-wait none`.
 Messages already placed are remembered in `~/.local/share/claude-worksessions/inbox/seen.json`,
 so clearing a flag does not bring the same message back. `state.json` next to it holds the
 last run, shown in the Open topics view's subtitle; `inbox.log` is the hourly run's output.

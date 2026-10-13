@@ -23,6 +23,10 @@ nothing is sent. For each item this script then:
   - appends the message to the folder's thread.md: what came before it, the message itself
     and what it needs, so the session that picks it up has the context.
 
+The scan also reports the threads where your own message is now the latest: a folder of
+such a thread that was waiting on you flips to waiting on them, with your reply noted in
+thread.md. Clearing a flag for good is still claude-wait none.
+
 The VS Code sidebar's Open topics view lists the flagged folders; claude-wait sets or clears
 the flag by hand and adds its own notes to thread.md. Messages already handled are
 remembered (seen.json), so clearing the flag does not bring the same message back.
@@ -72,8 +76,27 @@ SCHEMA = {
                 "required": ["who", "subject", "what", "where", "link", "message_id", "received", "ticket", "thread_id", "history", "message"],
             },
         },
+        "answered": {
+            "type": "array",
+            "description": "threads where my own message is the latest one",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "who": {"type": "string", "description": "who I replied to (person or team)"},
+                    "subject": {"type": "string", "description": "the thread's subject or topic, a few words"},
+                    "where": {"type": "string", "enum": ["teams", "mail"]},
+                    "link": {"type": "string", "description": "web link to my reply or the thread"},
+                    "thread_id": {"type": "string", "description": "the Teams chat or channel id, or the mail conversation id"},
+                    "replied": {"type": "string", "description": "when I sent it, ISO 8601"},
+                    "summary": {"type": "string", "description": "what I said, one line"},
+                    "what": {"type": "string", "description": "what I am now waiting for from them, one line, or empty"},
+                    "ticket": {"type": "string", "description": "a PREFIX-123 ticket named in the thread, else empty"},
+                },
+                "required": ["who", "subject", "where", "link", "thread_id", "replied", "summary", "what", "ticket"],
+            },
+        },
     },
-    "required": ["items"],
+    "required": ["items", "answered"],
 }
 
 PROMPT = """Look at my Microsoft Teams chats and channel messages and my Outlook mail from the last {hours} hours.
@@ -93,7 +116,12 @@ channel id, or the mail conversation id), the history -- what was asked and answ
 before this message, in order, a few lines, empty if the message starts the thread -- and the
 message itself: its text, trimmed to what matters, up to about 1000 characters. The history and
 the message are the context the reply will be written from, so keep what a reader needs: who said
-what, the question, any deadline. If nothing needs me, answer with an empty list."""
+what, the question, any deadline. If nothing needs me, answer with an empty list.
+
+Separately, list the threads from the same window where my own message is the latest one (I
+answered, and nobody has come back since): who I replied to, the subject, where, a link, the thread
+id, when I sent it, what I said in one line, what I am now waiting for from them if my message
+asked for something, else empty, and the ticket (PREFIX-123) if the thread names one, else empty."""
 
 READ_TOOLS = [
     "mcp__claude_ai_Microsoft_365__get_me", "mcp__claude_ai_Microsoft_365__read_resource",
@@ -136,11 +164,11 @@ def settings(conf):
 
 # --- the scan: a headless Claude with the connector --------------------------------------
 def scan(cfg, hours):
-    """Ask Claude what needs a reply. Returns (items, error)."""
+    """Ask Claude what needs a reply, and what I answered. Returns (items, answered, error)."""
     env = dict(os.environ)
     d = os.path.join(HOME, ".claude-" + cfg["profile"])
     if not os.path.isdir(d):
-        return [], "profile dir {} not found".format(d)
+        return [], [], "profile dir {} not found".format(d)
     env["CLAUDE_CONFIG_DIR"] = d
     # built-in tools off, only the connector's read tools allowed; anything else is denied, not asked;
     # hooks off so the guard never runs; no transcript, so the run is not a session in the sidebar
@@ -152,13 +180,13 @@ def scan(cfg, hours):
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=cfg["timeout"], cwd=DATA_DIR, env=env)
         out = json.loads(r.stdout or "{}")
     except subprocess.TimeoutExpired:
-        return [], "timeout after {:g}s".format(cfg["timeout"])
+        return [], [], "timeout after {:g}s".format(cfg["timeout"])
     except (OSError, ValueError) as e:
-        return [], str(e)[:300]
+        return [], [], str(e)[:300]
     ans = out.get("structured_output") if isinstance(out, dict) else None
     if not isinstance(out, dict) or out.get("is_error") or not isinstance(ans, dict) or not isinstance(ans.get("items"), list):
-        return [], ((out.get("result") if isinstance(out, dict) else None) or r.stderr or "no answer").strip()[:300]
-    items = []
+        return [], [], ((out.get("result") if isinstance(out, dict) else None) or r.stderr or "no answer").strip()[:300]
+    items, answered = [], []
     for it in ans["items"]:
         if not isinstance(it, dict) or not (it.get("who") or it.get("subject")):
             continue
@@ -170,7 +198,16 @@ def scan(cfg, hours):
                       "message_id": text("message_id"), "received": text("received"),
                       "ticket": ticket_of(text("ticket")) or ticket_of(text("subject") + " " + text("what")),
                       "thread_id": text("thread_id"), "history": lines("history"), "message": lines("message")[:2000]})
-    return items, None
+    for it in ans.get("answered") if isinstance(ans.get("answered"), list) else []:
+        if not isinstance(it, dict) or not (it.get("who") or it.get("subject")):
+            continue
+        text = lambda k: " ".join(str(it.get(k) or "").split())
+        where = text("where").lower()
+        answered.append({"who": text("who"), "subject": text("subject"), "where": where if where in ("teams", "mail") else "mail",
+                         "link": text("link"), "thread_id": text("thread_id"), "replied": text("replied"),
+                         "summary": text("summary"), "what": text("what"),
+                         "ticket": ticket_of(text("ticket")) or ticket_of(text("subject") + " " + text("what"))})
+    return items, answered, None
 
 
 def ticket_of(text):
@@ -346,12 +383,34 @@ def flag_folder(folder, item):
     return "flipped" if old else "set"
 
 
+def answered_folder(folder, a):
+    """A folder waiting on me whose thread I answered: flip it to waiting on them, with my reply
+    noted in thread.md. Returns True if it flipped."""
+    p = os.path.join(folder, ".session.json")
+    d = load_json(p, {})
+    old = d.get("waiting") if isinstance(d.get("waiting"), dict) else None
+    if not old or old.get("on") != "me":
+        return False
+    now = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    d.setdefault("waiting_history", []).append(dict(old, until=now))
+    what = a["what"] or ("their answer to: " + a["summary"] if a["summary"] else old.get("what") or "")
+    d["waiting"] = {"on": "other", "who": a["who"] or old.get("who") or "", "what": what, "since": a["replied"] or now,
+                    "where": a["where"], "link": a["link"] or old.get("link") or ""}
+    if not d.get("thread") and thread_of(a):
+        d["thread"] = thread_of(a)
+    save_json(p, d)
+    when = (a["replied"] or now)[:16].replace("T", " ")
+    entry = "## {} · waiting on them: {} -- {} ({})\n\nI replied: {}".format(when, d["waiting"]["who"], what, a["where"], a["summary"] or "(see the thread)")
+    add_note(folder, d.get("name") or os.path.basename(folder), entry + ("\nLink: " + a["link"] if a["link"] else ""))
+    return True
+
+
 def seen_key(item):
     return "{}:{}".format(item["where"], item["message_id"] or item["link"] or (item["who"] + "|" + item["subject"]))
 
 
-def place(items, cfg, dry_run=False, now=None):
-    """Put each item on the Attention list. Returns the log lines."""
+def place(items, cfg, dry_run=False, now=None, answered=()):
+    """Put each item on the Open topics list; flip what I answered to waiting on them. Returns the log lines."""
     seen_path = os.path.join(DATA_DIR, "seen.json")
     seen = load_json(seen_path, {})
     folders = request_folders(cfg["root"])
@@ -378,6 +437,16 @@ def place(items, cfg, dry_run=False, now=None):
         seen[key] = {"folder": folder, "at": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
     if not dry_run:
         save_json(seen_path, seen)
+    for a in answered:
+        folder = folder_for_thread(folders, a) or folder_for_ticket(folders, a.get("ticket"))
+        meta = load_json(os.path.join(folder, ".session.json"), {}) if folder else {}
+        if not folder or not isinstance(meta.get("waiting"), dict) or meta["waiting"].get("on") != "me":
+            continue        # nothing was waiting on me there: not news
+        label = "{} · {}".format(a["who"], a["subject"])
+        if dry_run:
+            lines.append("would answer {} -> {}".format(label, os.path.relpath(folder, cfg["root"])))
+        elif answered_folder(folder, a):
+            lines.append("answered {} -> {}".format(label, os.path.relpath(folder, cfg["root"])))
     return lines
 
 
@@ -466,17 +535,20 @@ def main(argv=None):
     os.makedirs(DATA_DIR, exist_ok=True)
     hours = args.hours or cfg["hours"]
     at = dt.datetime.now().strftime("%Y-%m-%d %H:%M")
-    items, err = scan(cfg, hours)
+    items, answered, err = scan(cfg, hours)
     if err:
         if not args.dry_run:
             save_json(os.path.join(DATA_DIR, "state.json"), {"at": at, "error": err, "found": 0, "new": 0})
         print("claude-inbox {}: scan failed: {}".format(at, err), file=sys.stderr)
         return 1
-    lines = place(items, cfg, dry_run=args.dry_run)
-    new = sum(1 for ln in lines if not ln.startswith("seen"))
+    lines = place(items, cfg, dry_run=args.dry_run, answered=answered)
+    flipped = sum(1 for ln in lines if ln.startswith(("answered", "would answer")))
+    new = sum(1 for ln in lines if not ln.startswith("seen")) - flipped
     if not args.dry_run:
-        save_json(os.path.join(DATA_DIR, "state.json"), {"at": at, "error": None, "found": len(items), "new": new, "hours": hours})
-    print("claude-inbox {}: {} item(s) need a reply in the last {:g}h, {} new".format(at, len(items), hours, new))
+        save_json(os.path.join(DATA_DIR, "state.json"), {"at": at, "error": None, "found": len(items), "new": new,
+                                                          "answered": flipped, "hours": hours})
+    print("claude-inbox {}: {} item(s) need a reply in the last {:g}h, {} new{}".format(
+        at, len(items), hours, new, "; {} answered by me".format(flipped) if flipped else ""))
     for ln in lines:
         print("  " + ln)
     return 0

@@ -58,8 +58,8 @@ def test_scan_runs_claude_headless_with_the_connector_only(inbox, home, monkeypa
                                                {"who": "", "subject": ""}, "junk"]}}
         return subprocess.CompletedProcess(cmd, 0, json.dumps(out), "")
     monkeypatch.setattr(inbox.subprocess, "run", run)
-    items, err = inbox.scan(cfg(home), 3)
-    assert err is None and [i["message_id"] for i in items] == ["m1", "m2"]
+    items, answered, err = inbox.scan(cfg(home), 3)
+    assert err is None and [i["message_id"] for i in items] == ["m1", "m2"] and answered == []
     assert items[1]["where"] == "mail" and items[1]["ticket"] == "BTPA-7"
     cmd, kw = calls[0]
     assert cmd[:2] == ["claude", "-p"] and "--no-session-persistence" in cmd and "--strict-mcp-config" not in cmd
@@ -67,16 +67,22 @@ def test_scan_runs_claude_headless_with_the_connector_only(inbox, home, monkeypa
     allowed = cmd[cmd.index("--allowedTools") + 1].split(",")
     assert all(t.startswith("mcp__claude_ai_Microsoft_365__") for t in allowed) and "outlook_send_mail" not in "".join(allowed)
     assert json.loads(cmd[cmd.index("--json-schema") + 1]) == inbox.SCHEMA
-    assert "last 3 hours" in cmd[-1] and "send nothing" in cmd[-1] and "thread id" in cmd[-1]
+    assert "last 3 hours" in cmd[-1] and "send nothing" in cmd[-1] and "thread id" in cmd[-1] and "my own message is the latest" in cmd[-1]
     assert items[0]["message"] == "Hi Jose, is 10.0.0.5 the new IP?\nWe need it by Thursday." and items[0]["history"] == ""
     assert kw["env"]["CLAUDE_CONFIG_DIR"] == str(home / ".claude-personal") and kw["cwd"] == inbox.DATA_DIR
     # a ticket in the subject counts when the model gave none
     monkeypatch.setattr(inbox.subprocess, "run", lambda cmd, **kw: subprocess.CompletedProcess(
         cmd, 0, json.dumps({"structured_output": {"items": [item(subject="BTPA-12 access", ticket="", thread_id=" 19:abc@unq.gbl.spaces ",
-                                                                    history="  Ana asked.\n\n  I  said no.\n", message="x" * 3000)]}}), ""))
-    it = inbox.scan(cfg(home), 2.5)[0][0]
+                                                                    history="  Ana asked.\n\n  I  said no.\n", message="x" * 3000)],
+                                                   "answered": [{"who": "Bo", "subject": "quote", "where": "Teams", "link": "https://t/9",
+                                                                 "thread_id": "19:q@thread.v2", "replied": "2026-10-12T09:00:00Z",
+                                                                 "summary": "sent  the quote", "what": "", "ticket": "see BTPA-3"}, {"who": ""}, 3]}}), ""))
+    items, answered, _ = inbox.scan(cfg(home), 2.5)
+    it = items[0]
     assert it["ticket"] == "BTPA-12" and it["thread_id"] == "19:abc@unq.gbl.spaces"
     assert it["history"] == "Ana asked.\nI said no." and len(it["message"]) == 2000
+    assert answered == [{"who": "Bo", "subject": "quote", "where": "teams", "link": "https://t/9", "thread_id": "19:q@thread.v2",
+                         "replied": "2026-10-12T09:00:00Z", "summary": "sent the quote", "what": "", "ticket": "BTPA-3"}]
 
 
 @pytest.mark.parametrize("stdout, stderr, exc, err", [
@@ -95,12 +101,12 @@ def test_scan_errors(inbox, home, monkeypatch, stdout, stderr, exc, err):
             raise exc
         return subprocess.CompletedProcess(cmd, 0, stdout, stderr)
     monkeypatch.setattr(inbox.subprocess, "run", run)
-    items, e = inbox.scan(cfg(home), 3)
-    assert items == [] and err in e
+    items, answered, e = inbox.scan(cfg(home), 3)
+    assert items == [] and answered == [] and err in e
 
 
 def test_scan_needs_the_profile_dir(inbox, home):
-    assert inbox.scan(cfg(home, profile="nope"), 3) == ([], "profile dir {} not found".format(home / ".claude-nope"))
+    assert inbox.scan(cfg(home, profile="nope"), 3) == ([], [], "profile dir {} not found".format(home / ".claude-nope"))
 
 
 def make_request(root, day, name, meta):
@@ -191,6 +197,26 @@ def test_place_creates_flags_flips_and_remembers(inbox, home, monkeypatch, capsy
     assert lines[0].endswith("reply-dan-firewall-rule-2")
     assert lines[1].startswith("set      ")
     assert "teams:Cy|BTPA-9" in json.load(open(os.path.join(inbox.DATA_DIR, "seen.json")))
+    # threads I answered (found like messages: thread, person and subject, else ticket): a folder waiting on me
+    # flips to waiting on them with my reply in thread.md; one waiting on them already, or with no folder, is not news
+    ans = lambda **kw: dict({"who": "Ana Silva", "subject": "the IP", "where": "teams", "link": "https://t/r1", "thread_id": "",
+                             "replied": "2026-10-12T15:00:00Z", "summary": "sent 10.0.0.5", "what": "confirm it is in the allow-list",
+                             "ticket": "BTPA-7"}, **kw)
+    lines = inbox.place([], c, dry_run=True, answered=[ans(), ans(who="Zed", subject="nothing", ticket="")])
+    assert lines == ["would answer Ana Silva · the IP -> 2026/10/10/10-00-00_ticketed"]
+    assert json.loads((ticketed / ".session.json").read_text())["waiting"]["on"] == "me"
+    lines = inbox.place([], c, answered=[ans(thread_id="19:ttt@unq.gbl.spaces"), ans(who="Zed", subject="nothing", ticket=""),
+                                         ans(who="Cy", subject="BTPA-9", what="", summary="", ticket="BTPA-9")])
+    assert lines == ["answered Ana Silva · the IP -> 2026/10/10/10-00-00_ticketed", "answered Cy · BTPA-9 -> 2026/10/11/10-00-00_plain"]
+    m = json.loads((ticketed / ".session.json").read_text())
+    assert m["waiting"] == {"on": "other", "who": "Ana Silva", "what": "confirm it is in the allow-list", "since": "2026-10-12T15:00:00Z",
+                            "where": "teams", "link": "https://t/r1"}
+    assert m["waiting_history"][-1]["on"] == "me" and m["waiting_history"][-1]["until"] == "2026-10-12T14:30:00Z" and m["thread"] == "19:ttt@unq.gbl.spaces"
+    assert (ticketed / "thread.md").read_text().endswith(
+        "## 2026-10-12 15:00 · waiting on them: Ana Silva -- confirm it is in the allow-list (teams)\n\nI replied: sent 10.0.0.5\nLink: https://t/r1\n\n")
+    plain = json.loads((root / "2026/10/11/10-00-00_plain/.session.json").read_text())["waiting"]
+    assert plain["on"] == "other" and plain["what"] == "confirm the new IP"      # nothing said: what it was waiting for stays
+    assert inbox.place([], c, answered=[ans()]) == []                            # already waiting on them
 
 
 def test_helpers(inbox, home):
@@ -257,17 +283,25 @@ def test_install_launchd_and_cron(inbox, home, monkeypatch):
 
 def test_main_scans_places_and_records_state(inbox, home, monkeypatch, capsys):
     (home / ".claude-personal").mkdir()
-    monkeypatch.setattr(inbox, "scan", lambda cfg, hours: ([item()], None))
+    monkeypatch.setattr(inbox, "scan", lambda cfg, hours: ([item()], [], None))
     assert inbox.main([]) == 0
     out = capsys.readouterr().out
-    assert "1 item(s) need a reply in the last 3h, 1 new" in out and "created  Ana Silva" in out
+    assert "1 item(s) need a reply in the last 3h, 1 new\n" in out and "created  Ana Silva" in out
     st = json.load(open(os.path.join(inbox.DATA_DIR, "state.json")))
-    assert (st["found"], st["new"], st["error"], st["hours"]) == (1, 1, None, 3.0)
+    assert (st["found"], st["new"], st["answered"], st["error"], st["hours"]) == (1, 1, 0, None, 3.0)
     assert inbox.main(["--status"]) == 0
     assert "last run" in capsys.readouterr().out and "1 item(s), 1 new" in inbox.status()
+    # I answered it: the next run flips the folder and says so
+    monkeypatch.setattr(inbox, "scan", lambda cfg, hours: ([], [{"who": "Ana Silva", "subject": "firewall rule", "where": "teams",
+        "link": "", "thread_id": "", "replied": "", "summary": "done", "what": "", "ticket": ""}], None))
+    assert inbox.main([]) == 0
+    out = capsys.readouterr().out
+    assert "0 item(s) need a reply in the last 3h, 0 new; 1 answered by me" in out and "answered Ana Silva" in out
+    assert json.load(open(os.path.join(inbox.DATA_DIR, "state.json")))["answered"] == 1
+    monkeypatch.setattr(inbox, "scan", lambda cfg, hours: ([item()], [], None))
     assert inbox.main(["--dry-run", "--hours", "24"]) == 0
     assert "would" not in capsys.readouterr().out      # already seen
-    monkeypatch.setattr(inbox, "scan", lambda cfg, hours: ([], "Not logged in"))
+    monkeypatch.setattr(inbox, "scan", lambda cfg, hours: ([], [], "Not logged in"))
     assert inbox.main([]) == 1
     assert "scan failed: Not logged in" in capsys.readouterr().err
     assert json.load(open(os.path.join(inbox.DATA_DIR, "state.json")))["error"] == "Not logged in"

@@ -30,6 +30,9 @@
   at the newer message. The rendered `CLAUDE.md` asks Claude to read `thread.md` first and to
   leave a note when it hands the ball over. In Open topics a flagged request with a `thread.md`
   gets a book button that opens it, and its tooltip shows the last entry.
+- **`claude-inbox` sees your replies.** The scan also reports the threads where your own message
+  is the latest; a folder of such a thread that was waiting on you flips to *Waiting on someone*
+  (what your message asked for, since your reply), with "I replied: …" in `thread.md`.
 - `claude-sessions --json`: each request carries its `waiting` flag (or `null`).
 
 ## [2.21.0] — 2026-10-03

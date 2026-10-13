@@ -67,7 +67,7 @@ tracker row without asking. If a session sitting in a request folder has no
 ticket in its `.session.json` and the work clearly belongs to one, say so.
 
 **Who is the ball with?** `.session.json` can carry a `waiting` flag; the VS Code sidebar's
-**Open topics** view lists each topic under *Waiting on me*, *Waiting on someone* or *In progress*.
+**Open topics** view lists each flagged topic under *Waiting on me* or *Waiting on someone*.
 When a session ends with someone else owing an answer (a question sent on Teams or mail, a
 ticket handed over, a request for approval), run
 `claude-wait them "<who>" "<what for>" --where teams|mail|jira [--link URL]` in the session

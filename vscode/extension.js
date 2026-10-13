@@ -316,19 +316,15 @@ class Sidebar {
       return it;
     }
     if (el.kind === "topic") {
-      // a topic opens up when something is waiting on it; the rest fold
-      const it = new vscode.TreeItem(el.key, el.waiting.length ? C.Expanded : C.Collapsed);
+      const it = new vscode.TreeItem(el.key, C.Expanded);
       it.id = idp + "t|" + el.key;
       const n = el.requests.length, state = M.topicWaiting(el);
       it.description = [state, `${n} request${n > 1 ? "s" : ""}`, M.ago(el.mtime, now)].filter(Boolean).join(" · ");
       const me = el.waiting.some(w => w.on === "me");
-      it.iconPath = me ? new vscode.ThemeIcon("bell-dot", new vscode.ThemeColor("charts.orange"))
-        : el.waiting.length ? new vscode.ThemeIcon("watch", new vscode.ThemeColor("charts.blue"))
-        : new vscode.ThemeIcon(el.ticket ? "tag" : "folder");
+      it.iconPath = new vscode.ThemeIcon(me ? "bell-dot" : "watch", new vscode.ThemeColor(me ? "charts.orange" : "charts.blue"));
       it.contextValue = "topic";
       it.tooltip = (el.ticket ? `Ticket ${el.ticket}` : "A request with no ticket") +
-        ` — ${n} request${n > 1 ? "s" : ""}, last activity ${M.ago(el.mtime, now)} ago.` +
-        (state ? `\n${state}.` : "") + `\nOpen topics: activity in the last ${M.TOPIC_DAYS} days, or a waiting flag.`;
+        ` — ${n} request${n > 1 ? "s" : ""}, last activity ${M.ago(el.mtime, now)} ago.\n${state}.`;
       return it;
     }
     if (el.kind === "group") {
@@ -443,11 +439,12 @@ class Sidebar {
   }
 }
 
-// --- the Open topics view: what waits on me, what waits on someone, what is in progress -----
-// A topic per ticket (a request with no ticket is its own), kept while it had activity in the
-// last TOPIC_DAYS days or carries a waiting flag (.session.json "waiting", set by claude-wait,
-// claude-inbox or Set waiting…). A topic with one request shows as that request; rows are the
-// Sidebar's rows with inAttention, so they open, expand and right-click the same way.
+// --- the Open topics view: what waits on me, what waits on someone ---------------------------
+// A topic per ticket (a request with no ticket is its own), open while one of its requests
+// carries a waiting flag (.session.json "waiting", set by claude-wait, claude-inbox or Set
+// waiting…); closed work has no flag and is not here. A topic with one request shows as that
+// request; rows are the Sidebar's rows with inAttention, so they open, expand and right-click
+// the same way.
 class Topics {
   constructor(bar) {
     this.bar = bar;
@@ -458,12 +455,12 @@ class Topics {
 
   sections() { return M.sections(this.bar.data, this.bar.opts()); }
 
-  counts() { const s = this.sections(); return { me: s.me.length, other: s.other.length, none: s.none.length }; }
+  counts() { const s = this.sections(); return { me: s.me.length, other: s.other.length }; }
 
   getChildren(el) {
     if (!el) {
       const s = this.sections();
-      return ["me", "other", "none"].filter(k => s[k].length).map(k => ({ kind: "section", on: k, topics: s[k] }));
+      return ["me", "other"].filter(k => s[k].length).map(k => ({ kind: "section", on: k, topics: s[k] }));
     }
     if (el.kind === "section") {
       return el.topics.map(t => (t.requests.length === 1 ? { kind: "request", request: t.requests[0], inAttention: true, withTicket: true }
@@ -478,11 +475,9 @@ class Topics {
       it.id = "w|" + el.on;
       it.description = String(el.topics.length);
       it.iconPath = el.on === "me" ? new vscode.ThemeIcon("bell-dot", new vscode.ThemeColor("charts.orange"))
-        : el.on === "other" ? new vscode.ThemeIcon("watch", new vscode.ThemeColor("charts.blue"))
-        : new vscode.ThemeIcon("folder-library");
-      it.tooltip = { me: "Topics where someone is waiting for your reply.",
-                     other: "Topics where you are waiting for someone else.",
-                     none: `Topics with activity in the last ${M.TOPIC_DAYS} days and nobody waiting.` }[el.on];
+        : new vscode.ThemeIcon("watch", new vscode.ThemeColor("charts.blue"));
+      it.tooltip = el.on === "me" ? "Topics where someone is waiting for your reply, longest wait first."
+                                  : "Topics where you are waiting for someone else, longest wait first.";
       return it;
     }
     return this.bar.getTreeItem(el);
@@ -975,12 +970,12 @@ function activate(context) {
   const attentionView = vscode.window.createTreeView("claudeWorksessions.attention", { treeDataProvider: attention });
   const inboxDir = M.inboxDir(process.env, HOME);
   const attentionChanged = () => {
-    const { me, other, none } = attention.counts();
+    const { me, other } = attention.counts();
     const st = M.inboxState(inboxDir);
     const scanned = st && st.at ? ` · scanned ${st.at.slice(11) || st.at}${st.error ? " (failed)" : ""}` : "";
-    attentionView.description = `${me} on me · ${other} on someone · ${none} in progress${scanned}`;
-    attentionView.message = me + other + none ? undefined
-      : `No open topic: nothing active in the last ${M.TOPIC_DAYS} days and nothing waiting. claude-wait flags a request; claude-inbox scans Teams and mail for what needs a reply.`;
+    attentionView.description = `${me} on me · ${other} on someone${scanned}`;
+    attentionView.message = me + other ? undefined
+      : "No open topic: nothing is waiting on anyone. claude-wait flags a request; claude-inbox scans Teams and mail for what needs a reply.";
   };
   bar.onChange = () => {
     attentionChanged();

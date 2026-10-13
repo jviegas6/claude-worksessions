@@ -126,7 +126,7 @@ claude-wait none                                  settled: clear the flag
 Run anywhere inside the session folder. The flag lives in `.session.json` as
 `waiting: { on: "me" | "other", who, what, since, where, link }`; the previous flag goes to
 `waiting_history` with an `until`. The VS Code sidebar's **Open topics** view lists the topic under
-*Waiting on me* or *Waiting on someone*. The rendered `CLAUDE.md` asks Claude to run it when a session
+*Waiting on me* or *Waiting on someone*; without a flag a request is not an open topic. The rendered `CLAUDE.md` asks Claude to run it when a session
 leaves the ball with someone, and to clear it when the matter is settled.
 
 ## claude-audit
@@ -208,7 +208,7 @@ by side.
 | pin on a session or request | **Pin** it: a **Pinned** group at the top lists it whatever the grouping and sort (also right-click → Pin / Unpin). Pins live in `<work root>/_config/pinned.json`, so they follow the work root to other machines |
 | folder on a request | reveal it in the Explorer (right-click: in Finder, a new window, set task type) |
 | **Files** under a request | the request folder's files as a tree, with their count and size (**Files 4 · 21 KB**; each file's size on hover) — click to open (Markdown in the preview), right-click to reveal in Finder or copy the path |
-| **Open topics** (view on top) | one topic per ticket (a request with no ticket is a topic of its own), kept while it had activity in the last 14 days or carries a `waiting` flag, in three sections: **Waiting on me** (bell), **Waiting on someone** (watch) and **In progress**. A topic row reads *needs my reply · Ana · 2 requests · 1h* and opens onto its requests; a topic with one request shows as that request. Flagged rows read *who · what · age* with the thread on hover. Click a request: its latest session in a tab, or a new session in its folder. Inline: clear the flag (tick), open the thread (link). Its `…` menu runs `claude-inbox`. Subtitle: *1 on me · 2 on someone · 3 in progress · scanned 14:00* |
+| **Open topics** (view on top) | one topic per ticket (a request with no ticket is a topic of its own), open while one of its requests carries a `waiting` flag — finished work has no flag and is not here — in two sections, longest wait first: **Waiting on me** (bell) and **Waiting on someone** (watch). A topic row reads *needs my reply · Ana · 2 requests · 1h* and opens onto its requests; a topic with one request shows as that request. Flagged rows read *who · what · age* with the thread on hover. Click a request: its latest session in a tab, or a new session in its folder. Inline: clear the flag (tick), open the thread (link). Its `…` menu runs `claude-inbox`. Subtitle: *1 on me · 2 on someone · scanned 14:00* |
 | **Set waiting…** on a request or session | who the ball is with, who and what for — `claude-wait` from the sidebar |
 | **Guard:** in the status bar | `claude-guard`'s mode; click to change it (`claude-guard mode`). The panel's subtitle ends with it too (`· guard: warn`), and its `…` menu has *Guard mode: warn…* |
 

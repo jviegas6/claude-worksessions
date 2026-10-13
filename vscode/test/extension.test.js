@@ -1022,7 +1022,7 @@ test("active sessions, file sizes, retro and the guard mode (#25 #26 #27 #38)", 
   assert.ok(fake.listeners["watch:*.json"].length >= 2);
 });
 
-test("Open topics: waiting on me, waiting on someone, in progress (#49)", async t => {
+test("Open topics: waiting on me, waiting on someone (#49)", async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cws-attn-"));
   const root = path.join(dir, "ws");
   const savedXdg = process.env.XDG_DATA_HOME;
@@ -1052,27 +1052,26 @@ test("Open topics: waiting on me, waiting on someone, in progress (#49)", async 
   assert.strictEqual(view.id, "claudeWorksessions.attention");
   const run = (name, ...a) => fake.commands.get("claudeWorksessions." + name)(...a);
 
-  // three sections; a ticket with two requests is a topic row, one with a single request is that request
+  // two sections; a ticket with two requests is a topic row, one with a single request is that request;
+  // a request with no flag (C, finished) is no topic at all
   let items = allItems(p);
   const sections = items.filter(([c]) => c.kind === "section");
   assert.deepStrictEqual(sections.map(([c, it]) => [c.on, it.label, it.description, it.iconPath.id, it.collapsibleState]),
-                         [["me", "Waiting on me", "1", "bell-dot", 2], ["other", "Waiting on someone", "1", "watch", 2],
-                          ["none", "In progress", "1", "folder-library", 2]]);
+                         [["me", "Waiting on me", "1", "bell-dot", 2], ["other", "Waiting on someone", "1", "watch", 2]]);
+  assert.ok(!items.some(([c]) => c.kind === "request" && c.request.name === "tidy"));
   const [topic, topicIt] = items.find(([c]) => c.kind === "topic");
   assert.deepStrictEqual([topic.key, topicIt.description, topicIt.iconPath.id, topicIt.collapsibleState, topicIt.contextValue],
                          ["ABC-1", "needs my reply · Ana · 2 requests · 1m", "bell-dot", 2, "topic"]);
-  assert.match(topicIt.tooltip, /Ticket ABC-1 — 2 requests, last activity 1m ago\.\nneeds my reply · Ana\.\nOpen topics: activity in the last 14 days/);
+  assert.strictEqual(topicIt.tooltip, "Ticket ABC-1 — 2 requests, last activity 1m ago.\nneeds my reply · Ana.");
   const [a, aIt] = items.find(([c]) => c.kind === "request" && c.request.name === "firewall");
   const [a2, a2It] = items.find(([c]) => c.kind === "request" && c.request.name === "firewall notes");
   const [b, bIt] = items.find(([c]) => c.kind === "request" && c.request.name === "Reply to Bo: quote");
-  const [c, cIt] = items.find(([c]) => c.kind === "request" && c.request.name === "tidy");
-  assert.ok(a.inAttention && a2.inAttention && b.inAttention && c.inAttention);
+  assert.ok(a.inAttention && a2.inAttention && b.inAttention);
   assert.ok(aIt.description.startsWith("Ana · confirm the IP · "));
   assert.deepStrictEqual([aIt.iconPath.id, aIt.contextValue, aIt.command.command], ["bell-dot", "request-waiting-link", "claudeWorksessions.openAttention"]);
   assert.deepStrictEqual([a2It.description, a2It.iconPath.id, a2It.contextValue], ["1h", "folder", "request"]);   // under the topic: no flag of its own
   assert.ok(bIt.description.startsWith("Bo · a quote · "));
   assert.deepStrictEqual([bIt.iconPath.id, bIt.contextValue], ["watch", "request-waiting"]);
-  assert.deepStrictEqual([cIt.description, cIt.iconPath.id, cIt.contextValue], ["XYZ-9 · 2m", "folder", "request"]);   // single-request topic keeps its ticket
   assert.match(aIt.tooltip.value, /\*\*Needs my reply\*\* — Ana: confirm the IP/);
   assert.match(aIt.tooltip.value, /teams · since 2026-10-12 08:00/);
   // sessions show under their request, with ids of their own; the old root session is no topic
@@ -1080,7 +1079,7 @@ test("Open topics: waiting on me, waiting on someone, in progress (#49)", async 
   assert.ok(!items.some(([c]) => c.session && c.session.id === "s4"));
   const ids = items.map(([, it]) => it.id);
   assert.strictEqual(new Set(ids).size, ids.length);
-  assert.strictEqual(view.description, "1 on me · 1 on someone · 1 in progress");
+  assert.strictEqual(view.description, "1 on me · 1 on someone");
   assert.strictEqual(view.message, undefined);
   // the main tree is untouched by the flag
   assert.strictEqual(allItems(bar).find(([c]) => c.kind === "request" && c.request.name === "firewall")[1].iconPath.id, "folder");
@@ -1148,16 +1147,16 @@ test("Open topics: waiting on me, waiting on someone, in progress (#49)", async 
   const inboxDir = path.join(dir, "data", "claude-worksessions", "inbox");
   fs.writeFileSync(path.join(inboxDir, "state.json"), JSON.stringify({ at: "2026-10-12 14:00", found: 1, new: 1 }));
   await bar.refresh();
-  assert.strictEqual(view.description, "1 on me · 1 on someone · 1 in progress · scanned 14:00");
+  assert.strictEqual(view.description, "1 on me · 1 on someone · scanned 14:00");
   fs.writeFileSync(path.join(inboxDir, "state.json"), JSON.stringify({ at: "2026-10-12 15:00", error: "x" }));
   for (const f of fake.listeners["watch:state.json"]) f();
   await bar.refresh();
-  assert.strictEqual(view.description, "1 on me · 1 on someone · 1 in progress · scanned 15:00 (failed)");
+  assert.strictEqual(view.description, "1 on me · 1 on someone · scanned 15:00 (failed)");
 
   // nothing open: the view says what to do
   fs.writeFileSync(json, JSON.stringify({ work_root: root, sessions: [data.sessions[3]], requests: [] }));
   await bar.refresh();
   assert.deepStrictEqual(p.getChildren(), []);
-  assert.match(view.message, /^No open topic: nothing active in the last 14 days/);
-  assert.strictEqual(view.description, "0 on me · 0 on someone · 0 in progress · scanned 15:00 (failed)");
+  assert.match(view.message, /^No open topic: nothing is waiting on anyone/);
+  assert.strictEqual(view.description, "0 on me · 0 on someone · scanned 15:00 (failed)");
 });

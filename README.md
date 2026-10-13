@@ -9,7 +9,7 @@ across past sessions, and daily/weekly review skills — all driven by one confi
 | `claude-new` | creates `YYYY/MM/DD/HH-mm-ss_slug/`, records profile + ticket in `.session.json`, starts Claude there |
 | `claude-new -c` | the same, then opens the folder in VS Code, where the Claude extension uses the session's profile |
 | VS Code sidebar | requests and their sessions by day or ticket, each session opened as a tab in its own folder and profile |
-| `claude-wait` / **Open topics** | the open topics at the top of the VS Code sidebar, split into **Waiting on me**, **Waiting on someone** and **In progress** |
+| `claude-wait` / **Open topics** | the open topics at the top of the VS Code sidebar, split into **Waiting on me** and **Waiting on someone** |
 | `claude-inbox` | every hour, the Teams messages and mail that need a reply from you become flagged requests on that list; nothing drafted, nothing sent |
 | `claude-resume` | Claude Code with a profile: `claude-resume -p work --resume ID`; no args opens the session picker |
 | `claude-audit` | what you worked on — per day, week, month — from transcripts plus meetings/mail/chats |

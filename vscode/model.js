@@ -296,14 +296,12 @@ function tree(data, grouping, opts) {
           ...grouped(data, grouping, opts)];
 }
 
-// Open topics: one per ticket (a request with no ticket is a topic of its own), kept while it
-// had activity in the last TOPIC_DAYS days or carries a waiting flag. What needs my reply comes
-// first, then what waits on others, then the rest by activity. Each: { kind: "topic", key,
-// requests, mtime, waiting: [flags], ticket }.
-const TOPIC_DAYS = 14;
-const topicRank = t => (t.waiting.some(w => w.on === "me") ? 0 : t.waiting.length ? 1 : 2);
+// Open topics: one per ticket (a request with no ticket is a topic of its own), open while one
+// of its requests carries a waiting flag -- closed work has no flag and drops off. What waits
+// on me comes first, then what waits on someone, each by the longest wait. Each:
+// { kind: "topic", key, requests, mtime, since, waiting: [flags], ticket }.
+const topicRank = t => (t.waiting.some(w => w.on === "me") ? 0 : 1);
 function topics(data, opts) {
-  const now = (opts && opts.now) || Date.now() / 1000;
   const groups = new Map();
   for (const r of requests(data, opts)) {
     if (r.root) continue;
@@ -314,10 +312,14 @@ function topics(data, opts) {
     g.requests.push(r);
     g.mtime = Math.max(g.mtime, r.mtime || 0);
     const w = waitingOf(r);
-    if (w) g.waiting.push(w);
+    if (w) {
+      g.waiting.push(w);
+      const t = sinceEpoch(w);
+      if (t !== undefined && !(g.since <= t)) g.since = t;
+    }
   }
-  return [...groups.values()].filter(g => g.waiting.length || g.mtime >= now - TOPIC_DAYS * 86400)
-    .sort((a, b) => topicRank(a) - topicRank(b) || b.mtime - a.mtime);
+  return [...groups.values()].filter(g => g.waiting.length)
+    .sort((a, b) => topicRank(a) - topicRank(b) || (a.since || a.mtime) - (b.since || b.mtime));
 }
 
 // "needs my reply · Ana" / "waiting on Bo" for a topic's row, or "".
@@ -510,14 +512,14 @@ const waitingOf = r => {
 };
 const sinceEpoch = w => { const t = Date.parse((w && w.since) || ""); return isNaN(t) ? undefined : t / 1000; };
 
-// The Open topics view: the open topics in three sections -- what waits on me, what waits on
-// someone else, and the rest in progress -- { me: [topics], other: [topics], none: [topics] }.
-// The search box and filters do not apply: what is open is open.
-const SECTION_LABELS = { me: "Waiting on me", other: "Waiting on someone", none: "In progress" };
+// The Open topics view: the open topics in two sections -- what waits on me, what waits on
+// someone else -- { me: [topics], other: [topics] }. The search box and filters do not apply:
+// what is waiting is waiting.
+const SECTION_LABELS = { me: "Waiting on me", other: "Waiting on someone" };
 function sections(data, opts) {
-  const out = { me: [], other: [], none: [] };
+  const out = { me: [], other: [] };
   for (const t of topics(data, { ...(opts || {}), showEmpty: true, filter: "", filters: null })) {
-    out[t.waiting.some(w => w.on === "me") ? "me" : t.waiting.length ? "other" : "none"].push(t);
+    out[t.waiting.some(w => w.on === "me") ? "me" : "other"].push(t);
   }
   return out;
 }
@@ -571,4 +573,4 @@ module.exports = { NO_TICKET, DAY_PRESETS, ARTIFACT_LABELS, dayRange, passes, fi
                    sessionLabel, tabName, ago, matchPending, parseCsv, taskTypes, setTaskType,
                    readSkills, auditArgs, active, formatSize, latestRetro, retroArgs, GUARD_MODES, guardMode,
                    WAITING_LABELS, waitingOf, SECTION_LABELS, sections, waitingText, setWaiting, inboxDir, inboxState,
-                   TOPIC_DAYS, topics, topicWaiting };
+                   topics, topicWaiting };

@@ -690,8 +690,18 @@ def test_claude_wait_shows_sets_flips_and_clears(tmp_path):
     meta = json.loads((d / ".session.json").read_text())
     assert meta["waiting"]["on"] == "me" and meta["waiting"]["link"] == "https://t/1"
     assert meta["waiting_history"][0]["on"] == "other" and meta["waiting_history"][0]["until"]
-    assert wait("none").endswith("-> waiting: nobody\n")
+    assert wait("none --note 'IP confirmed and added to the allow-list.'").endswith("-> waiting: nobody\n")
     assert "waiting" not in json.loads((d / ".session.json").read_text())
+    # every change went to thread.md, with the note under its heading; the show says how many
+    t = (d / "thread.md").read_text()
+    assert t.startswith("# x\n\nWho said what, in order.")
+    heads = [ln for ln in t.splitlines() if ln.startswith("## ")]
+    assert [h.split(" · ", 1)[1] for h in heads] == ["waiting on them: Ana -- confirm the new IP (teams)",
+                                       "waiting on me: Ana -- confirm the new IP (teams)", "settled"]
+    assert t.endswith("· settled\n\nIP confirmed and added to the allow-list.\n\n")
+    assert wait("") == "waiting: nobody\nthread.md: 3 entries\n"
+    out = wait("them Ana --note 'Asked again.'")
+    assert (d / "thread.md").read_text().count("Asked again.") == 1
     assert wait("--help").startswith("claude-wait [me|them|none]")
     with pytest.raises(subprocess.CalledProcessError) as e:
         wait("sideways")

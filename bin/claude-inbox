@@ -14,14 +14,18 @@ through the Microsoft 365 connector and answers with a JSON list of what needs y
 question or request addressed to you that you have not answered. Nothing is drafted and
 nothing is sent. For each item this script then:
 
-  - finds the newest request folder on the same ticket (a PREFIX-123 in the message), or
-    creates one (YYYY/MM/DD/HH-mm-ss_reply-<who>-<subject>) with a .session.json;
+  - finds the request folder of the same thread (the Teams chat or mail conversation it
+    came from, or the same person and subject), else the newest folder on the same ticket
+    (a PREFIX-123 in the message), or creates one
+    (YYYY/MM/DD/HH-mm-ss_reply-<who>-<subject>) with a .session.json;
   - sets its "waiting" flag to {"on": "me", "who", "what", "since", "where", "link"} --
-    a folder that was waiting on that person flips to waiting on you.
+    a folder that was waiting on that person flips to waiting on you;
+  - appends the message to the folder's thread.md: what came before it, the message itself
+    and what it needs, so the session that picks it up has the context.
 
-The VS Code sidebar's Attention view lists the flagged folders; claude-wait sets or clears
-the flag by hand. Messages already handled are remembered (seen.json), so clearing the
-flag does not bring the same message back.
+The VS Code sidebar's Open topics view lists the flagged folders; claude-wait sets or clears
+the flag by hand and adds its own notes to thread.md. Messages already handled are
+remembered (seen.json), so clearing the flag does not bring the same message back.
 """
 
 import argparse
@@ -33,12 +37,17 @@ import re
 import socket
 import subprocess
 import sys
+import urllib.parse
 
 HOME = os.path.expanduser("~")
 DATA_DIR = os.path.join(os.environ.get("XDG_DATA_HOME") or os.path.join(HOME, ".local", "share"),
                         "claude-worksessions", "inbox")
 LABEL = "com.claude-worksessions.inbox"
 TICKET_RE = re.compile(r"\b([A-Z][A-Z0-9]+-\d+)\b")
+# a Teams chat or channel id as it appears in a message link, once url-decoded
+CHAT_RE = re.compile(r"19:[A-Za-z0-9_\-]+@(?:unq\.gbl\.spaces|thread\.[a-z0-9]+)")
+REPLY_RE = re.compile(r"^(?:(?:re|fw|fwd|aw|sv|tr)\s*:\s*)+", re.I)
+THREAD_FILE = "thread.md"
 
 SCHEMA = {
     "type": "object",
@@ -56,8 +65,11 @@ SCHEMA = {
                     "message_id": {"type": "string", "description": "the message's id, to recognise it again"},
                     "received": {"type": "string", "description": "when it arrived, ISO 8601"},
                     "ticket": {"type": "string", "description": "a PREFIX-123 ticket named in the thread, else empty"},
+                    "thread_id": {"type": "string", "description": "the Teams chat or channel id, or the mail conversation id, to recognise the thread again"},
+                    "history": {"type": "string", "description": "the thread before this message: what was asked and answered, in order, a few lines; empty if this message starts it"},
+                    "message": {"type": "string", "description": "the message that needs the reply: its text, trimmed to what matters, up to about 1000 characters"},
                 },
-                "required": ["who", "subject", "what", "where", "link", "message_id", "received", "ticket"],
+                "required": ["who", "subject", "what", "where", "link", "message_id", "received", "ticket", "thread_id", "history", "message"],
             },
         },
     },
@@ -75,9 +87,13 @@ invites, group messages that do not ask me anything, and anything I have already
 arrived (check whether my own message is the latest in the thread).
 
 For each one give who is waiting, the subject, what they need from me in one line, where it is
-(teams or mail), a link to it, its message id, when it arrived (ISO 8601) and the ticket
-(PREFIX-123) if the thread names one, else an empty string. If nothing needs me, answer with an
-empty list."""
+(teams or mail), a link to it, its message id, when it arrived (ISO 8601), the ticket
+(PREFIX-123) if the thread names one, else an empty string, the thread id (the Teams chat or
+channel id, or the mail conversation id), the history -- what was asked and answered in the thread
+before this message, in order, a few lines, empty if the message starts the thread -- and the
+message itself: its text, trimmed to what matters, up to about 1000 characters. The history and
+the message are the context the reply will be written from, so keep what a reader needs: who said
+what, the question, any deadline. If nothing needs me, answer with an empty list."""
 
 READ_TOOLS = [
     "mcp__claude_ai_Microsoft_365__get_me", "mcp__claude_ai_Microsoft_365__read_resource",
@@ -147,17 +163,35 @@ def scan(cfg, hours):
         if not isinstance(it, dict) or not (it.get("who") or it.get("subject")):
             continue
         text = lambda k: " ".join(str(it.get(k) or "").split())
+        lines = lambda k: "\n".join(ln for ln in (" ".join(x.split()) for x in str(it.get(k) or "").splitlines()) if ln)
         where = text("where").lower()
         items.append({"who": text("who"), "subject": text("subject"), "what": text("what"),
                       "where": where if where in ("teams", "mail") else "mail", "link": text("link"),
                       "message_id": text("message_id"), "received": text("received"),
-                      "ticket": ticket_of(text("ticket")) or ticket_of(text("subject") + " " + text("what"))})
+                      "ticket": ticket_of(text("ticket")) or ticket_of(text("subject") + " " + text("what")),
+                      "thread_id": text("thread_id"), "history": lines("history"), "message": lines("message")[:2000]})
     return items, None
 
 
 def ticket_of(text):
     m = TICKET_RE.search((text or "").upper())
     return m.group(1) if m else ""
+
+
+def chat_id(link):
+    """The Teams chat or channel id inside a message link, else ""."""
+    m = CHAT_RE.search(urllib.parse.unquote(link or ""))
+    return m.group(0) if m else ""
+
+
+def thread_of(item):
+    """What identifies the item's thread: the id the scan gave, else the chat id in its link."""
+    return (item.get("thread_id") or "").strip() or chat_id(item.get("link"))
+
+
+def subject_key(who, subject):
+    """who + subject without Re:/Fw: prefixes, slugified -- the same thread as the scan names it."""
+    return slugify(who) + "|" + slugify(REPLY_RE.sub("", subject or ""))
 
 
 # --- request folders -----------------------------------------------------------------------
@@ -202,6 +236,36 @@ def folder_for_ticket(folders, ticket, days=45):
     return None
 
 
+def folder_for_thread(folders, item, days=45):
+    """The request folder this message's thread already has, if it started in the last `days`:
+    the one recording the same thread id (or whose flag links into the same Teams chat), else
+    the one claude-inbox created for the same person and subject."""
+    cutoff = (dt.datetime.now() - dt.timedelta(days=days)).strftime("%Y/%m/%d")
+    recent = []
+    for folder, meta in folders:
+        m = re.search(r"(\d{4}/\d{2}/\d{2})/[^/]+$", folder.replace(os.sep, "/"))
+        if m and m.group(1) >= cutoff:
+            recent.append((folder, meta))
+    tid = thread_of(item)
+    if tid:
+        for folder, meta in recent:
+            flags = [meta.get("waiting")] + list(meta.get("waiting_history") or [])
+            ids = {meta.get("thread")} | {chat_id(f.get("link")) for f in flags if isinstance(f, dict)}
+            if tid in ids:
+                return folder
+    key = subject_key(item["who"], item["subject"])
+    for folder, meta in recent:
+        if meta.get("source") != "claude-inbox":
+            continue
+        # the person and subject it was created for; older folders only have them in the name
+        who, subject = meta.get("thread_who"), meta.get("thread_subject")
+        if not subject:
+            who, _, subject = str(meta.get("name") or "")[len("Reply to "):].partition(": ")
+        if subject and subject_key(who, subject) == key:
+            return folder
+    return None
+
+
 def slugify(text, limit=60):
     s = re.sub(r"[^a-z0-9]+", "-", (text or "").lower()).strip("-")
     s = s[:limit].rstrip("-")
@@ -224,9 +288,35 @@ def new_folder(root, item, cfg, now=None):
         "done_when": "the reply is sent", "paths": [], "audit": True,
         "started_at": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "ended_at": None,
         "host": socket.gethostname(), "path": folder, "source": "claude-inbox",
+        "thread": thread_of(item), "thread_who": item["who"], "thread_subject": item["subject"],
         "waiting": waiting(item),
     })
+    add_note(folder, name, note(item))
     return folder
+
+
+def note(item):
+    """The thread.md entry for a message: when and who, what came before, the message, what it needs."""
+    when = (item.get("received") or dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))[:16].replace("T", " ")
+    out = ["## {} · {} ({}) · waiting on me".format(when, item["who"], item["where"]), ""]
+    if item.get("history"):
+        out += ["Before this:", ""] + ["> " + ln for ln in item["history"].splitlines()] + [""]
+    if item.get("message"):
+        out += ["{} wrote:".format(item["who"]), ""] + ["> " + ln for ln in item["message"].splitlines()] + [""]
+    out.append("Needs: {}".format(item["what"] or item["subject"]))
+    if item.get("link"):
+        out.append("Link: {}".format(item["link"]))
+    return "\n".join(out) + "\n"
+
+
+def add_note(folder, title, entry):
+    """Append an entry to the folder's thread.md, starting the file with its title when new."""
+    p = os.path.join(folder, THREAD_FILE)
+    new = not os.path.exists(p)
+    with open(p, "a") as fh:
+        if new:
+            fh.write("# {}\n\nWho said what, in order. claude-inbox adds the messages it finds; claude-wait --note adds yours.\n\n".format(title))
+        fh.write(entry.rstrip("\n") + "\n\n")
 
 
 def waiting(item):
@@ -241,7 +331,13 @@ def flag_folder(folder, item):
     p = os.path.join(folder, ".session.json")
     d = load_json(p, {})
     old = d.get("waiting") if isinstance(d.get("waiting"), dict) else None
+    if not d.get("thread") and thread_of(item):
+        d["thread"] = thread_of(item)
+    add_note(folder, d.get("name") or os.path.basename(folder), note(item))
     if old and old.get("on") == "me":
+        # still waiting on me: the newer message is what to answer, the wait started with the older one
+        d["waiting"] = dict(old, what=item["what"] or old.get("what") or "", link=item["link"] or old.get("link") or "")
+        save_json(p, d)
         return "kept"
     if old:
         d.setdefault("waiting_history", []).append(dict(old, until=dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")))
@@ -266,7 +362,7 @@ def place(items, cfg, dry_run=False, now=None):
         if key in seen:
             lines.append("seen     {}".format(label))
             continue
-        folder = folder_for_ticket(folders, it["ticket"])
+        folder = folder_for_thread(folders, it) or folder_for_ticket(folders, it["ticket"])
         rel = lambda f: os.path.relpath(f, cfg["root"])
         if dry_run:
             lines.append("would {} {} -> {}".format("flag  " if folder else "create", label,

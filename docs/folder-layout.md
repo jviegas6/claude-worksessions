@@ -6,7 +6,8 @@
 ├── YYYY/MM/DD/HH-mm-ss_slug/      one request: notes, scripts, data, outputs
 │   ├── .session.json              name, profile, ticket, task_type (folder default),
 │   │                               session_types (per session), goal, done_when, times,
-│   │                               waiting (who the ball is with: claude-wait, claude-inbox)
+│   │                               waiting (who the ball is with: claude-wait, claude-inbox), thread
+│   ├── thread.md                  the exchange so far: messages claude-inbox placed, claude-wait notes
 │   ├── .scope.json                claude-guard: each session's current scope and targets
 │   └── .quality.jsonl             claude-guard: one line per decision
 ├── _config/                       config.env, context.md, review-rules.md, guard-rules.md, pinned.json (VS Code pins)

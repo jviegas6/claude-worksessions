@@ -455,6 +455,19 @@ test("setWaiting writes, flips and clears the flag in .session.json", () => {
   assert.strictEqual(JSON.parse(fs.readFileSync(p, "utf8")).name, "x");
 });
 
+test("threadTail: the last entry of thread.md, quotes unwrapped, cut at max", () => {
+  assert.strictEqual(M.threadTail(""), "");
+  assert.strictEqual(M.threadTail("# x\n\nno entries yet\n"), "");
+  const t = "# Reply to Ana\n\nWho said what.\n\n## 2026-10-12 08:00 · Ana (teams) · waiting on me\n\nAna wrote:\n\n> is it 10.0.0.5?\n> by Thursday\n\nNeeds: the IP\n\n" +
+            "## 2026-10-12 10:00 · waiting on them: Ana -- the IP (teams)\n\nSent 10.0.0.5, she will check.\n\n";
+  assert.strictEqual(M.threadTail(t), "2026-10-12 10:00 · waiting on them: Ana -- the IP (teams)\nSent 10.0.0.5, she will check.");
+  assert.strictEqual(M.threadTail(t.slice(0, t.indexOf("## 2026-10-12 10:00"))),
+                     "2026-10-12 08:00 · Ana (teams) · waiting on me\nAna wrote:\nis it 10.0.0.5?\nby Thursday\nNeeds: the IP");
+  assert.strictEqual(M.threadTail("## settled\n\n" + "x".repeat(50), 10), "settled\n" + "x".repeat(10) + "…");
+  assert.strictEqual(M.threadTail("## settled\n"), "settled");
+  assert.strictEqual(M.THREAD_FILE, "thread.md");
+});
+
 test("inbox state and dir", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cws-inbox-"));
   assert.strictEqual(M.inboxState(dir), null);

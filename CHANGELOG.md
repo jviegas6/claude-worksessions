@@ -21,6 +21,15 @@
   the flag. Nothing is drafted or sent. `--install` runs it every hour (launchd on macOS, cron
   elsewhere); `--dry-run`, `--hours N`, `--status`. New config keys: `CWS_INBOX_PROFILE`,
   `CWS_INBOX_HOURS`, `CWS_INBOX_TASK_TYPE`, `CWS_INBOX_MODEL`, `CWS_INBOX_TIMEOUT`.
+- **`thread.md`: the context behind a flag.** `claude-inbox` writes each message it places to
+  the request folder's `thread.md` — when and from whom, what the thread said before it, the
+  message itself, what it needs, the link — and `claude-wait` appends every change there with
+  the new `--note "<where things stand>"`. A follow-up on the same thread (same Teams chat or
+  mail conversation, or the same person and subject) now lands in the same folder instead of a
+  new one, under the earlier messages; a folder already waiting on you keeps its flag, pointed
+  at the newer message. The rendered `CLAUDE.md` asks Claude to read `thread.md` first and to
+  leave a note when it hands the ball over. In Open topics a flagged request with a `thread.md`
+  gets a book button that opens it, and its tooltip shows the last entry.
 - `claude-sessions --json`: each request carries its `waiting` flag (or `null`).
 
 ## [2.21.0] — 2026-10-03

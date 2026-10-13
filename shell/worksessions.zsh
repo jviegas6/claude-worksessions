@@ -281,20 +281,22 @@ if has_done:
 PYEOF
 }
 
-# claude-wait [me|them|none] ["WHO"] ["WHAT"] [--where teams|mail|jira] [--link URL] [--since DATE]
-#   show or set who this request is waiting on; the VS Code sidebar's Attention view lists it
-#   under "Needs my reply" (me) or "Waiting on others" (them). none clears it.
+# claude-wait [me|them|none] ["WHO"] ["WHAT"] [--where teams|mail|jira] [--link URL] [--since DATE] [--note TEXT]
+#   show or set who this request is waiting on; the VS Code sidebar's Open topics view lists it
+#   under "Waiting on me" or "Waiting on someone". none clears it. Every change is logged in
+#   the folder's thread.md, with --note's text (where things stand) under it.
 claude-wait() {
   emulate -L zsh
-  local dir="$PWD" meta="" on="" who="" what="" where="" link="" since=""
+  local dir="$PWD" meta="" on="" who="" what="" where="" link="" since="" note=""
   local -a rest=()
   while (( $# )); do
     case "$1" in
       --where) where="$2"; shift 2 ;;
       --link)  link="$2";  shift 2 ;;
       --since) since="$2"; shift 2 ;;
+      -n|--note) note="$2"; shift 2 ;;
       -h|--help)
-        print -r -- 'claude-wait [me|them|none] ["WHO"] ["WHAT"] [--where teams|mail|jira] [--link URL] [--since DATE]   show or set who the request waits on'
+        print -r -- 'claude-wait [me|them|none] ["WHO"] ["WHAT"] [--where teams|mail|jira] [--link URL] [--since DATE] [--note TEXT]   show or set who the request waits on; the note goes to thread.md'
         return 0 ;;
       *) rest+=("$1"); shift ;;
     esac
@@ -315,7 +317,7 @@ claude-wait() {
   if [[ -z "$meta" ]]; then
     print -u2 -- "claude-wait: no .session.json here (not inside a session folder)"; return 1
   fi
-  WS_ON="$on" WS_WHO="$who" WS_WHAT="$what" WS_WHERE="$where" WS_LINK="$link" WS_SINCE="$since" \
+  WS_ON="$on" WS_WHO="$who" WS_WHAT="$what" WS_WHERE="$where" WS_LINK="$link" WS_SINCE="$since" WS_NOTE="$note" \
     "$CWS_PYTHON" - "$meta" <<'PYEOF'
 import datetime, json, os, sys
 p = sys.argv[1]
@@ -331,8 +333,11 @@ def show(w):
         " since " + w["since"][:10] if w.get("since") else "")
 
 on = os.environ["WS_ON"]
+thread = os.path.join(os.path.dirname(p), "thread.md")
 if not on:
     print(show(old))
+    if os.path.exists(thread):
+        print("thread.md: {} entries".format(open(thread).read().count("\n## ")))
     raise SystemExit(0)
 now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 if old:
@@ -347,7 +352,15 @@ else:
                     "where": os.environ["WS_WHERE"].strip() or keep.get("where", ""),
                     "link": os.environ["WS_LINK"].strip() or keep.get("link", "")}
 json.dump(d, open(p, "w"), indent=2)
-print("{} -> {}".format(show(old), show(d.get("waiting"))))
+# the change, and the note, go to thread.md: the context the next session starts from
+w = d.get("waiting")
+head = "## {} · {}".format(now[:16].replace("T", " "), "settled" if not w else show(w).replace(" since " + w["since"][:10], ""))
+note = os.environ["WS_NOTE"].strip()
+with open(thread, "a") as fh:
+    if fh.tell() == 0:
+        fh.write("# {}\n\nWho said what, in order. claude-inbox adds the messages it finds; claude-wait --note adds yours.\n\n".format(d.get("name") or os.path.basename(os.path.dirname(p))))
+    fh.write(head + "\n\n" + (note + "\n\n" if note else ""))
+print("{} -> {}".format(show(old), show(w)))
 PYEOF
 }
 

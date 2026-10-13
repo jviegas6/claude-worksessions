@@ -282,6 +282,11 @@
         "icon": "$(link-external)"
       },
       {
+        "command": "claudeWorksessions.openThread",
+        "title": "Open the thread notes (thread.md)",
+        "icon": "$(book)"
+      },
+      {
         "command": "claudeWorksessions.openAttention",
         "title": "Open"
       },
@@ -528,8 +533,13 @@
         },
         {
           "command": "claudeWorksessions.openWaitingLink",
-          "when": "view == claudeWorksessions.attention && viewItem =~ /-link$/",
+          "when": "view == claudeWorksessions.attention && viewItem =~ /-link/",
           "group": "inline@1"
+        },
+        {
+          "command": "claudeWorksessions.openThread",
+          "when": "view == claudeWorksessions.attention && viewItem =~ /-thread$/",
+          "group": "inline@2"
         },
         {
           "command": "claudeWorksessions.setWaiting",
@@ -543,8 +553,13 @@
         },
         {
           "command": "claudeWorksessions.openWaitingLink",
-          "when": "view == claudeWorksessions.attention && viewItem =~ /-link$/",
+          "when": "view == claudeWorksessions.attention && viewItem =~ /-link/",
           "group": "1_open@0"
+        },
+        {
+          "command": "claudeWorksessions.openThread",
+          "when": "view == claudeWorksessions.attention && viewItem =~ /-thread$/",
+          "group": "1_open@1"
         }
       ],
       "commandPalette": [
@@ -638,6 +653,10 @@
         },
         {
           "command": "claudeWorksessions.openWaitingLink",
+          "when": "false"
+        },
+        {
+          "command": "claudeWorksessions.openThread",
           "when": "false"
         },
         {

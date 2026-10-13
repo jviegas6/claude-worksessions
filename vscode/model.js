@@ -532,6 +532,17 @@ function waitingText(r, now) {
   return [w.who, w.what, t !== undefined ? ago(t, now) : ""].filter(Boolean).join(" · ");
 }
 
+// The last entry of a request's thread.md (what claude-inbox and claude-wait --note wrote),
+// as one short paragraph for a tooltip: its heading, then its text up to `max` characters.
+const THREAD_FILE = "thread.md";
+function threadTail(text, max = 400) {
+  const parts = String(text || "").split(/^## /m).filter(p => p.trim());
+  if (!parts.length || !/^## /m.test(text)) return "";
+  const [head, ...body] = parts[parts.length - 1].split("\n");
+  const t = body.map(l => l.replace(/^>\s?/, "")).join("\n").replace(/\n{2,}/g, "\n").trim();
+  return head.trim() + (t ? "\n" + (t.length > max ? t.slice(0, max).trimEnd() + "…" : t) : "");
+}
+
 // Set or clear a request's waiting flag in its .session.json, as claude-wait does:
 // w = { on, who, what, where?, link?, since? } or null to clear. Returns [old, new].
 function setWaiting(folder, w, now = new Date()) {
@@ -573,4 +584,4 @@ module.exports = { NO_TICKET, DAY_PRESETS, ARTIFACT_LABELS, dayRange, passes, fi
                    sessionLabel, tabName, ago, matchPending, parseCsv, taskTypes, setTaskType,
                    readSkills, auditArgs, active, formatSize, latestRetro, retroArgs, GUARD_MODES, guardMode,
                    WAITING_LABELS, waitingOf, SECTION_LABELS, sections, waitingText, setWaiting, inboxDir, inboxState,
-                   topics, topicWaiting };
+                   topics, topicWaiting, THREAD_FILE, threadTail };

@@ -1036,6 +1036,7 @@ test("Open topics: waiting on me, waiting on someone (#49)", async t => {
               waiting: { on: "other", who: "Bo", what: "a quote", since: "2026-10-10T08:00:00Z", where: "mail", link: "" } };
   const C = { path: path.join(root, "2026/10/12/12-00-00_c"), name: "tidy", ticket: "XYZ-9", task_type: "", profile: "" };
   for (const r of [A, A2, B, C]) { fs.mkdirSync(r.path, { recursive: true }); fs.writeFileSync(path.join(r.path, ".session.json"), JSON.stringify({ name: r.name, waiting: r.waiting })); }
+  fs.writeFileSync(path.join(A.path, "thread.md"), "# firewall\n\n## 2026-10-12 08:00 · Ana (teams) · waiting on me\n\n> is it 10.0.0.5?\n\nNeeds: confirm the IP\n");
   const now = Date.now() / 1000;
   const data = { work_root: root, sessions: [
     { id: "s1", mtime: now - 60, cwd: A.path, in_work_root: true, title: "Fix the rule", first_prompt: "f", last_prompt: "l", request: A },
@@ -1068,12 +1069,19 @@ test("Open topics: waiting on me, waiting on someone (#49)", async t => {
   const [b, bIt] = items.find(([c]) => c.kind === "request" && c.request.name === "Reply to Bo: quote");
   assert.ok(a.inAttention && a2.inAttention && b.inAttention);
   assert.ok(aIt.description.startsWith("Ana · confirm the IP · "));
-  assert.deepStrictEqual([aIt.iconPath.id, aIt.contextValue, aIt.command.command], ["bell-dot", "request-waiting-link", "claudeWorksessions.openAttention"]);
+  assert.deepStrictEqual([aIt.iconPath.id, aIt.contextValue, aIt.command.command], ["bell-dot", "request-waiting-link-thread", "claudeWorksessions.openAttention"]);
   assert.deepStrictEqual([a2It.description, a2It.iconPath.id, a2It.contextValue], ["1h", "folder", "request"]);   // under the topic: no flag of its own
   assert.ok(bIt.description.startsWith("Bo · a quote · "));
   assert.deepStrictEqual([bIt.iconPath.id, bIt.contextValue], ["watch", "request-waiting"]);
   assert.match(aIt.tooltip.value, /\*\*Needs my reply\*\* — Ana: confirm the IP/);
   assert.match(aIt.tooltip.value, /teams · since 2026-10-12 08:00/);
+  // the thread notes: their last entry in the tooltip, a button that opens the file; none says so
+  assert.match(aIt.tooltip.value, /\*thread\.md, last entry:\*\n\n2026-10-12 08:00 · Ana \(teams\) · waiting on me\nis it 10\.0\.0\.5\?\nNeeds: confirm the IP/);
+  assert.ok(!bIt.tooltip.value.includes("thread.md"));
+  await run("openThread", a);
+  assert.deepStrictEqual([fake.executed.at(-1)[0], fake.executed.at(-1)[1].fsPath], ["markdown.showPreview", path.join(A.path, "thread.md")]);
+  await run("openThread", b);
+  assert.strictEqual(fake.messages.at(-1)[1], "Reply to Bo: quote: no thread.md yet.");
   // sessions show under their request, with ids of their own; the old root session is no topic
   assert.ok(items.some(([c]) => c.kind === "session" && c.inAttention && c.session.id === "s1"));
   assert.ok(!items.some(([c]) => c.session && c.session.id === "s4"));

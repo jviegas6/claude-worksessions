@@ -341,7 +341,9 @@ class Sidebar {
       it.id = idp + "r|" + r.path;
       const pinnedReq = M.isPinnedRequest(this.pins, this.data.work_root, r);
       const w = M.waitingOf(r);
-      it.contextValue = r.root ? "root" : el.inAttention && w ? "request-waiting" + (w.link ? "-link" : "")
+      // in Open topics the thread notes (thread.md) are the context: a button, and the tail in the tooltip
+      const thread = el.inAttention && w && fs.existsSync(path.join(r.path, M.THREAD_FILE)) ? path.join(r.path, M.THREAD_FILE) : "";
+      it.contextValue = r.root ? "root" : el.inAttention && w ? "request-waiting" + (w.link ? "-link" : "") + (thread ? "-thread" : "")
         : pinnedReq ? "request-pinned" : "request";
       it.description = el.inAttention
         ? [el.withTicket && r.ticket && r.ticket !== "Other" && r.ticket, M.waitingText(r, now) || M.ago(r.mtime, now)].filter(Boolean).join(" · ")
@@ -368,6 +370,11 @@ class Sidebar {
         md.appendMarkdown("files: ").appendText(`${r.files.length}${r.files_truncated ? "+" : ""}` +
                                                 (r.size !== undefined ? ` · ${M.formatSize(r.size)}` : ""))
           .appendMarkdown("  \n");
+      }
+      if (thread) {
+        let tail = "";
+        try { tail = M.threadTail(fs.readFileSync(thread, "utf8")); } catch (e) { /* unreadable: no tail */ }
+        if (tail) md.appendMarkdown("\n*thread.md, last entry:*\n\n").appendText(tail).appendMarkdown("\n");
       }
       md.appendMarkdown("\n").appendText(path.relative(this.data.work_root, r.path) || r.path);
       it.tooltip = md;
@@ -528,6 +535,13 @@ function openWaitingLink(el) {
   const w = M.waitingOf(el.request);
   if (!w || !w.link) return vscode.window.showInformationMessage("This request's flag has no link to the thread.");
   return vscode.env.openExternal(vscode.Uri.parse(w.link));
+}
+
+// The request's thread.md: what was said so far, as claude-inbox and claude-wait wrote it.
+function openThread(el) {
+  const f = path.join(el.request.path, M.THREAD_FILE);
+  if (!fs.existsSync(f)) return vscode.window.showInformationMessage(`${el.request.name}: no thread.md yet.`);
+  return vscode.commands.executeCommand("markdown.showPreview", vscode.Uri.file(f));
 }
 
 // claude-inbox: scan Teams and mail for what needs a reply, in a terminal tab.
@@ -1000,6 +1014,7 @@ function activate(context) {
     vscode.window.registerWebviewViewProvider("claudeWorksessions.search", box),
     cmd("refresh", () => bar.refresh()),
     cmd("openAttention", el => openAttention(bar, el)),
+    cmd("openThread", el => openThread(el)),
     cmd("setWaiting", el => setWaiting(bar, el)),
     cmd("clearWaiting", el => clearWaiting(bar, el)),
     cmd("openWaitingLink", el => openWaitingLink(el)),

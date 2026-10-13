@@ -121,13 +121,22 @@ claude-wait them "Ana" "confirm the new IP" --where teams --link URL
 claude-wait me "Ana" "the firewall change"        Ana is waiting on me: "Needs my reply"
 claude-wait me                                    the reply came: flip it, keeping who, where and link
 claude-wait none                                  settled: clear the flag
+claude-wait them "Ana" "the IP" --note "Asked on Teams; she will check with networking by Thursday."
+                                                  ... and say where things stand
 ```
 
 Run anywhere inside the session folder. The flag lives in `.session.json` as
 `waiting: { on: "me" | "other", who, what, since, where, link }`; the previous flag goes to
 `waiting_history` with an `until`. The VS Code sidebar's **Open topics** view lists the topic under
-*Waiting on me* or *Waiting on someone*; without a flag a request is not an open topic. The rendered `CLAUDE.md` asks Claude to run it when a session
-leaves the ball with someone, and to clear it when the matter is settled.
+*Waiting on me* or *Waiting on someone*; without a flag a request is not an open topic.
+
+Every change is appended to the folder's **`thread.md`** — a dated heading with the new state,
+and under it the `--note` text: what was asked, what was answered and where, what is still
+open. That file is the context a later session starts from when the thread comes back (the
+rendered `CLAUDE.md` asks Claude to read it first, to run `claude-wait` with a note when a
+session leaves the ball with someone, and to clear the flag when the matter is settled).
+`claude-inbox` writes the messages it finds to the same file. In the sidebar, the book button
+on a flagged request opens it, and the row's tooltip shows its last entry.
 
 ## claude-audit
 
@@ -276,12 +285,23 @@ addressed to you, a request only you can act on, a decision or approval, a threa
 someone is waiting on your answer. FYI, thanks, notifications, invites and anything you
 already answered are left out. Nothing is drafted and nothing is sent.
 
-For each message the script then finds the newest request folder on the same ticket
-(a `PREFIX-123` in the thread, within 45 days) and flips its flag to *me* — a folder that
-was waiting on that person now needs your reply — or creates
+For each message the script then finds the request folder the thread already has — the
+one recording the same thread id (the Teams chat or channel, the mail conversation; for
+older folders, a flag whose link points into the same chat), else the one it created for the
+same person and subject (`Re:`/`Fw:` stripped), within 45 days — else the newest request
+folder on the same ticket (a `PREFIX-123` in the thread, within 45 days), and flips its flag
+to *me* — a folder that was waiting on that person now needs your reply; one already waiting
+on you keeps its flag, pointed at the newer message. Otherwise it creates
 `YYYY/MM/DD/HH-mm-ss_reply-<who>-<subject>/` with a `.session.json` (ticket from the
 thread or `Other`, type `CWS_INBOX_TASK_TYPE`, goal "reply to … about …", the flag with the
-link to the thread). It shows under **Waiting on me**; a click starts a session in it.
+link to the thread, and `thread` with the thread id). It shows under **Waiting on me**; a click
+starts a session in it.
+
+In every case the message goes to the folder's **`thread.md`**: when it arrived and from whom,
+what the thread said before it (as the scan summarised it), the message itself and what it
+needs, with the link. So when the thread comes back after your reply, the follow-up lands in
+the same folder, under the earlier messages and your `claude-wait --note` entries, and the
+session that picks it up has the whole exchange.
 Messages already placed are remembered in `~/.local/share/claude-worksessions/inbox/seen.json`,
 so clearing a flag does not bring the same message back. `state.json` next to it holds the
 last run, shown in the Open topics view's subtitle; `inbox.log` is the hourly run's output.

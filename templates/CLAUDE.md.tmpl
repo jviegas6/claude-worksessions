@@ -70,11 +70,18 @@ ticket in its `.session.json` and the work clearly belongs to one, say so.
 **Open topics** view lists each flagged topic under *Waiting on me* or *Waiting on someone*.
 When a session ends with someone else owing an answer (a question sent on Teams or mail, a
 ticket handed over, a request for approval), run
-`claude-wait them "<who>" "<what for>" --where teams|mail|jira [--link URL]` in the session
-folder and say in one line that you did. When the user owes the reply, `claude-wait me ...`.
-When it is settled, `claude-wait none`. `claude-wait` alone shows the current flag. A folder
-named `reply-<who>-<subject>` with the flag already set was created by `claude-inbox` from a
-message that needs a reply: the link in the flag points at it.
+`claude-wait them "<who>" "<what for>" --where teams|mail|jira [--link URL] --note "<where things stand>"`
+in the session folder and say in one line that you did. When the user owes the reply,
+`claude-wait me ... --note "..."`. When it is settled, `claude-wait none --note "<how>"`.
+`claude-wait` alone shows the current flag.
+
+The note is the context the next session starts from, so write it for someone who was not here:
+what was asked, what was answered or sent (and where), what is still open and by when. Every
+`claude-wait` change and note is appended to the folder's `thread.md`. **When a folder has a
+`thread.md`, read it before doing anything else there**: it is the exchange so far. A folder named
+`reply-<who>-<subject>` with the flag already set was created by `claude-inbox` from a message that
+needs a reply; its `thread.md` holds the message, what came before it and the link to it, and each
+later message on the same thread is appended there.
 
 If a session was started some other way and is sitting in this root, create the
 request folder yourself before writing anything.

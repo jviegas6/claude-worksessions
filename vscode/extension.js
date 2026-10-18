@@ -275,7 +275,7 @@ class Sidebar {
     const now = Date.now() / 1000;
     // While searching everything opens up; ids carry the search so that takes effect.
     const searching = !!this.filter;
-    const idp = `${this.grouping}|${this.filter}|${el.inPinned ? "p|" : ""}${el.inActive ? "a|" : ""}${el.inAttention ? "w|" : ""}`;
+    const idp = `${this.grouping}|${this.filter}|${el.inPinned ? "p|" : ""}${el.inActive ? "a|" : ""}`;
     if (el.kind === "deleted") {
       const it = new vscode.TreeItem("Deleted", C.Collapsed);
       it.id = idp + "deleted";
@@ -315,18 +315,6 @@ class Sidebar {
       it.tooltip = "Sessions a Claude process has open right now — in a tab here, a terminal or the Claude Code panel.";
       return it;
     }
-    if (el.kind === "topic") {
-      const it = new vscode.TreeItem(el.key, C.Expanded);
-      it.id = idp + "t|" + el.key;
-      const n = el.requests.length, state = M.topicWaiting(el);
-      it.description = [state, `${n} request${n > 1 ? "s" : ""}`, M.ago(el.mtime, now)].filter(Boolean).join(" · ");
-      const me = el.waiting.some(w => w.on === "me");
-      it.iconPath = new vscode.ThemeIcon(me ? "bell-dot" : "watch", new vscode.ThemeColor(me ? "charts.orange" : "charts.blue"));
-      it.contextValue = "topic";
-      it.tooltip = (el.ticket ? `Ticket ${el.ticket}` : "A request with no ticket") +
-        ` — ${n} request${n > 1 ? "s" : ""}, last activity ${M.ago(el.mtime, now)} ago.\n${state}.`;
-      return it;
-    }
     if (el.kind === "group") {
       const it = new vscode.TreeItem(el.key, el.first || searching ? C.Expanded : C.Collapsed);
       it.id = idp + "g|" + el.key;
@@ -341,20 +329,11 @@ class Sidebar {
       it.id = idp + "r|" + r.path;
       const pinnedReq = M.isPinnedRequest(this.pins, this.data.work_root, r);
       const w = M.waitingOf(r);
-      // in Open topics the thread notes (thread.md) are the context: a button, and the tail in the tooltip
-      const thread = el.inAttention && w && fs.existsSync(path.join(r.path, M.THREAD_FILE)) ? path.join(r.path, M.THREAD_FILE) : "";
-      it.contextValue = r.root ? "root" : el.inAttention && w ? "request-waiting" + (w.link ? "-link" : "") + (thread ? "-thread" : "")
-        : pinnedReq ? "request-pinned" : "request";
-      it.description = el.inAttention
-        ? [el.withTicket && r.ticket && r.ticket !== "Other" && r.ticket, M.waitingText(r, now) || M.ago(r.mtime, now)].filter(Boolean).join(" · ")
-        : [pinnedReq && !el.inPinned && "pinned", this.grouping !== "ticket" && r.ticket,
-           r.task_type, r.profile, M.ago(r.mtime, now)].filter(Boolean).join(" · ");
+      it.contextValue = r.root ? "root" : pinnedReq ? "request-pinned" : "request";
+      it.description = [pinnedReq && !el.inPinned && "pinned", this.grouping !== "ticket" && r.ticket,
+                        r.task_type, r.profile, M.ago(r.mtime, now)].filter(Boolean).join(" · ");
       const live = r.sessions.some(s => this.isOpen(s.id) || s.active);
-      it.iconPath = el.inAttention && w
-        ? new vscode.ThemeIcon(w.on === "me" ? "bell-dot" : "watch", new vscode.ThemeColor(w.on === "me" ? "charts.orange" : "charts.blue"))
-        : new vscode.ThemeIcon(live ? "folder-active" : "folder");
-      // in Open topics a click opens the request: its latest session, or a new one
-      if (el.inAttention) it.command = { command: "claudeWorksessions.openAttention", title: "Open", arguments: [el] };
+      it.iconPath = new vscode.ThemeIcon(live ? "folder-active" : "folder");
       const md = new vscode.MarkdownString();
       md.appendMarkdown("**").appendText(r.name).appendMarkdown("**\n\n");
       if (w) {
@@ -370,11 +349,6 @@ class Sidebar {
         md.appendMarkdown("files: ").appendText(`${r.files.length}${r.files_truncated ? "+" : ""}` +
                                                 (r.size !== undefined ? ` · ${M.formatSize(r.size)}` : ""))
           .appendMarkdown("  \n");
-      }
-      if (thread) {
-        let tail = "";
-        try { tail = M.threadTail(fs.readFileSync(thread, "utf8")); } catch (e) { /* unreadable: no tail */ }
-        if (tail) md.appendMarkdown("\n*thread.md, last entry:*\n\n").appendText(tail).appendMarkdown("\n");
       }
       md.appendMarkdown("\n").appendText(path.relative(this.data.work_root, r.path) || r.path);
       it.tooltip = md;
@@ -446,58 +420,6 @@ class Sidebar {
   }
 }
 
-// --- the Open topics view: what waits on me, what waits on someone ---------------------------
-// A topic per ticket (a request with no ticket is its own), open while one of its requests
-// carries a waiting flag (.session.json "waiting", set by claude-wait or Set
-// waiting…); closed work has no flag and is not here. A topic with one request shows as that
-// request; rows are the Sidebar's rows with inAttention, so they open, expand and right-click
-// the same way.
-class Topics {
-  constructor(bar) {
-    this.bar = bar;
-    this.emitter = new vscode.EventEmitter();
-    this.onDidChangeTreeData = this.emitter.event;
-    bar.emitter.event(() => this.emitter.fire());
-  }
-
-  sections() { return M.sections(this.bar.data, this.bar.opts()); }
-
-  counts() { const s = this.sections(); return { me: s.me.length, other: s.other.length }; }
-
-  getChildren(el) {
-    if (!el) {
-      const s = this.sections();
-      return ["me", "other"].filter(k => s[k].length).map(k => ({ kind: "section", on: k, topics: s[k] }));
-    }
-    if (el.kind === "section") {
-      return el.topics.map(t => (t.requests.length === 1 ? { kind: "request", request: t.requests[0], inAttention: true, withTicket: true }
-                                                          : { ...t, inAttention: true }));
-    }
-    return this.bar.getChildren(el).map(c => ({ ...c, inAttention: true }));
-  }
-
-  getTreeItem(el) {
-    if (el.kind === "section") {
-      const it = new vscode.TreeItem(M.SECTION_LABELS[el.on], vscode.TreeItemCollapsibleState.Expanded);
-      it.id = "w|" + el.on;
-      it.description = String(el.topics.length);
-      it.iconPath = el.on === "me" ? new vscode.ThemeIcon("bell-dot", new vscode.ThemeColor("charts.orange"))
-        : new vscode.ThemeIcon("watch", new vscode.ThemeColor("charts.blue"));
-      it.tooltip = el.on === "me" ? "Topics where someone is waiting for your reply, longest wait first."
-                                  : "Topics where you are waiting for someone else, longest wait first.";
-      return it;
-    }
-    return this.bar.getTreeItem(el);
-  }
-}
-
-// A click in Open topics: the request's latest session, or a new one in its folder.
-function openAttention(bar, el) {
-  const r = el.request;
-  if (r.sessions && r.sessions.length) return bar.open(r.sessions[0], r);
-  return bar.addSession(r);
-}
-
 // Set waiting…: on a request (right-click), a session's request, the focused tab's, or pick one.
 async function setWaiting(bar, el) {
   let r = el && el.request;
@@ -524,24 +446,6 @@ async function setWaiting(bar, el) {
   vscode.window.showInformationMessage(pick.on ? `${r.name}: ${M.WAITING_LABELS[pick.on].toLowerCase()} — ${who.trim() || "?"}`
                                                : `${r.name}: waiting flag cleared.`);
   bar.refresh();
-}
-
-function clearWaiting(bar, el) {
-  M.setWaiting(el.request.path, null);
-  bar.refresh();
-}
-
-function openWaitingLink(el) {
-  const w = M.waitingOf(el.request);
-  if (!w || !w.link) return vscode.window.showInformationMessage("This request's flag has no link to the thread.");
-  return vscode.env.openExternal(vscode.Uri.parse(w.link));
-}
-
-// The request's thread.md: what was said so far, as claude-wait wrote it.
-function openThread(el) {
-  const f = path.join(el.request.path, M.THREAD_FILE);
-  if (!fs.existsSync(f)) return vscode.window.showInformationMessage(`${el.request.name}: no thread.md yet.`);
-  return vscode.commands.executeCommand("markdown.showPreview", vscode.Uri.file(f));
 }
 
 // /pending: what needs a reply and what I am waiting on, in a Claude tab in the work root
@@ -979,16 +883,7 @@ function activate(context) {
   bar.restore();
   const view = vscode.window.createTreeView("claudeWorksessions.sessions", { treeDataProvider: bar });
   const box = new SearchBox(bar, q => searchSessions(bar, q));
-  const attention = new Topics(bar);
-  const attentionView = vscode.window.createTreeView("claudeWorksessions.attention", { treeDataProvider: attention });
-  const attentionChanged = () => {
-    const { me, other } = attention.counts();
-    attentionView.description = `${me} on me · ${other} on someone`;
-    attentionView.message = me + other ? undefined
-      : "No open topic: nothing is waiting on anyone. claude-wait flags a request; /pending says what needs a reply.";
-  };
   bar.onChange = () => {
-    attentionChanged();
     const filtered = M.describeFilters(bar.filters);
     view.description = `${M.GROUPING_LABELS[bar.grouping]} · ${M.SORT_LABELS[bar.sort] || M.SORT_LABELS.activity}` +
       (filtered ? ` · only ${filtered}` : "") + (status && status.mode ? ` · guard: ${status.mode}` : "");
@@ -1006,14 +901,10 @@ function activate(context) {
   status = new GuardStatus(() => bar.onChange());
   const cmd = (name, fn) => vscode.commands.registerCommand("claudeWorksessions." + name, fn);
   context.subscriptions.push(
-    view, status, attentionView,
+    view, status,
     vscode.window.registerWebviewViewProvider("claudeWorksessions.search", box),
     cmd("refresh", () => bar.refresh()),
-    cmd("openAttention", el => openAttention(bar, el)),
-    cmd("openThread", el => openThread(el)),
     cmd("setWaiting", el => setWaiting(bar, el)),
-    cmd("clearWaiting", el => clearWaiting(bar, el)),
-    cmd("openWaitingLink", el => openWaitingLink(el)),
     cmd("pending", () => pending(bar)),
     cmd("sweepEmpty", () => sweepEmpty(bar)),
     cmd("grouping", async () => {

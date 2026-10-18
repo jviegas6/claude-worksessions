@@ -2,15 +2,12 @@
 
 ## [2.23.0] — 2026-10-18
 
-- **Open topics: what waits on me, what waits on someone** (#49). A request folder can carry a
-  `waiting` flag in `.session.json` — who the ball is with (`me` | `other`), who the other party
-  is, what for, since when, where (teams, mail, jira) and a link to the thread. The VS Code
-  sidebar gets an **Open topics** view on top: one topic per ticket (a request with no ticket is
-  a topic of its own), open while one of its requests carries a flag — finished work has no flag
-  and is not there — in two sections, longest wait first: **Waiting on me** and **Waiting on
-  someone**. A click opens the request's latest session, or starts one; the tick clears the
-  flag, the link opens the thread, the book opens `thread.md`; **Set waiting…** (right-click,
-  also in the palette) sets it by hand.
+- **Who is the ball with?** (#49). A request folder can carry a `waiting` flag in
+  `.session.json` — who the ball is with (`me` | `other`), who the other party is, what for,
+  since when, where (teams, mail, jira) and a link to the thread. `claude-sessions --json`
+  carries it; **Set waiting…** in the sidebar (right-click a request or session, or the palette)
+  sets it, and a flagged request's tooltip shows it. (An Open topics view listing the flagged
+  topics was tried on this branch and dropped with the hourly scan: more panel than signal.)
 - **`claude-wait`** sets or clears the flag from a session folder (`claude-wait them "Ana"
   "confirm the IP" --where teams --link URL --note "where things stand"`; `claude-wait me`;
   `claude-wait none`). Every change and its note go to the folder's `thread.md`, the context a

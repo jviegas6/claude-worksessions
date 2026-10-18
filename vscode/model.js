@@ -303,40 +303,6 @@ function tree(data, grouping, opts) {
           ...grouped(data, grouping, opts)];
 }
 
-// Open topics: one per ticket (a request with no ticket is a topic of its own), open while one
-// of its requests carries a waiting flag -- closed work has no flag and drops off. What waits
-// on me comes first, then what waits on someone, each by the longest wait. Each:
-// { kind: "topic", key, requests, mtime, since, waiting: [flags], ticket }.
-const topicRank = t => (t.waiting.some(w => w.on === "me") ? 0 : 1);
-function topics(data, opts) {
-  const groups = new Map();
-  for (const r of requests(data, opts)) {
-    if (r.root) continue;
-    const ticket = r.ticket && r.ticket !== "Other" ? r.ticket : "";
-    const k = ticket || r.name;
-    if (!groups.has(k)) groups.set(k, { kind: "topic", key: k, ticket, requests: [], mtime: 0, waiting: [] });
-    const g = groups.get(k);
-    g.requests.push(r);
-    g.mtime = Math.max(g.mtime, r.mtime || 0);
-    const w = waitingOf(r);
-    if (w) {
-      g.waiting.push(w);
-      const t = sinceEpoch(w);
-      if (t !== undefined && !(g.since <= t)) g.since = t;
-    }
-  }
-  return [...groups.values()].filter(g => g.waiting.length)
-    .sort((a, b) => topicRank(a) - topicRank(b) || (a.since || a.mtime) - (b.since || b.mtime));
-}
-
-// "needs my reply · Ana" / "waiting on Bo" for a topic's row, or "".
-function topicWaiting(t) {
-  const me = t.waiting.filter(w => w.on === "me"), other = t.waiting.filter(w => w.on === "other");
-  const who = ws => [...new Set(ws.map(w => w.who).filter(Boolean))].join(", ");
-  return [me.length && ("needs my reply" + (who(me) ? " · " + who(me) : "")),
-          other.length && ("waiting on " + (who(other) || "others"))].filter(Boolean).join(" · ");
-}
-
 function grouped(data, grouping, opts) {
   if (grouping === "recent") {
     const reqs = requests(data, opts);
@@ -519,37 +485,6 @@ const waitingOf = r => {
 };
 const sinceEpoch = w => { const t = Date.parse((w && w.since) || ""); return isNaN(t) ? undefined : t / 1000; };
 
-// The Open topics view: the open topics in two sections -- what waits on me, what waits on
-// someone else -- { me: [topics], other: [topics] }. The search box and filters do not apply:
-// what is waiting is waiting.
-const SECTION_LABELS = { me: "Waiting on me", other: "Waiting on someone" };
-function sections(data, opts) {
-  const out = { me: [], other: [] };
-  for (const t of topics(data, { ...(opts || {}), showEmpty: true, filter: "", filters: null })) {
-    out[t.waiting.some(w => w.on === "me") ? "me" : "other"].push(t);
-  }
-  return out;
-}
-
-// "who · what · 3d" for a flagged request.
-function waitingText(r, now) {
-  const w = waitingOf(r);
-  if (!w) return "";
-  const t = sinceEpoch(w);
-  return [w.who, w.what, t !== undefined ? ago(t, now) : ""].filter(Boolean).join(" · ");
-}
-
-// The last entry of a request's thread.md (what claude-wait --note wrote),
-// as one short paragraph for a tooltip: its heading, then its text up to `max` characters.
-const THREAD_FILE = "thread.md";
-function threadTail(text, max = 400) {
-  const parts = String(text || "").split(/^## /m).filter(p => p.trim());
-  if (!parts.length || !/^## /m.test(text)) return "";
-  const [head, ...body] = parts[parts.length - 1].split("\n");
-  const t = body.map(l => l.replace(/^>\s?/, "")).join("\n").replace(/\n{2,}/g, "\n").trim();
-  return head.trim() + (t ? "\n" + (t.length > max ? t.slice(0, max).trimEnd() + "…" : t) : "");
-}
-
 // Set or clear a request's waiting flag in its .session.json, as claude-wait does:
 // w = { on, who, what, where?, link?, since? } or null to clear. Returns [old, new].
 function setWaiting(folder, w, now = new Date()) {
@@ -578,5 +513,5 @@ module.exports = { NO_TICKET, DAY_PRESETS, ARTIFACT_LABELS, dayRange, passes, fi
                    isPinnedSession, isPinnedRequest, pinned, matches, shownFiles, fileChildren, visible, requests, dayOf, tree,
                    sessionLabel, tabName, ago, matchPending, parseCsv, taskTypes, setTaskType,
                    readSkills, auditArgs, active, formatSize, latestRetro, retroArgs, GUARD_MODES, guardMode,
-                   WAITING_LABELS, waitingOf, SECTION_LABELS, sections, waitingText, setWaiting,
-                   topics, topicWaiting, THREAD_FILE, threadTail, isStaleEmpty };
+                   WAITING_LABELS, waitingOf, setWaiting,
+                   isStaleEmpty };

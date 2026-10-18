@@ -414,27 +414,6 @@ test("latestRetro: the newest _audit/quality/*_retro.md", () => {
 });
 
 // --- waiting: the Attention view's data ------------------------------------------------------
-test("sections: open topics split by who is waiting, ignoring search and filters", () => {
-  const now = Date.parse("2026-10-12T10:00:00Z") / 1000;
-  const W1 = req("2026/10/12/10-00-00_w1", { ticket: "BTPA-1", waiting: { on: "me", who: "Ana", what: "the IP", since: "2026-10-12T08:00:00Z", where: "teams", link: "https://t/1" } });
-  const W2 = req("2026/10/11/10-00-00_w2", { waiting: { on: "me", who: "Bo", what: "", since: "2026-10-10T08:00:00Z" }, mtime: now - 86400 });
-  const W3 = req("2026/10/12/11-00-00_w3", { waiting: { on: "other", who: "Cy", what: "a quote", since: "garbage" }, started: 50, mtime: 50 });
-  const bad = req("2026/10/12/12-00-00_bad", { waiting: { on: "them" }, mtime: now - 60 });
-  const d = { work_root: ROOT, sessions: [ses("w1s", now - 7200, W1), ses("root", now, null)], requests: [W2, W3, bad] };
-  const a = M.sections(d, { filter: "nothing-matches", filters: { day: { preset: "today" } } });
-  assert.deepStrictEqual(a.me.map(t => t.key), ["10-00-00_w2", "BTPA-1"]);   // the longest wait first
-  assert.deepStrictEqual(a.other.map(t => t.key), ["11-00-00_w3"]);          // old, but flagged
-  assert.deepStrictEqual(Object.keys(a), ["me", "other"]);                   // no flag, no topic
-  assert.strictEqual(M.waitingOf(bad), null);
-  assert.strictEqual(M.waitingOf({ waiting: "me" }), null);
-  assert.strictEqual(M.waitingText(W1, now), "Ana · the IP · 2h");
-  assert.strictEqual(M.waitingText(W2, now), "Bo · 2d");
-  assert.strictEqual(M.waitingText(W3, now), "Cy · a quote");
-  assert.strictEqual(M.waitingText(bad, now), "");
-  assert.deepStrictEqual(M.SECTION_LABELS, { me: "Waiting on me", other: "Waiting on someone" });
-  assert.deepStrictEqual(M.WAITING_LABELS, { me: "Needs my reply", other: "Waiting on others" });
-});
-
 test("setWaiting writes, flips and clears the flag in .session.json", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cws-wait-"));
   const p = path.join(dir, ".session.json");
@@ -456,19 +435,6 @@ test("setWaiting writes, flips and clears the flag in .session.json", () => {
   assert.strictEqual(JSON.parse(fs.readFileSync(p, "utf8")).name, "x");
 });
 
-test("threadTail: the last entry of thread.md, quotes unwrapped, cut at max", () => {
-  assert.strictEqual(M.threadTail(""), "");
-  assert.strictEqual(M.threadTail("# x\n\nno entries yet\n"), "");
-  const t = "# Reply to Ana\n\nWho said what.\n\n## 2026-10-12 08:00 · Ana (teams) · waiting on me\n\nAna wrote:\n\n> is it 10.0.0.5?\n> by Thursday\n\nNeeds: the IP\n\n" +
-            "## 2026-10-12 10:00 · waiting on them: Ana -- the IP (teams)\n\nSent 10.0.0.5, she will check.\n\n";
-  assert.strictEqual(M.threadTail(t), "2026-10-12 10:00 · waiting on them: Ana -- the IP (teams)\nSent 10.0.0.5, she will check.");
-  assert.strictEqual(M.threadTail(t.slice(0, t.indexOf("## 2026-10-12 10:00"))),
-                     "2026-10-12 08:00 · Ana (teams) · waiting on me\nAna wrote:\nis it 10.0.0.5?\nby Thursday\nNeeds: the IP");
-  assert.strictEqual(M.threadTail("## settled\n\n" + "x".repeat(50), 10), "settled\n" + "x".repeat(10) + "…");
-  assert.strictEqual(M.threadTail("## settled\n"), "settled");
-  assert.strictEqual(M.THREAD_FILE, "thread.md");
-});
-
 test("stale empty folders are hidden unless showEmpty (claude-delete --empty-folders)", () => {
   const now = Date.parse("2026-10-18T12:00:00Z") / 1000, day = 86400;
   const fresh = req("2026/10/16/10-00-00_fresh", { files: [], mtime: now - 2 * day });
@@ -481,34 +447,3 @@ test("stale empty folders are hidden unless showEmpty (claude-delete --empty-fol
   assert.ok(M.isStaleEmpty(stale, now) && M.isStaleEmpty(noted, now) && !M.isStaleEmpty(fresh, now) && !M.isStaleEmpty(kept, now));
 });
 
-test("open topics: one per ticket, open while flagged, what waits on me first (#49)", () => {
-  const now = Date.parse("2026-10-12T12:00:00Z") / 1000, day = 86400;
-  const T1a = req("2026/10/12/10-00-00_t1a", { ticket: "BTPA-1" });
-  const T1b = req("2026/09/01/10-00-00_t1b", { ticket: "BTPA-1", waiting: { on: "other", who: "Bo", since: "2026-09-02T00:00:00Z" } });
-  const T2 = req("2026/10/11/10-00-00_t2", { ticket: "BTPA-2", waiting: { on: "me", who: "Ana", since: "2026-10-11T00:00:00Z" } });
-  const T4 = req("2026/10/11/11-00-00_t4", { ticket: "BTPA-4", waiting: { on: "me", who: "Di", since: "2026-10-09T00:00:00Z" } });
-  const done = req("2026/10/12/09-00-00_done", { ticket: "BTPA-3" });
-  const none = req("2026/10/10/10-00-00_none", { ticket: "Other", waiting: { on: "other", who: "Ed", since: "nonsense" } });
-  const d = { work_root: ROOT, sessions: [
-    ses("a", now - day, T1a), ses("b", now - 40 * day, T1b), ses("c", now - 2 * day, T2), ses("f", now - 5 * day, T4),
-    ses("d", now - 60, done), ses("e", now - 3 * day, none), ses("root", now, null),
-  ] };
-  const t = M.topics(d, { now });
-  assert.deepStrictEqual(t.map(x => [x.kind, x.key, x.requests.map(r => r.name), x.waiting.map(w => w.on)]), [
-    ["topic", "BTPA-4", ["11-00-00_t4"], ["me"]],                                // the longest wait on me first
-    ["topic", "BTPA-2", ["10-00-00_t2"], ["me"]],
-    ["topic", "BTPA-1", ["10-00-00_t1a", "10-00-00_t1b"], ["other"]],           // open, however old the flag
-    ["topic", "10-00-00_none", ["10-00-00_none"], ["other"]],                    // no usable since: by activity
-  ]);
-  assert.strictEqual(t[2].ticket, "BTPA-1");
-  assert.strictEqual(t[3].ticket, "");
-  assert.strictEqual(t[2].since, Date.parse("2026-09-02T00:00:00Z") / 1000);
-  assert.strictEqual(t[3].since, undefined);
-  assert.strictEqual(M.topicWaiting(t[0]), "needs my reply · Di");
-  assert.strictEqual(M.topicWaiting(t[2]), "waiting on Bo");
-  assert.strictEqual(M.topicWaiting({ waiting: [{ on: "me" }, { on: "other", who: "" }] }), "needs my reply · waiting on others");
-  assert.deepStrictEqual(M.GROUPINGS, ["day", "ticket", "recent"]);           // topics are a view, not a grouping
-  // the search still narrows it; a finished request (no flag) is not a topic
-  assert.deepStrictEqual(M.topics(d, { now, filter: "t2" }).map(x => x.key), ["BTPA-2"]);
-  assert.ok(!t.some(x => x.key === "BTPA-3"));
-});

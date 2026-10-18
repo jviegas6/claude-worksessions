@@ -133,16 +133,16 @@ claude-wait them "Ana" "the IP" --note "Asked on Teams; she will check with netw
 
 Run anywhere inside the session folder. The flag lives in `.session.json` as
 `waiting: { on: "me" | "other", who, what, since, where, link }`; the previous flag goes to
-`waiting_history` with an `until`. The VS Code sidebar's **Open topics** view lists the topic under
-*Waiting on me* or *Waiting on someone*; without a flag a request is not an open topic.
+`waiting_history` with an `until`. `claude-sessions --json` carries the flag; `/pending` checks
+Teams and mail against it; **Set waiting…** in the sidebar sets it and a flagged request's
+tooltip shows it.
 
 Every change is appended to the folder's **`thread.md`** — a dated heading with the new state,
 and under it the `--note` text: what was asked, what was answered and where, what is still
 open. That file is the context a later session starts from when the thread comes back (the
 rendered `CLAUDE.md` asks Claude to read it first, to run `claude-wait` with a note when a
 session leaves the ball with someone, and to clear the flag when the matter is settled).
-The `/pending` skill reads the same file to say what is tracked. In the sidebar, the book button
-on a flagged request opens it, and the row's tooltip shows its last entry.
+The `/pending` skill reads the same file to say what is tracked.
 
 ## claude-audit
 
@@ -223,7 +223,6 @@ by side.
 | pin on a session or request | **Pin** it: a **Pinned** group at the top lists it whatever the grouping and sort (also right-click → Pin / Unpin). Pins live in `<work root>/_config/pinned.json`, so they follow the work root to other machines |
 | folder on a request | reveal it in the Explorer (right-click: in Finder, a new window, set task type) |
 | **Files** under a request | the request folder's files as a tree, with their count and size (**Files 4 · 21 KB**; each file's size on hover) — click to open (Markdown in the preview), right-click to reveal in Finder or copy the path |
-| **Open topics** (view on top) | one topic per ticket (a request with no ticket is a topic of its own), open while one of its requests carries a `waiting` flag — finished work has no flag and is not here — in two sections, longest wait first: **Waiting on me** (bell) and **Waiting on someone** (watch). A topic row reads *needs my reply · Ana · 2 requests · 1h* and opens onto its requests; a topic with one request shows as that request. Flagged rows read *who · what · age* with the thread on hover. Click a request: its latest session in a tab, or a new session in its folder. Inline: clear the flag (tick), open the thread (link), open `thread.md` (book). Its inbox button runs `/pending`. Subtitle: *1 on me · 2 on someone* |
 | right-click menus | kept short: open, new session here, reveal in Finder, pin, set waiting, delete. Everything else is in the command palette (**Work sessions: …**) |
 | **Set waiting…** on a request or session | who the ball is with, who and what for — `claude-wait` from the sidebar |
 | **Guard:** in the status bar | `claude-guard`'s mode; click to change it (`claude-guard mode`). The panel's subtitle ends with it too (`· guard: warn`), and its `…` menu has *Guard mode: warn…* |
@@ -246,7 +245,7 @@ panel), the terminal commands and your skills:
 | command | does |
 |---|---|
 | New request | `claude-new` in a tab |
-| What's pending? | `claude /pending` in a tab in the work root: what needs a reply and what you are waiting on, against the open topics (also the inbox button on the Open topics view) |
+| What's pending? | `claude /pending` in a tab in the work root: what needs a reply and what you are waiting on, against the open topics |
 | Sweep empty folders | `claude-delete --empty-folders` in a tab |
 | Recent sessions… | `claude-sessions` as a pick list; picking opens the session |
 | Search sessions… / with Claude… | `claude-search` (`--ai`), hits in a pick list |

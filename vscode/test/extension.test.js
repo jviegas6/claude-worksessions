@@ -989,8 +989,10 @@ test("active sessions, file sizes, retro and the guard mode (#25 #26 #27 #38)", 
   assert.match(view.description, / · guard: warn$/);
   assert.ok(guardKey() >= 1);
   const pkg = require("../package.json");
-  const entries = pkg.contributes.menus["view/title"].filter(e => e.command.startsWith("claudeWorksessions.guardMode."));
-  assert.deepStrictEqual(entries.map(e => e.when.split("== ").pop()), ["off", "shadow", "warn", "enforce"]);
+  // the mode is changed from the status bar; the four commands exist but stay out of the menus
+  assert.ok(!pkg.contributes.menus["view/title"].some(e => e.command.startsWith("claudeWorksessions.guardMode.")));
+  assert.deepStrictEqual(pkg.contributes.commands.filter(c => c.command.startsWith("claudeWorksessions.guardMode.")).map(c => c.command.split(".").pop()),
+                         ["off", "shadow", "warn", "enforce"]);
   assert.strictEqual(pkg.contributes.commands.find(c => c.command === "claudeWorksessions.guardMode.warn").title,
                      "Guard mode: warn\u2026");
   fake.answers.push(undefined);
@@ -1142,29 +1144,18 @@ test("Open topics: waiting on me, waiting on someone (#49)", async t => {
   await run("setWaiting", { kind: "request", request: { path: path.join(root, "nowhere"), name: "x" } });
   assert.match(fake.messages.at(-1)[1], /No \.session\.json/);
 
-  // claude-inbox: a pick runs it in a tab; its state shows in the subtitle
-  fake.answers.push(items => items[2]);
-  await run("inbox");
-  assert.strictEqual(fake.terminals.at(-1).sent[0], "claude-inbox --dry-run");
-  assert.strictEqual(fake.terminals.at(-1).name, "inbox · --dry-run");
-  fake.answers.push(items => items[0]);
-  await run("inbox");
-  assert.deepStrictEqual([fake.terminals.at(-1).sent[0], fake.terminals.at(-1).name], ["claude-inbox", "inbox"]);
-  fake.answers.push(undefined);
-  await run("inbox");
-  const inboxDir = path.join(dir, "data", "claude-worksessions", "inbox");
-  fs.writeFileSync(path.join(inboxDir, "state.json"), JSON.stringify({ at: "2026-10-12 14:00", found: 1, new: 1 }));
-  await bar.refresh();
-  assert.strictEqual(view.description, "1 on me · 1 on someone · scanned 14:00");
-  fs.writeFileSync(path.join(inboxDir, "state.json"), JSON.stringify({ at: "2026-10-12 15:00", error: "x" }));
-  for (const f of fake.listeners["watch:state.json"]) f();
-  await bar.refresh();
-  assert.strictEqual(view.description, "1 on me · 1 on someone · scanned 15:00 (failed)");
+  // /pending runs in a Claude tab in the work root under the default profile; the sweep in a tab too
+  await run("pending");
+  assert.deepStrictEqual([fake.terminals.at(-1).sent[0], fake.terminals.at(-1).name, fake.terminals.at(-1).cwd],
+                         ['CLAUDE_CONFIG_DIR="$HOME/.claude-personal" claude /pending', "pending", root]);
+  await run("sweepEmpty");
+  assert.deepStrictEqual([fake.terminals.at(-1).sent[0], fake.terminals.at(-1).cwd], ["claude-delete --empty-folders", root]);
+  assert.strictEqual(view.description, "1 on me · 1 on someone");
 
   // nothing open: the view says what to do
   fs.writeFileSync(json, JSON.stringify({ work_root: root, sessions: [data.sessions[3]], requests: [] }));
   await bar.refresh();
   assert.deepStrictEqual(p.getChildren(), []);
   assert.match(view.message, /^No open topic: nothing is waiting on anyone/);
-  assert.strictEqual(view.description, "0 on me · 0 on someone · scanned 15:00 (failed)");
+  assert.strictEqual(view.description, "0 on me · 0 on someone");
 });

@@ -1,38 +1,34 @@
 # Changelog
 
-## [2.23.0] — 2026-10-12
+## [2.23.0] — 2026-10-18
 
-- **Open topics: what waits on me, what waits on someone** (#49). A
-  request folder can carry a `waiting` flag in `.session.json` — who the ball is with (`me` |
-  `other`), who the other party is, what for, since when, where (teams, mail, jira) and a link
-  to the thread. The VS Code sidebar gets an **Open topics** view on top: one topic per ticket
-  (a request with no ticket is a topic of its own), open while one of its requests carries a
-  flag — finished work has no flag and is not there — in two sections, longest wait first:
-  **Waiting on me** and **Waiting on someone**. A click opens the request's latest session, or starts one; the tick clears
-  the flag, the link opens the thread; **Set waiting…** (right-click, also in the palette)
-  sets it by hand.
+- **Open topics: what waits on me, what waits on someone** (#49). A request folder can carry a
+  `waiting` flag in `.session.json` — who the ball is with (`me` | `other`), who the other party
+  is, what for, since when, where (teams, mail, jira) and a link to the thread. The VS Code
+  sidebar gets an **Open topics** view on top: one topic per ticket (a request with no ticket is
+  a topic of its own), open while one of its requests carries a flag — finished work has no flag
+  and is not there — in two sections, longest wait first: **Waiting on me** and **Waiting on
+  someone**. A click opens the request's latest session, or starts one; the tick clears the
+  flag, the link opens the thread, the book opens `thread.md`; **Set waiting…** (right-click,
+  also in the palette) sets it by hand.
 - **`claude-wait`** sets or clears the flag from a session folder (`claude-wait them "Ana"
-  "confirm the IP" --where teams --link URL`; `claude-wait me`; `claude-wait none`), and the
-  rendered `CLAUDE.md` asks Claude to run it when a session leaves the ball with someone.
-- **`claude-inbox`** scans Teams and mail for what needs a reply from you and puts each one on
-  the list: a headless Claude (`claude -p`, the Microsoft 365 connector, read tools only, no
-  transcript) answers with the messages; the script finds the newest request folder on the
-  same ticket and flips it to *me*, or creates `YYYY/MM/DD/HH-mm-ss_reply-<who>-<subject>` with
-  the flag. Nothing is drafted or sent. `--install` runs it every hour (launchd on macOS, cron
-  elsewhere); `--dry-run`, `--hours N`, `--status`. New config keys: `CWS_INBOX_PROFILE`,
-  `CWS_INBOX_HOURS`, `CWS_INBOX_TASK_TYPE`, `CWS_INBOX_MODEL`, `CWS_INBOX_TIMEOUT`.
-- **`thread.md`: the context behind a flag.** `claude-inbox` writes each message it places to
-  the request folder's `thread.md` — when and from whom, what the thread said before it, the
-  message itself, what it needs, the link — and `claude-wait` appends every change there with
-  the new `--note "<where things stand>"`. A follow-up on the same thread (same Teams chat or
-  mail conversation, or the same person and subject) now lands in the same folder instead of a
-  new one, under the earlier messages; a folder already waiting on you keeps its flag, pointed
-  at the newer message. The rendered `CLAUDE.md` asks Claude to read `thread.md` first and to
-  leave a note when it hands the ball over. In Open topics a flagged request with a `thread.md`
-  gets a book button that opens it, and its tooltip shows the last entry.
-- **`claude-inbox` sees your replies.** The scan also reports the threads where your own message
-  is the latest; a folder of such a thread that was waiting on you flips to *Waiting on someone*
-  (what your message asked for, since your reply), with "I replied: …" in `thread.md`.
+  "confirm the IP" --where teams --link URL --note "where things stand"`; `claude-wait me`;
+  `claude-wait none`). Every change and its note go to the folder's `thread.md`, the context a
+  later session starts from; the rendered `CLAUDE.md` asks Claude to read it first and to run
+  `claude-wait` with a note when a session leaves the ball with someone.
+- **`/pending` skill**: what in Teams and mail still needs a reply from you and what you are
+  waiting on, checked against the open topics. Read only: nothing created, drafted or sent.
+  (An hourly scan that created a request folder per message was tried on this branch and
+  dropped: 18 folders in four days, eight never opened.)
+- **`claude-new` continues instead of creating**: with a ticket that has a request folder from
+  the last two weeks, it offers to start the session there; `--new` skips the offer.
+- **`claude-delete --empty-folders`** moves request folders with no session and no files, older
+  than seven days, to the bin; the sidebar hides such folders by default.
+- **Sidebar menus thinned**: the right-click menus keep open, new session here, reveal, pin, set
+  waiting and delete; the view title keeps new request, search, filter, grouping, run skill and
+  refresh. Everything else stays in the command palette.
+- The rendered `CLAUDE.md` is a third of its former length: the rules that change behaviour,
+  without the explanations.
 - `claude-sessions --json`: each request carries its `waiting` flag (or `null`).
 
 ## [2.21.0] — 2026-10-03

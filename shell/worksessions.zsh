@@ -376,11 +376,61 @@ _claude_new_ticket() {
   print -r -- "$t"
 }
 
+# Request folders on TICKET from the last DAYS days, newest first: "path<TAB>relative  name  (age)".
+_cws_recent_folders() {
+  WS_TICKET="$1" WS_DAYS="$2" WS_ROOT="$CLAUDE_WORK_ROOT" "$CWS_PYTHON" - <<'PYEOF'
+import datetime, glob, json, os
+root, ticket, days = os.environ["WS_ROOT"], os.environ["WS_TICKET"].upper(), int(os.environ["WS_DAYS"])
+cutoff = (datetime.datetime.now() - datetime.timedelta(days=days)).strftime("%Y/%m/%d")
+out = []
+for meta in sorted(glob.glob(os.path.join(root, "[0-9]" * 4, "[0-9][0-9]", "[0-9][0-9]", "*", ".session.json")), reverse=True)[:400]:
+    folder = os.path.dirname(meta)
+    rel = os.path.relpath(folder, root).replace(os.sep, "/")
+    if rel[:10] < cutoff:
+        break
+    try:
+        d = json.load(open(meta))
+    except (OSError, ValueError):
+        continue
+    if (d.get("ticket") or "").strip().upper() != ticket:
+        continue
+    try:
+        when = datetime.datetime.strptime(rel[:19], "%Y/%m/%d/%H-%M-%S")
+        age = (datetime.datetime.now() - when).days
+        age = "today" if age == 0 else "{}d ago".format(age)
+    except ValueError:
+        age = "?"
+    out.append("{}\t{}  {}  ({})".format(folder, rel, d.get("name") or "", age))
+    if len(out) == 5:
+        break
+print("\n".join(out))
+PYEOF
+}
+
+# Start Claude in an existing request folder: its recorded profile unless one was given.
+_claude_new_continue() {
+  local dir="$1" profile="$2" prompt="$3" vscode="$4" cfg
+  if [[ -z "$profile" ]]; then
+    profile="$(WS_DIR="$dir" "$CWS_PYTHON" -c 'import json,os; print(json.load(open(os.path.join(os.environ["WS_DIR"], ".session.json"))).get("profile") or "")')"
+    profile="${profile:-$CWS_DEFAULT_PROFILE}"
+  fi
+  cfg="$HOME/.claude-$profile"
+  if [[ ! -d "$cfg" ]]; then
+    print -u2 -- "claude-new: config dir $cfg does not exist"; return 1
+  fi
+  print -r -- "→ $profile  continuing in ${dir#$CLAUDE_WORK_ROOT/}"
+  cd "$dir" || return 1
+  if (( vscode )); then
+    code -n "$dir"; return
+  fi
+  CLAUDE_CONFIG_DIR="$cfg" command claude ${prompt:+"$prompt"}
+}
+
 claude-new() {
   emulate -L zsh
   setopt local_options no_nomatch
 
-  local profile="" name="" ticket="" canon="" dir slug cfg started ended audit=1 ask_audit=1 ttype="" vscode=0 prompt=""
+  local profile="" name="" ticket="" canon="" dir slug cfg started ended audit=1 ask_audit=1 ttype="" vscode=0 prompt="" fresh=0
   local goal="" done_when="" goal_set=0
   local -a paths=()
   local -a profiles=(${=CWS_PROFILES})
@@ -405,6 +455,7 @@ claude-new() {
       --prompt)
         if [[ -z "$2" ]]; then print -u2 -- "claude-new: --prompt needs the text to start Claude with"; return 1; fi
         prompt="$2"; shift 2 ;;
+      --new) fresh=1; shift ;;
       -T|--type)     ttype="$2";       shift 2 ;;
       -g|--goal)     goal="$2"; goal_set=1; shift 2 ;;
       --done)        done_when="$2";   shift 2 ;;
@@ -444,6 +495,7 @@ print("{:<10} {:<14} {:<16} {:<9}".format("[" + (d.get("profile") or "?") + "]",
         print -r -- '    -n / --no-audit keeps the session out of claude-audit and the weekly review'
         print -r -- '    (claude-search still finds it); -a / --audit keeps it in; asked if neither'
         print -r -- "    -p / --profile picks the profile (${profiles[*]}); asked if omitted"
+        print -r -- '    --new always makes a new folder: no offer to continue in a recent one on the same ticket'
         print -r -- 'claude-new -l    list recent sessions'
         print -r -- 'claude-new -L    list the configured profiles'
         return 0 ;;
@@ -481,6 +533,35 @@ print("{:<10} {:<14} {:<16} {:<9}".format("[" + (d.get("profile") or "?") + "]",
     ticket=""
     [[ -t 0 ]] || return 1  # not interactive: fail rather than loop
   done
+
+  # A ticket that already has a request folder from the last two weeks: continue there
+  # instead of starting a fourth folder for the same work. --new skips the offer.
+  if (( ! fresh )) && [[ -t 0 && "$ticket" != "Other" ]]; then
+    local -a recent=("${(@f)$(_cws_recent_folders "$ticket" 14)}")
+    recent=("${(@)recent:#}")
+    if (( ${#recent} )); then
+      print -r -- ""
+      print -r -- "$ticket has recent request folders:"
+      local i=1 line
+      for line in $recent; do
+        printf '  %d) %s
+' $i "${line#*$'	'}"
+        (( i++ ))
+      done
+      printf '  %d) a new folder
+' $i
+      local go=""
+      read "go?Continue in [1]: " || return 1
+      go="${go:-1}"
+      if [[ "$go" == <-> ]] && (( go >= 1 && go <= ${#recent} )); then
+        dir="${${recent[$go]}%%$'	'*}"
+        _claude_new_continue "$dir" "$profile" "$prompt" "$vscode"
+        return
+      elif [[ "$go" != "$i" ]]; then
+        print -u2 -- "claude-new: invalid choice '$go'"; return 1
+      fi
+    fi
+  fi
 
   if [[ -z "$profile" ]]; then
     if (( ${#profiles} == 1 )); then

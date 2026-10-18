@@ -162,6 +162,9 @@ function ticketsInUse(data) {
 // A session-less request seen as a session, so the search and filters apply to it the same
 // way: its fields and files for the search, its start and last change for the day, its files
 // as artifacts.
+const STALE_EMPTY_DAYS = 7;
+const isStaleEmpty = (r, now) => !(r.files || []).filter(f => f !== "thread.md").length &&
+                                 now - (r.mtime || r.started || 0) > STALE_EMPTY_DAYS * 86400;
 const asSession = r => ({ id: "", request: r, started: r.started, mtime: r.mtime || r.started || 0, written: r.files });
 
 // Requests, newest activity first, each with its sessions newest first. Sessions with no
@@ -180,8 +183,12 @@ function requests(data, opts) {
     byPath.get(key).sessions.push(s);
   }
   const filter = (opts && opts.filter) || "", pass = passes(opts && opts.filters, opts && opts.now);
+  const now = (opts && opts.now) || Date.now() / 1000;
   for (const r of data.requests || []) {
     const s = asSession(r);
+    // a folder with no session and no files for a week is clutter: hidden unless showEmpty
+    // (claude-delete --empty-folders moves them to the bin)
+    if (!(opts && opts.showEmpty) && isStaleEmpty(r, now)) continue;
     if (!byPath.has(r.path) && matches(s, filter) && pass(s)) {
       byPath.set(r.path, { ...r, root: false, mtime: s.mtime, sessions: [] });
     }
@@ -503,7 +510,7 @@ function guardMode(conf) {
   return m in GUARD_MODES ? m : "off";
 }
 
-// --- waiting: who the ball is with (claude-wait, claude-inbox) ----------------------------
+// --- waiting: who the ball is with (claude-wait) ----------------------------
 //   request.waiting: { on: "me" | "other", who, what, since (ISO), where, link } | null
 const WAITING_LABELS = { me: "Needs my reply", other: "Waiting on others" };
 const waitingOf = r => {
@@ -532,7 +539,7 @@ function waitingText(r, now) {
   return [w.who, w.what, t !== undefined ? ago(t, now) : ""].filter(Boolean).join(" · ");
 }
 
-// The last entry of a request's thread.md (what claude-inbox and claude-wait --note wrote),
+// The last entry of a request's thread.md (what claude-wait --note wrote),
 // as one short paragraph for a tooltip: its heading, then its text up to `max` characters.
 const THREAD_FILE = "thread.md";
 function threadTail(text, max = 400) {
@@ -559,18 +566,6 @@ function setWaiting(folder, w, now = new Date()) {
   return [old, d.waiting || null];
 }
 
-// claude-inbox's state: CWS_INBOX_DIR, else $XDG_DATA_HOME (or ~/.local/share)/claude-worksessions/inbox,
-// with state.json from its last run ({ at, error, found, new }) or null.
-function inboxDir(env, home) {
-  return path.join(env.XDG_DATA_HOME || path.join(home, ".local", "share"), "claude-worksessions", "inbox");
-}
-function inboxState(dir) {
-  try {
-    const d = JSON.parse(fs.readFileSync(path.join(dir, "state.json"), "utf8"));
-    return d && typeof d === "object" && !Array.isArray(d) ? d : null;
-  } catch { return null; }
-}
-
 // claude-audit arguments for a period and view.
 function auditArgs(period, detail, date) {
   const args = { today: ["--day"], week: ["--week"], lastweek: ["--week", date], month: ["--month"],
@@ -583,5 +578,5 @@ module.exports = { NO_TICKET, DAY_PRESETS, ARTIFACT_LABELS, dayRange, passes, fi
                    isPinnedSession, isPinnedRequest, pinned, matches, shownFiles, fileChildren, visible, requests, dayOf, tree,
                    sessionLabel, tabName, ago, matchPending, parseCsv, taskTypes, setTaskType,
                    readSkills, auditArgs, active, formatSize, latestRetro, retroArgs, GUARD_MODES, guardMode,
-                   WAITING_LABELS, waitingOf, SECTION_LABELS, sections, waitingText, setWaiting, inboxDir, inboxState,
-                   topics, topicWaiting, THREAD_FILE, threadTail };
+                   WAITING_LABELS, waitingOf, SECTION_LABELS, sections, waitingText, setWaiting,
+                   topics, topicWaiting, THREAD_FILE, threadTail, isStaleEmpty };

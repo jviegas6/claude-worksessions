@@ -291,10 +291,16 @@
         "title": "Open"
       },
       {
-        "command": "claudeWorksessions.inbox",
-        "title": "Scan inbox\u2026 (claude-inbox)",
+        "command": "claudeWorksessions.pending",
+        "title": "What's pending? (/pending)",
         "category": "Work sessions",
         "icon": "$(inbox)"
+      },
+      {
+        "command": "claudeWorksessions.sweepEmpty",
+        "title": "Sweep empty folders (claude-delete --empty-folders)",
+        "category": "Work sessions",
+        "icon": "$(trash)"
       }
     ],
     "menus": {
@@ -330,21 +336,6 @@
           "group": "1_run@2"
         },
         {
-          "command": "claudeWorksessions.audit",
-          "when": "view == claudeWorksessions.sessions",
-          "group": "1_run@3"
-        },
-        {
-          "command": "claudeWorksessions.recentSessions",
-          "when": "view == claudeWorksessions.sessions",
-          "group": "1_run@4"
-        },
-        {
-          "command": "claudeWorksessions.sort",
-          "when": "view == claudeWorksessions.sessions",
-          "group": "navigation@4"
-        },
-        {
           "command": "claudeWorksessions.filter",
           "when": "view == claudeWorksessions.sessions && !claudeWorksessions.filtered",
           "group": "navigation@3"
@@ -360,49 +351,24 @@
           "group": "1_run@5"
         },
         {
-          "command": "claudeWorksessions.retro",
-          "when": "view == claudeWorksessions.sessions",
-          "group": "2_quality@1"
-        },
-        {
-          "command": "claudeWorksessions.openRetro",
-          "when": "view == claudeWorksessions.sessions",
-          "group": "2_quality@2"
-        },
-        {
-          "command": "claudeWorksessions.guardMode.off",
-          "when": "view == claudeWorksessions.sessions && claudeWorksessions.guardMode == off",
-          "group": "2_quality@3"
-        },
-        {
-          "command": "claudeWorksessions.guardMode.shadow",
-          "when": "view == claudeWorksessions.sessions && claudeWorksessions.guardMode == shadow",
-          "group": "2_quality@3"
-        },
-        {
-          "command": "claudeWorksessions.guardMode.warn",
-          "when": "view == claudeWorksessions.sessions && claudeWorksessions.guardMode == warn",
-          "group": "2_quality@3"
-        },
-        {
-          "command": "claudeWorksessions.guardMode.enforce",
-          "when": "view == claudeWorksessions.sessions && claudeWorksessions.guardMode == enforce",
-          "group": "2_quality@3"
-        },
-        {
-          "command": "claudeWorksessions.inbox",
-          "when": "view == claudeWorksessions.attention",
-          "group": "navigation@1"
-        },
-        {
           "command": "claudeWorksessions.refresh",
           "when": "view == claudeWorksessions.attention",
           "group": "navigation@2"
         },
         {
-          "command": "claudeWorksessions.inbox",
+          "command": "claudeWorksessions.pending",
+          "when": "view == claudeWorksessions.attention",
+          "group": "navigation@1"
+        },
+        {
+          "command": "claudeWorksessions.pending",
           "when": "view == claudeWorksessions.sessions",
-          "group": "1_run@6"
+          "group": "1_run@3"
+        },
+        {
+          "command": "claudeWorksessions.sweepEmpty",
+          "when": "view == claudeWorksessions.sessions",
+          "group": "1_run@4"
         }
       ],
       "view/item/context": [
@@ -412,34 +378,14 @@
           "group": "inline@1"
         },
         {
-          "command": "claudeWorksessions.reveal",
-          "when": "view =~ /^claudeWorksessions\\.(sessions|attention)$/ && viewItem =~ /^request/",
-          "group": "inline@2"
-        },
-        {
           "command": "claudeWorksessions.addSession",
           "when": "view =~ /^claudeWorksessions\\.(sessions|attention)$/ && viewItem =~ /^request/",
           "group": "1_open@1"
         },
         {
-          "command": "claudeWorksessions.openInWindow",
-          "when": "view =~ /^claudeWorksessions\\.(sessions|attention)$/ && viewItem =~ /^request/",
-          "group": "1_open@2"
-        },
-        {
-          "command": "claudeWorksessions.reveal",
-          "when": "view =~ /^claudeWorksessions\\.(sessions|attention)$/ && viewItem =~ /^request/",
-          "group": "2_reveal@1"
-        },
-        {
           "command": "claudeWorksessions.revealInOS",
           "when": "view =~ /^claudeWorksessions\\.(sessions|attention)$/ && viewItem =~ /^request/",
           "group": "2_reveal@2"
-        },
-        {
-          "command": "claudeWorksessions.setType",
-          "when": "view =~ /^claudeWorksessions\\.(sessions|attention)$/ && viewItem =~ /^request/",
-          "group": "3_edit@1"
         },
         {
           "command": "claudeWorksessions.open",
@@ -450,16 +396,6 @@
           "command": "claudeWorksessions.open",
           "when": "view =~ /^claudeWorksessions\\.(sessions|attention)$/ && viewItem =~ /^session/",
           "group": "1_open@1"
-        },
-        {
-          "command": "claudeWorksessions.setType",
-          "when": "view =~ /^claudeWorksessions\\.(sessions|attention)$/ && viewItem =~ /^session/",
-          "group": "3_edit@1"
-        },
-        {
-          "command": "claudeWorksessions.copyId",
-          "when": "view =~ /^claudeWorksessions\\.(sessions|attention)$/ && viewItem =~ /^session/",
-          "group": "3_edit@2"
         },
         {
           "command": "claudeWorksessions.openFile",
@@ -470,16 +406,6 @@
           "command": "claudeWorksessions.revealFile",
           "when": "view =~ /^claudeWorksessions\\.(sessions|attention)$/ && viewItem =~ /^(file|file-md|dir)$/",
           "group": "2_reveal@1"
-        },
-        {
-          "command": "claudeWorksessions.copyPath",
-          "when": "view =~ /^claudeWorksessions\\.(sessions|attention)$/ && viewItem =~ /^(file|file-md|dir)$/",
-          "group": "3_edit@1"
-        },
-        {
-          "command": "claudeWorksessions.copyForEmail",
-          "when": "view =~ /^claudeWorksessions\\.(sessions|attention)$/ && viewItem == file-md",
-          "group": "1_open@2"
         },
         {
           "command": "claudeWorksessions.pin",
@@ -545,21 +471,6 @@
           "command": "claudeWorksessions.setWaiting",
           "when": "view =~ /^claudeWorksessions\\.(sessions|attention)$/ && viewItem =~ /^(request|session)/",
           "group": "3_edit@0"
-        },
-        {
-          "command": "claudeWorksessions.clearWaiting",
-          "when": "view == claudeWorksessions.attention && viewItem =~ /^request-waiting/",
-          "group": "3_edit@1"
-        },
-        {
-          "command": "claudeWorksessions.openWaitingLink",
-          "when": "view == claudeWorksessions.attention && viewItem =~ /-link/",
-          "group": "1_open@0"
-        },
-        {
-          "command": "claudeWorksessions.openThread",
-          "when": "view == claudeWorksessions.attention && viewItem =~ /-thread$/",
-          "group": "1_open@1"
         }
       ],
       "commandPalette": [
@@ -581,7 +492,7 @@
         },
         {
           "command": "claudeWorksessions.openInWindow",
-          "when": "false"
+          "when": "true"
         },
         {
           "command": "claudeWorksessions.copyId",
@@ -601,7 +512,7 @@
         },
         {
           "command": "claudeWorksessions.copyForEmail",
-          "when": "resourceLangId == markdown || activeWebviewPanelId == 'markdown.preview'"
+          "when": "true"
         },
         {
           "command": "claudeWorksessions.pin",

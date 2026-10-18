@@ -709,3 +709,29 @@ def test_claude_wait_shows_sets_flips_and_clears(tmp_path):
     with pytest.raises(subprocess.CalledProcessError) as e:
         zsh('cd "{}" && claude-wait me'.format(tmp_path), tmp_path)
     assert "no .session.json here" in e.value.stderr
+
+
+def test_claude_new_offers_to_continue_in_a_recent_folder_on_the_ticket(tmp_path):
+    (tmp_path / ".claude-personal").mkdir()
+    import datetime
+    today = datetime.datetime.now().strftime("%Y/%m/%d")
+    d = tmp_path / today / "09-00-00_first-look"
+    d.mkdir(parents=True)
+    (d / ".session.json").write_text(json.dumps({"name": "First look", "ticket": "BTPA-1", "profile": "personal"}))
+    # Enter takes the offer: no new folder, Claude starts in the old one
+    r = run_new_tty(tmp_path, "-t BTPA-1 -T tooling -a second look", "\n")
+    assert r.returncode == 0, r.stderr
+    assert "BTPA-1 has recent request folders:" in r.stdout and "1) {}/09-00-00_first-look  First look  (today)".format(today) in r.stdout
+    assert "2) a new folder" in r.stdout and "continuing in {}/09-00-00_first-look".format(today) in r.stdout
+    assert len(list(tmp_path.glob("[0-9]*/*/*/*/.session.json"))) == 1
+    # the last number makes a new folder; --new never asks; another ticket never asks; Other never asks
+    r = run_new_tty(tmp_path, "-t BTPA-1 -T tooling -a second look", "2\n\n\n")
+    assert r.returncode == 0, r.stderr
+    assert len(list(tmp_path.glob("[0-9]*/*/*/*/.session.json"))) == 2
+    r = run_new_tty(tmp_path, "--new -t BTPA-1 -T tooling -a third", "\n\n")
+    assert r.returncode == 0, r.stderr and "recent request folders" not in r.stdout
+    assert len(list(tmp_path.glob("[0-9]*/*/*/*/.session.json"))) == 3
+    r = run_new_tty(tmp_path, "-t BTPA-2 -T tooling -a other ticket", "\n\n")
+    assert r.returncode == 0 and "recent request folders" not in r.stdout
+    r = run_new_tty(tmp_path, "-t BTPA-1 -T tooling -a bad pick", "9\n")
+    assert r.returncode == 1 and "invalid choice '9'" in r.stderr

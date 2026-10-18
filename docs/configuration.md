@@ -33,11 +33,6 @@ just as well — re-run `install.sh` afterwards so the skills and `CLAUDE.md` ca
 | `CWS_PROFILE_<name>_DESC` | — | the line shown in `claude-new`'s profile menu |
 | `CWS_PROFILE_<name>_BASE_URL` | — | route that profile through an API gateway (see below) |
 | `CWS_TASK_TYPES` | permissions, job errors, … | seed list of task types; the ones you have used are suggested first |
-| `CWS_INBOX_PROFILE` | `CWS_DEFAULT_PROFILE` | profile [`claude-inbox`](commands.md#claude-inbox) runs under; its claude.ai login needs the Microsoft 365 connector |
-| `CWS_INBOX_HOURS` | `3` | how far back each scan looks |
-| `CWS_INBOX_TASK_TYPE` | `support` | task type of the request folders the scan creates |
-| `CWS_INBOX_MODEL` | `sonnet` | model of the scan |
-| `CWS_INBOX_TIMEOUT` | `600` | seconds a scan may take |
 | `CWS_GUARD_MODE` | `off` | [`claude-guard`](commands.md#claude-guard): `off`, `shadow` (log only), `warn` (log and show a notice) or `enforce` (block) |
 | `CWS_GUARD_MAX_EXTENSIONS` | `2` | how many times a session's goal can be widened before the next widening counts as a new objective |
 | `CWS_GUARD_MODEL` | `haiku` | the model of the guard's judge |

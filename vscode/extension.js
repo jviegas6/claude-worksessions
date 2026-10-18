@@ -448,7 +448,7 @@ class Sidebar {
 
 // --- the Open topics view: what waits on me, what waits on someone ---------------------------
 // A topic per ticket (a request with no ticket is its own), open while one of its requests
-// carries a waiting flag (.session.json "waiting", set by claude-wait, claude-inbox or Set
+// carries a waiting flag (.session.json "waiting", set by claude-wait or Set
 // waiting…); closed work has no flag and is not here. A topic with one request shows as that
 // request; rows are the Sidebar's rows with inAttention, so they open, expand and right-click
 // the same way.
@@ -537,26 +537,25 @@ function openWaitingLink(el) {
   return vscode.env.openExternal(vscode.Uri.parse(w.link));
 }
 
-// The request's thread.md: what was said so far, as claude-inbox and claude-wait wrote it.
+// The request's thread.md: what was said so far, as claude-wait wrote it.
 function openThread(el) {
   const f = path.join(el.request.path, M.THREAD_FILE);
   if (!fs.existsSync(f)) return vscode.window.showInformationMessage(`${el.request.name}: no thread.md yet.`);
   return vscode.commands.executeCommand("markdown.showPreview", vscode.Uri.file(f));
 }
 
-// claude-inbox: scan Teams and mail for what needs a reply, in a terminal tab.
-async function inbox(bar) {
-  const p = await vscode.window.showQuickPick([
-    { label: "Scan now", description: "the last few hours (CWS_INBOX_HOURS)", args: [] },
-    { label: "Scan the last 24 hours", args: ["--hours", "24"] },
-    { label: "Dry run", description: "say what would be flagged, change nothing", args: ["--dry-run"] },
-    { label: "Status", description: "when it last ran, and whether the hourly run is installed", args: ["--status"] },
-    { label: "Install the hourly run", args: ["--install"] },
-    { label: "Remove the hourly run", args: ["--uninstall"] },
-  ], { placeHolder: "claude-inbox — what needs a reply from me?" });
-  if (!p) return;
-  bar.terminal(`inbox${p.args.length ? " · " + p.args.join(" ") : ""}`, bar.data.work_root,
-               ["claude-inbox", ...p.args].join(" "), "inbox");
+// /pending: what needs a reply and what I am waiting on, in a Claude tab in the work root
+// (read only: the skill creates nothing, so no request folder for the run).
+function pending(bar) {
+  const conf = config();
+  const profile = conf.CWS_DEFAULT_PROFILE || (conf.CWS_PROFILES || "").split(/\s+/)[0];
+  const env = profile ? `CLAUDE_CONFIG_DIR="$HOME/.claude-${profile}" ` : "";
+  bar.terminal("pending", bar.data.work_root, env + "claude /pending", "pending");
+}
+
+// Sweep empty folders: request folders with no session and no files, older than a week, to the bin.
+function sweepEmpty(bar) {
+  bar.terminal("sweep empty folders", bar.data.work_root, "claude-delete --empty-folders", "sweep");
 }
 
 // --- the search box above the tree --------------------------------------------------------
@@ -982,14 +981,11 @@ function activate(context) {
   const box = new SearchBox(bar, q => searchSessions(bar, q));
   const attention = new Topics(bar);
   const attentionView = vscode.window.createTreeView("claudeWorksessions.attention", { treeDataProvider: attention });
-  const inboxDir = M.inboxDir(process.env, HOME);
   const attentionChanged = () => {
     const { me, other } = attention.counts();
-    const st = M.inboxState(inboxDir);
-    const scanned = st && st.at ? ` · scanned ${st.at.slice(11) || st.at}${st.error ? " (failed)" : ""}` : "";
-    attentionView.description = `${me} on me · ${other} on someone${scanned}`;
+    attentionView.description = `${me} on me · ${other} on someone`;
     attentionView.message = me + other ? undefined
-      : "No open topic: nothing is waiting on anyone. claude-wait flags a request; claude-inbox scans Teams and mail for what needs a reply.";
+      : "No open topic: nothing is waiting on anyone. claude-wait flags a request; /pending says what needs a reply.";
   };
   bar.onChange = () => {
     attentionChanged();
@@ -1018,7 +1014,8 @@ function activate(context) {
     cmd("setWaiting", el => setWaiting(bar, el)),
     cmd("clearWaiting", el => clearWaiting(bar, el)),
     cmd("openWaitingLink", el => openWaitingLink(el)),
-    cmd("inbox", () => inbox(bar)),
+    cmd("pending", () => pending(bar)),
+    cmd("sweepEmpty", () => sweepEmpty(bar)),
     cmd("grouping", async () => {
       const pick = await vscode.window.showQuickPick(
         M.GROUPINGS.map(g => ({ label: M.GROUPING_LABELS[g], g, description: g === bar.grouping ? "current" : "" })),
@@ -1121,12 +1118,6 @@ function activate(context) {
     w.onDidCreate(soon); w.onDidDelete(soon);
     context.subscriptions.push(w);
   }
-  // claude-inbox ran (here, or on the hour): the Open topics subtitle says when
-  try { fs.mkdirSync(inboxDir, { recursive: true }); } catch {}
-  const inboxWatch = vscode.workspace.createFileSystemWatcher(
-    new vscode.RelativePattern(vscode.Uri.file(inboxDir), "state.json"));
-  inboxWatch.onDidChange(soon); inboxWatch.onDidCreate(soon);
-  context.subscriptions.push(inboxWatch);
   // the guard's mode, changed here, in a terminal or on another machine
   const confFile = process.env.CWS_CONFIG || path.join(HOME, ".config/claude-worksessions/config.env");
   let confReal = confFile;

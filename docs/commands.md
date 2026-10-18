@@ -5,7 +5,7 @@ The flag-by-flag reference. For how to use them together see the [user guide](us
 ## claude-new
 
 ```
-claude-new [-p PROFILE] [-n|-a] [-c] [-t TICKET] [-T TYPE] [-g GOAL] [--done TEXT] [--path DIR]... [--prompt TEXT] [name]
+claude-new [-p PROFILE] [-n|-a] [-c] [-t TICKET] [-T TYPE] [-g GOAL] [--done TEXT] [--path DIR]... [--prompt TEXT] [--new] [name]
 claude-new -l
 claude-new -L
 ```
@@ -16,6 +16,12 @@ that profile. `ended_at` is filled in when Claude exits.
 
 - **Ticket is mandatory**: `PREFIX-123` or `Other`. A ticket-shaped first word is taken
   as the ticket: `claude-new PROJ-123 cost pipeline`.
+- **A ticket with recent folders offers to continue there.** When the ticket has request
+  folders from the last two weeks, `claude-new` lists the newest five and asks *Continue in
+  [1]:* — Enter starts Claude in the newest one (its recorded profile unless `-p` says
+  otherwise), the last number makes a new folder as usual. So a piece of work keeps one
+  folder across its sessions instead of one per conversation. `--new` skips the offer;
+  `Other` and a run without a terminal never get it.
 - `-p name` / `--profile name` picks the profile — any name in `CWS_PROFILES`, so a
   new profile needs no code change. Left out, you get a menu. An unknown name is an error.
 - `-n` / `--no-audit` keeps the session out of `claude-audit` and the weekly review.
@@ -135,7 +141,7 @@ and under it the `--note` text: what was asked, what was answered and where, wha
 open. That file is the context a later session starts from when the thread comes back (the
 rendered `CLAUDE.md` asks Claude to read it first, to run `claude-wait` with a note when a
 session leaves the ball with someone, and to clear the flag when the matter is settled).
-`claude-inbox` writes the messages it finds to the same file. In the sidebar, the book button
+The `/pending` skill reads the same file to say what is tracked. In the sidebar, the book button
 on a flagged request opens it, and the row's tooltip shows its last entry.
 
 ## claude-audit
@@ -217,7 +223,8 @@ by side.
 | pin on a session or request | **Pin** it: a **Pinned** group at the top lists it whatever the grouping and sort (also right-click → Pin / Unpin). Pins live in `<work root>/_config/pinned.json`, so they follow the work root to other machines |
 | folder on a request | reveal it in the Explorer (right-click: in Finder, a new window, set task type) |
 | **Files** under a request | the request folder's files as a tree, with their count and size (**Files 4 · 21 KB**; each file's size on hover) — click to open (Markdown in the preview), right-click to reveal in Finder or copy the path |
-| **Open topics** (view on top) | one topic per ticket (a request with no ticket is a topic of its own), open while one of its requests carries a `waiting` flag — finished work has no flag and is not here — in two sections, longest wait first: **Waiting on me** (bell) and **Waiting on someone** (watch). A topic row reads *needs my reply · Ana · 2 requests · 1h* and opens onto its requests; a topic with one request shows as that request. Flagged rows read *who · what · age* with the thread on hover. Click a request: its latest session in a tab, or a new session in its folder. Inline: clear the flag (tick), open the thread (link). Its `…` menu runs `claude-inbox`. Subtitle: *1 on me · 2 on someone · scanned 14:00* |
+| **Open topics** (view on top) | one topic per ticket (a request with no ticket is a topic of its own), open while one of its requests carries a `waiting` flag — finished work has no flag and is not here — in two sections, longest wait first: **Waiting on me** (bell) and **Waiting on someone** (watch). A topic row reads *needs my reply · Ana · 2 requests · 1h* and opens onto its requests; a topic with one request shows as that request. Flagged rows read *who · what · age* with the thread on hover. Click a request: its latest session in a tab, or a new session in its folder. Inline: clear the flag (tick), open the thread (link), open `thread.md` (book). Its inbox button runs `/pending`. Subtitle: *1 on me · 2 on someone* |
+| right-click menus | kept short: open, new session here, reveal in Finder, pin, set waiting, delete. Everything else is in the command palette (**Work sessions: …**) |
 | **Set waiting…** on a request or session | who the ball is with, who and what for — `claude-wait` from the sidebar |
 | **Guard:** in the status bar | `claude-guard`'s mode; click to change it (`claude-guard mode`). The panel's subtitle ends with it too (`· guard: warn`), and its `…` menu has *Guard mode: warn…* |
 
@@ -239,6 +246,8 @@ panel), the terminal commands and your skills:
 | command | does |
 |---|---|
 | New request | `claude-new` in a tab |
+| What's pending? | `claude /pending` in a tab in the work root: what needs a reply and what you are waiting on, against the open topics (also the inbox button on the Open topics view) |
+| Sweep empty folders | `claude-delete --empty-folders` in a tab |
 | Recent sessions… | `claude-sessions` as a pick list; picking opens the session |
 | Search sessions… / with Claude… | `claude-search` (`--ai`), hits in a pick list |
 | Audit… | `claude-audit` for today, this or last week, this month, a day or a week; summary or detail |
@@ -250,7 +259,6 @@ panel), the terminal commands and your skills:
 | Open latest retrospective report | the newest `_audit/quality/*_retro.md` in the Markdown preview |
 | Guard mode… | `claude-guard mode`: off, shadow, warn or enforce (also the status-bar item) |
 | Set waiting on… | `claude-wait`: on a request (right-click), a session's request, the focused tab's, or pick one |
-| Scan inbox… | `claude-inbox` in a tab: now, the last 24 hours, a dry run, status, install or remove the hourly run |
 | Focus the search box · Clear search | |
 
 Sessions are named by Claude's auto-title, else their first prompt; hovering shows the
@@ -267,50 +275,6 @@ still open in VS Code, since Claude in VS Code's terminal connects to it (`/ide`
 Settings: `claudeWorksessions.sessionsCommand` (default `~/.local/bin/claude-sessions`),
 `claudeWorksessions.showEmptySessions` (sessions closed without a prompt; off).
 
-## claude-inbox
-
-```
-claude-inbox                 what needs a reply from me, from the last CWS_INBOX_HOURS (3) hours
-claude-inbox --hours 24      a longer window: the first run, or after a day off
-claude-inbox --dry-run       say what would be created or flagged, change nothing
-claude-inbox --install       run it every hour (launchd on macOS, cron elsewhere); --uninstall stops it
-claude-inbox --status        when it last ran and what it found
-```
-
-A headless Claude (`claude -p` under `CWS_INBOX_PROFILE`, whose claude.ai login needs the
-Microsoft 365 connector) reads the recent Teams chats and mail with the connector's read
-tools only — built-in tools off, hooks off, no transcript saved, so the run is not a
-session in the sidebar — and answers with the messages that still need you: a question
-addressed to you, a request only you can act on, a decision or approval, a thread where
-someone is waiting on your answer. FYI, thanks, notifications, invites and anything you
-already answered are left out. Nothing is drafted and nothing is sent.
-
-For each message the script then finds the request folder the thread already has — the
-one recording the same thread id (the Teams chat or channel, the mail conversation; for
-older folders, a flag whose link points into the same chat), else the one it created for the
-same person and subject (`Re:`/`Fw:` stripped), within 45 days — else the newest request
-folder on the same ticket (a `PREFIX-123` in the thread, within 45 days), and flips its flag
-to *me* — a folder that was waiting on that person now needs your reply; one already waiting
-on you keeps its flag, pointed at the newer message. Otherwise it creates
-`YYYY/MM/DD/HH-mm-ss_reply-<who>-<subject>/` with a `.session.json` (ticket from the
-thread or `Other`, type `CWS_INBOX_TASK_TYPE`, goal "reply to … about …", the flag with the
-link to the thread, and `thread` with the thread id). It shows under **Waiting on me**; a click
-starts a session in it.
-
-In every case the message goes to the folder's **`thread.md`**: when it arrived and from whom,
-what the thread said before it (as the scan summarised it), the message itself and what it
-needs, with the link. So when the thread comes back after your reply, the follow-up lands in
-the same folder, under the earlier messages and your `claude-wait --note` entries, and the
-session that picks it up has the whole exchange.
-The scan also reports the threads where **your** message is now the latest. A folder of such
-a thread that was *Waiting on me* flips to *Waiting on someone* — who, what you are now
-waiting for (what your message asked, else "their answer to: …"), since your reply — and
-`thread.md` gets "I replied: …" with the link. A folder already waiting on them, or a thread
-with no folder, is not news. Settling a topic for good is still `claude-wait none`.
-Messages already placed are remembered in `~/.local/share/claude-worksessions/inbox/seen.json`,
-so clearing a flag does not bring the same message back. `state.json` next to it holds the
-last run, shown in the Open topics view's subtitle; `inbox.log` is the hourly run's output.
-
 ## claude-delete
 
 ```
@@ -322,7 +286,15 @@ claude-delete --list          # what is in the bin (--json too)
 claude-delete --restore ID    # put a deleted session back where it was
 claude-delete --purge ID      # delete it for good (asks; --yes)
 claude-delete --empty         # delete everything in the bin for good (asks; --yes)
+claude-delete --empty-folders [--days N] [--check]
+                              # request folders with no session and no files, older than N
+                              # days (7), to the bin; --check only lists them; --yes skips the ask
 ```
+
+`--empty-folders` is the sweep for folders that were created and never used: nothing in them
+but `.session.json` (and a `thread.md`), no session, not pinned, and dated more than `--days`
+ago. They go to the same bin, listed by `--list` and put back by `--restore`. The sidebar
+hides such folders by default (the **Sweep empty folders** entry in its … menu runs this).
 
 For clearing out test sessions and other noise. `ID` is a session id or its start.
 A session may go only when it has **no value**:

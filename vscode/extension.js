@@ -448,13 +448,12 @@ async function setWaiting(bar, el) {
   bar.refresh();
 }
 
-// /pending: what needs a reply and what I am waiting on, in a Claude tab in the work root
-// (read only: the skill creates nothing, so no request folder for the run).
+// /pending: what needs a reply and what I am waiting on, in a Claude tab in the work root.
+// claude-pending keeps the run out of the audit (no request folder, no review row).
 function pending(bar) {
   const conf = config();
   const profile = conf.CWS_DEFAULT_PROFILE || (conf.CWS_PROFILES || "").split(/\s+/)[0];
-  const env = profile ? `CLAUDE_CONFIG_DIR="$HOME/.claude-${profile}" ` : "";
-  bar.terminal("pending", bar.data.work_root, env + "claude /pending", "pending");
+  bar.terminal("pending", bar.data.work_root, "claude-pending" + (profile ? ` -p ${profile}` : ""), "pending");
 }
 
 // Sweep empty folders: request folders with no session and no files, older than a week, to the bin.

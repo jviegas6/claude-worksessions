@@ -245,7 +245,7 @@ panel), the terminal commands and your skills:
 | command | does |
 |---|---|
 | New request | `claude-new` in a tab |
-| What's pending? | `claude /pending` in a tab in the work root: what needs a reply and what you are waiting on, against the open topics |
+| What's pending? | `claude-pending` in a tab: the `/pending` skill in the work root, out of the audit |
 | Sweep empty folders | `claude-delete --empty-folders` in a tab |
 | Recent sessions… | `claude-sessions` as a pick list; picking opens the session |
 | Search sessions… / with Claude… | `claude-search` (`--ai`), hits in a pick list |

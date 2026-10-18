@@ -1099,10 +1099,10 @@ test("Set waiting…: the flag in .session.json, from a request, a session or a 
   await run("setWaiting", { kind: "request", request: { path: path.join(root, "nowhere"), name: "x" } });
   assert.match(fake.messages.at(-1)[1], /No \.session\.json/);
 
-  // /pending runs in a Claude tab in the work root under the default profile; the sweep in a tab too
+  // /pending runs claude-pending (out of the audit) in a tab in the work root; the sweep in a tab too
   await run("pending");
   assert.deepStrictEqual([fake.terminals.at(-1).sent[0], fake.terminals.at(-1).name, fake.terminals.at(-1).cwd],
-                         ['CLAUDE_CONFIG_DIR="$HOME/.claude-personal" claude /pending', "pending", root]);
+                         ["claude-pending -p personal", "pending", root]);
   await run("sweepEmpty");
   assert.deepStrictEqual([fake.terminals.at(-1).sent[0], fake.terminals.at(-1).cwd], ["claude-delete --empty-folders", root]);
 

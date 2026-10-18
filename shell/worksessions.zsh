@@ -729,6 +729,36 @@ json.dump(d, open(p, "w"), indent=2)
   return $rc
 }
 
+# claude-pending: the /pending skill in the work root, kept out of the audit like
+# `claude-new -n`. The root has no .session.json to carry the flag, so the session id is
+# fixed up front and listed in _audit/no-audit.txt before Claude starts.
+claude-pending() {
+  emulate -L zsh
+  local profile="$CWS_DEFAULT_PROFILE" cfg id list
+  while (( $# )); do
+    case "$1" in
+      -p|--profile) _cws_check_profile claude-pending "$2" || return 1; profile="$2"; shift 2 ;;
+      -h|--help)
+        print -r -- 'usage: claude-pending [-p PROFILE]'
+        print -r -- '    what in Teams and mail needs your reply and what you are waiting on: the'
+        print -r -- '    /pending skill in the work root, out of claude-audit (as claude-new -n)'
+        return 0 ;;
+      *) print -u2 -- "claude-pending: unknown option '$1'"; return 2 ;;
+    esac
+  done
+  cfg="$HOME/.claude-$profile"
+  if [[ ! -d "$cfg" ]]; then
+    print -u2 -- "claude-pending: config dir $cfg does not exist"; return 1
+  fi
+  id="$("$CWS_PYTHON" -c 'import uuid; print(uuid.uuid4())')"
+  list="$CLAUDE_WORK_ROOT/_audit/no-audit.txt"
+  mkdir -p "${list:h}"
+  print -r -- "$id  # $(date +%Y-%m-%d) /pending" >> "$list"
+  print -r -- "→ $profile  /pending in ${CLAUDE_WORK_ROOT:t}  (no-audit)"
+  cd "$CLAUDE_WORK_ROOT" || return 1
+  CLAUDE_CONFIG_DIR="$cfg" command claude --session-id "$id" /pending
+}
+
 # --- navigation ----------------------------------------------------------------------
 # y: browse with yazi; quitting leaves the shell in the folder you were in
 y() {

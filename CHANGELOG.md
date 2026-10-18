@@ -15,6 +15,8 @@
   `claude-wait` with a note when a session leaves the ball with someone.
 - **`/pending` skill**: what in Teams and mail still needs a reply from you and what you are
   waiting on, checked against the open topics. Read only: nothing created, drafted or sent.
+  `claude-pending` (and the sidebar's **What's pending?**) runs it in the work root with the
+  session listed in `_audit/no-audit.txt` first, so the run stays out of the review.
   (An hourly scan that created a request folder per message was tried on this branch and
   dropped: 18 folders in four days, eight never opened.)
 - **`claude-new` continues instead of creating**: with a ticket that has a request folder from

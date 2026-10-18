@@ -12,6 +12,10 @@ already tracked as an open topic. The user is a {{CWS_USER_ROLE}} at {{CWS_ORG}}
 request folder or set a waiting flag unless the user asks for that item by name, after seeing
 the list.
 
+Started by `claude-pending` (the sidebar's **What's pending?**), which runs this skill in the
+work root with the session already on the no-audit list. Do not create a request folder for
+this run.
+
 ## Step 1 - the window and the identity
 
 Default window: since the start of the previous working day (Friday when today is Monday).

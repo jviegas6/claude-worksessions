@@ -735,3 +735,26 @@ def test_claude_new_offers_to_continue_in_a_recent_folder_on_the_ticket(tmp_path
     assert r.returncode == 0 and "recent request folders" not in r.stdout
     r = run_new_tty(tmp_path, "-t BTPA-1 -T tooling -a bad pick", "9\n")
     assert r.returncode == 1 and "invalid choice '9'" in r.stderr
+
+
+def test_claude_pending_runs_the_skill_in_the_root_out_of_the_audit(tmp_path):
+    (tmp_path / ".claude-personal").mkdir()
+    stub = tmp_path / "bin"
+    stub.mkdir()
+    (stub / "claude").write_text('#!/bin/sh\necho "$PWD|$CLAUDE_CONFIG_DIR|$*" > "$HOME/launched"\n')
+    (stub / "claude").chmod(0o755)
+    env = dict(os.environ, CLAUDE_WORK_ROOT=str(tmp_path), CWS_CONFIG=os.devnull, ZDOTDIR=str(tmp_path),
+               HOME=str(tmp_path), CWS_PROFILES="personal work", CWS_DEFAULT_PROFILE="personal",
+               PATH=str(stub) + os.pathsep + os.environ["PATH"])
+    src = 'source "{}/shell/worksessions.zsh"\nclaude-pending'.format(REPO)
+    r = subprocess.run(["zsh", "-fc", src], env=env, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    cwd, cfg, args = (tmp_path / "launched").read_text().strip().split("|")
+    assert cwd == str(tmp_path) and cfg == str(tmp_path / ".claude-personal")
+    sid = re.fullmatch(r"--session-id ([0-9a-f-]{36}) /pending", args).group(1)
+    # the id is on the no-audit list before Claude starts, so the run never reaches the review
+    assert sid in (tmp_path / "_audit" / "no-audit.txt").read_text()
+    assert "(no-audit)" in r.stdout
+    # -p is checked like claude-new's
+    r = subprocess.run(["zsh", "-fc", src + " -p nope"], env=env, capture_output=True, text=True)
+    assert r.returncode == 1 and "unknown profile 'nope'" in r.stderr

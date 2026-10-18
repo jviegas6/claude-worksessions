@@ -937,7 +937,7 @@ function activate(context) {
     cmd("revealInOS", el => vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(el.request.path))),
     cmd("openInWindow", el => openInWindow(el.request)),
     cmd("copyId", el => vscode.env.clipboard.writeText(el.session.id)),
-    cmd("copyForEmail", arg => copyForEmail(arg)),
+    cmd("copyForEmail", arg => copyForEmail(arg || (view.selection || []).find(x => x.kind === "file" && /\.(md|markdown)$/i.test(x.rel || "")))),
     cmd("deleteSession", el => deleteSession(bar, el)),
     cmd("restoreSession", el => restoreSession(bar, el)),
     cmd("purgeSession", el => purge(bar, ["--purge", el.m.id], `Delete "${el.m.title}" for good?`,

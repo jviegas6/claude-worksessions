@@ -606,6 +606,14 @@ test("copy for email: from the sidebar, a menu URI, the editor or a preview; sav
   fake.vscode.window.tabGroups = undefined;
   await run();
   assert.match(fake.messages.at(-1)[1], /Open or select a Markdown file/);
+  // from the palette with a Markdown file selected in the sidebar: that file
+  ctx.subscriptions[0].selection = [{ kind: "file", rel: "draft.md", request: { path: "/w/req" } }];
+  await run();
+  assert.strictEqual(calls().at(-1), "/w/req/draft.md");
+  ctx.subscriptions[0].selection = [{ kind: "file", rel: "data.csv", request: { path: "/w/req" } }];
+  await run();
+  assert.match(fake.messages.at(-1)[1], /Open or select a Markdown file/);
+  ctx.subscriptions[0].selection = [];
 
   await run({ fsPath: "/w/broken.md" });
   assert.deepStrictEqual(fake.messages.at(-1), ["error", "claude-md-email: pandoc is not installed"]);

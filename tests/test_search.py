@@ -334,6 +334,32 @@ def test_ai_rank_falls_back(search, monkeypatch, capsys, behaviour):
 
 
 # ---------------------------------------------------------------- paths / resume
+def test_pick_opens_in_t3(search, monkeypatch, capsys, home):
+    folder = home / "sess"
+    folder.mkdir()
+    _pick(search, monkeypatch, "1")
+    calls = []
+    monkeypatch.setattr(os, "execvp", lambda f, args: calls.append((f, args)))
+    search.pick_and_resume([{"profile": "work", "doc": {"cwd": str(folder), "session_id": "abc"}}], "t3")
+    assert calls == [("claude-t3-sync", ["claude-t3-sync", "--open", str(folder)])]
+
+
+@pytest.mark.parametrize("flags, config, opener", [
+    ([], None, "cli"), ([], "t3", "t3"), ([], "code", "cli"), (["--cli"], "t3", "cli"), (["--t3"], None, "t3")])
+def test_main_picks_where_to_open(search, corpus, monkeypatch, flags, config, opener):
+    class TTY(io.StringIO):
+        def isatty(self):
+            return True
+    monkeypatch.setattr(sys, "stdin", TTY())
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True, raising=False)
+    if config:
+        monkeypatch.setitem(search.CA.CONFIG, "CWS_OPEN", config)
+    picked = []
+    monkeypatch.setattr(search, "pick_and_resume", lambda results, how: picked.append(how))
+    run_main(search, monkeypatch, "firewall", *flags)
+    assert picked == [opener]
+
+
 
 def test_paths_and_resume_cmd(search, home):
     assert search.short(str(home / "a")) == "~/a"
@@ -510,6 +536,6 @@ def test_main_offers_resume_on_tty(search, corpus, monkeypatch, capsys):
     monkeypatch.setattr(sys, "stdin", TTY())
     monkeypatch.setattr(sys.stdout, "isatty", lambda: True, raising=False)
     picked = []
-    monkeypatch.setattr(search, "pick_and_resume", picked.append)
+    monkeypatch.setattr(search, "pick_and_resume", lambda results, opener: picked.append((results, opener)))
     run_main(search, monkeypatch, "firewall")
-    assert len(picked) == 1 and picked[0][0]["doc"]["session_id"] == "fw1"
+    assert len(picked) == 1 and picked[0][0][0]["doc"]["session_id"] == "fw1" and picked[0][1] == "cli"

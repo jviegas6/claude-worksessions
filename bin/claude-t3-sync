@@ -1,0 +1,249 @@
+#!/usr/bin/env python3
+"""claude-t3-sync: keep T3 Code's project list in step with the request folders.
+
+  claude-t3-sync                 show what a sync would change (nothing is changed)
+  claude-t3-sync --apply         make those changes; an undo file goes to _audit/t3/
+  claude-t3-sync --undo FILE     put back what that run changed
+  claude-t3-sync --open DIR      add DIR to T3 under its title (or retitle it) and open it there
+
+A sync gives every request folder's project the title "TICKET · YYYY-MM-DD · name" from its
+.session.json, and removes projects that have no threads and whose folder has been idle for
+--days days (CWS_T3_IDLE_DAYS, 14), unless the request is waiting on someone. Projects with
+threads are never removed: T3 can only do that by deleting the threads. Projects outside the
+request folders (repos, the work root itself) are left alone.
+
+T3 Code's own command (`t3`, from CWS_T3_BIN, PATH or ~/.t3/bin/t3) makes every change. The
+project list is read from T3's database, read-only, because `t3` has no command that lists
+projects; if a T3 update changes that database, the sync stops and says so.
+"""
+
+import argparse
+import datetime as dt
+import glob
+import importlib.machinery
+import importlib.util
+import json
+import os
+import re
+import shutil
+import sqlite3
+import subprocess
+import sys
+
+
+def load_audit():
+    """claude-audit, for the configuration and the Claude config dirs."""
+    path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "claude-audit")
+    if not os.path.isfile(path):
+        path = os.path.join(os.path.expanduser("~"), ".local", "bin", "claude-audit")
+    loader = importlib.machinery.SourceFileLoader("claude_audit", path)
+    spec = importlib.util.spec_from_loader("claude_audit", loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+CA = load_audit()
+HOME = os.path.expanduser("~")
+ROOT = os.path.realpath(CA.DEFAULT_ROOT)
+REQUEST = re.compile(r"^(\d{4})/(\d\d)/(\d\d)/\d\d-\d\d-\d\d_[^/]+$")
+
+
+def t3_bin():
+    for cand in (CA.CONFIG.get("CWS_T3_BIN"), shutil.which("t3"), os.path.join(HOME, ".t3", "bin", "t3")):
+        if cand and os.path.isfile(os.path.expanduser(cand)) and os.access(os.path.expanduser(cand), os.X_OK):
+            return os.path.expanduser(cand)
+    raise SystemExit("claude-t3-sync: T3 Code's t3 command not found (install T3 Code, or set CWS_T3_BIN)")
+
+
+def t3_db():
+    home = CA.CONFIG.get("CWS_T3_HOME") or os.environ.get("T3CODE_HOME") or os.path.join(HOME, ".t3")
+    return os.path.join(os.path.expanduser(home), "userdata", "statev2.sqlite")
+
+
+def t3(*args):
+    """Run t3; (ok, first error line)."""
+    r = subprocess.run([t3_bin()] + list(args), capture_output=True, text=True)
+    lines = [ln.strip() for ln in (r.stderr + r.stdout).splitlines()
+             if ln.strip() and not ln.strip().startswith("at ")]
+    err = next((ln for ln in lines if "Error" in ln), lines[0] if lines else "")
+    return r.returncode == 0, err
+
+
+def request_rel(path):
+    """The folder relative to the work root, if it is a request folder; else None."""
+    real = os.path.realpath(path)
+    if not real.startswith(ROOT + os.sep):
+        return None
+    rel = os.path.relpath(real, ROOT).replace(os.sep, "/")
+    return rel if REQUEST.match(rel) else None
+
+
+def meta(path):
+    try:
+        with open(os.path.join(path, ".session.json")) as fh:
+            d = json.load(fh)
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def title(path):
+    """TICKET · YYYY-MM-DD · name, from the folder's .session.json."""
+    rel = request_rel(path) or ""
+    m = REQUEST.match(rel)
+    d = meta(path)
+    name = (d.get("name") or os.path.basename(path).split("_", 1)[-1]).strip()
+    day = "{}-{}-{}".format(*m.groups()) if m else ""
+    parts = [(d.get("ticket") or "?").strip(), day, name[:60].strip()]
+    return " · ".join(p for p in parts if p)
+
+
+def last_activity(path):
+    """Newest change in the folder (top level) or in a transcript of a session that ran there."""
+    times = []
+    for entry in glob.glob(os.path.join(path, "*")) + glob.glob(os.path.join(path, ".*")) + [path]:
+        try:
+            times.append(os.path.getmtime(entry))
+        except OSError:
+            pass
+    enc = re.sub(r"[^A-Za-z0-9]", "-", os.path.abspath(path))
+    for cfg in CA.CONFIG_DIRS:
+        for f in glob.glob(os.path.join(cfg, "projects", enc, "*.jsonl")):
+            times.append(os.path.getmtime(f))
+    return max(times) if times else 0.0
+
+
+def waiting(path):
+    w = meta(path).get("waiting")
+    return isinstance(w, dict) and w.get("on") in ("me", "other")
+
+
+def projects():
+    """Live T3 projects: (id, title, folder, threads)."""
+    db = t3_db()
+    if not os.path.isfile(db):
+        raise SystemExit("claude-t3-sync: no T3 Code database at {} (open T3 Code once)".format(db))
+    con = sqlite3.connect("file:{}?mode=ro".format(db), uri=True)
+    try:
+        rows = con.execute(
+            "select p.project_id, p.title, p.workspace_root, "
+            "(select count(*) from orchestration_v2_projection_threads t "
+            " where t.project_id = p.project_id and t.deleted_at is null) "
+            "from projection_projects p where p.deleted_at is null").fetchall()
+    except sqlite3.Error as e:
+        raise SystemExit("claude-t3-sync: T3 Code's database is not what this version knows ({}); "
+                         "update claude-worksessions".format(e))
+    finally:
+        con.close()
+    return rows
+
+
+def plan(days, now=None):
+    """The changes a sync makes: dicts with action rename|remove."""
+    now = now or dt.datetime.now().timestamp()
+    out = []
+    for pid, old, folder, threads in projects():
+        if not request_rel(folder) or not os.path.isdir(folder):
+            continue
+        new = title(folder)
+        idle = (now - last_activity(folder)) / 86400
+        if threads == 0 and idle >= days and not waiting(folder):
+            out.append({"action": "remove", "project_id": pid, "path": folder, "old": old,
+                        "why": "no threads, idle {:.0f} days".format(idle)})
+        elif old != new:
+            out.append({"action": "rename", "project_id": pid, "path": folder, "old": old, "new": new})
+    return sorted(out, key=lambda c: c["path"], reverse=True)
+
+
+def run(changes, apply, undo_dir=None):
+    """Show each change and, with apply, make it. Returns (done, failed)."""
+    done, failed, log = 0, 0, None
+    if apply and changes:
+        os.makedirs(undo_dir, exist_ok=True)
+        log = os.path.join(undo_dir, "sync-{}.jsonl".format(dt.datetime.now().strftime("%Y%m%d-%H%M%S")))
+    for c in changes:
+        rel = request_rel(c["path"]) or c["path"]
+        if c["action"] == "rename":
+            print("  rename  {}\n          {} -> {}".format(rel, c["old"], c["new"]))
+            args = ("project", "rename", c["project_id"], c["new"])
+        else:
+            print("  remove  {}  ({})".format(rel, c["why"]))
+            args = ("project", "remove", c["project_id"])
+        if not apply:
+            continue
+        ok, err = t3(*args)
+        if ok:
+            done += 1
+            with open(log, "a") as fh:
+                fh.write(json.dumps(c, ensure_ascii=False) + "\n")
+        else:
+            failed += 1
+            print("          failed: " + err, file=sys.stderr)
+    if log and done:
+        print("undo file: " + log)
+    return done, failed
+
+
+def undo(path):
+    """Put back what a sync run changed: old titles, and removed projects re-added."""
+    changes = [json.loads(ln) for ln in open(path) if ln.strip()]
+    failed = 0
+    for c in reversed(changes):
+        if c["action"] == "rename":
+            ok, err = t3("project", "rename", c["path"], c["old"])
+        else:
+            ok, err = t3("project", "add", c["path"], "--title", c["old"])
+        print("  {} {}{}".format("ok    " if ok else "failed", request_rel(c["path"]) or c["path"],
+                                 "" if ok else ": " + err))
+        failed += not ok
+    return failed
+
+
+def open_in_t3(path):
+    """Add the folder to T3 under its title, or retitle the project it already is; open it."""
+    path = os.path.realpath(path)
+    name = title(path) if request_rel(path) else os.path.basename(path)
+    ok, err = t3("project", "add", path, "--title", name)
+    if not ok and "AlreadyExists" in err:
+        ok, err = t3("project", "rename", path, name)
+    if not ok:
+        raise SystemExit("claude-t3-sync: T3 Code could not add {}: {}".format(path, err))
+    ok, err = t3("app", path)
+    if not ok:
+        raise SystemExit("claude-t3-sync: T3 Code could not open {} (is the app running?): {}".format(path, err))
+    print("T3 Code: " + name)
+
+
+def main(argv=None):
+    p = argparse.ArgumentParser(prog="claude-t3-sync", description=__doc__.split("\n")[0])
+    p.add_argument("--apply", action="store_true", help="make the changes (default: only show them)")
+    p.add_argument("--days", type=int, default=int(CA.CONFIG.get("CWS_T3_IDLE_DAYS") or 14),
+                   help="idle days before an empty project is removed (default %(default)s)")
+    p.add_argument("--limit", type=int, help="at most N changes, newest folders first")
+    p.add_argument("--undo", metavar="FILE", help="put back what the run that wrote FILE changed")
+    p.add_argument("--open", metavar="DIR", help="add DIR to T3 Code (titled) and open it there")
+    a = p.parse_args(argv)
+    if a.open:
+        open_in_t3(a.open)
+        return 0
+    if a.undo:
+        return 1 if undo(a.undo) else 0
+    changes = plan(a.days)
+    if a.limit is not None:
+        changes = changes[:a.limit]
+    if not changes:
+        print("T3 Code projects already match the request folders.")
+        return 0
+    done, failed = run(changes, a.apply, os.path.join(ROOT, "_audit", "t3"))
+    renames = sum(c["action"] == "rename" for c in changes)
+    if a.apply:
+        print("{} change(s) made, {} failed".format(done, failed))
+    else:
+        print("{} rename(s), {} removal(s) -- run with --apply to make them".format(
+            renames, len(changes) - renames))
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

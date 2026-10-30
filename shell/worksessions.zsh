@@ -407,9 +407,21 @@ print("\n".join(out))
 PYEOF
 }
 
+# Open a request folder where claude-new was asked to: VS Code (its Claude extension starts
+# Claude through claude-vscode) or T3 Code (claude-t3-sync adds it under its ticket and opens it).
+# Nothing waits for either, so ended_at stays empty. Returns 1 for cli: the caller runs Claude.
+_cws_open_request() {
+  case "$2" in
+    code) code -n "$1" ;;
+    t3)   claude-t3-sync --open "$1" ;;
+    *)    return 1 ;;
+  esac
+  return 0
+}
+
 # Start Claude in an existing request folder: its recorded profile unless one was given.
 _claude_new_continue() {
-  local dir="$1" profile="$2" prompt="$3" vscode="$4" cfg
+  local dir="$1" profile="$2" prompt="$3" opener="$4" cfg
   if [[ -z "$profile" ]]; then
     profile="$(WS_DIR="$dir" "$CWS_PYTHON" -c 'import json,os; print(json.load(open(os.path.join(os.environ["WS_DIR"], ".session.json"))).get("profile") or "")')"
     profile="${profile:-$CWS_DEFAULT_PROFILE}"
@@ -420,9 +432,7 @@ _claude_new_continue() {
   fi
   print -r -- "→ $profile  continuing in ${dir#$CLAUDE_WORK_ROOT/}"
   cd "$dir" || return 1
-  if (( vscode )); then
-    code -n "$dir"; return
-  fi
+  _cws_open_request "$dir" "$opener" && return
   CLAUDE_CONFIG_DIR="$cfg" command claude ${prompt:+"$prompt"}
 }
 
@@ -430,7 +440,7 @@ claude-new() {
   emulate -L zsh
   setopt local_options no_nomatch
 
-  local profile="" name="" ticket="" canon="" dir slug cfg started ended audit=1 ask_audit=1 ttype="" vscode=0 prompt="" fresh=0
+  local profile="" name="" ticket="" canon="" dir slug cfg started ended audit=1 ask_audit=1 ttype="" opener="${CWS_OPEN:-cli}" prompt="" fresh=0
   local goal="" done_when="" goal_set=0
   local -a paths=()
   local -a profiles=(${=CWS_PROFILES})
@@ -451,7 +461,9 @@ claude-new() {
         return 0 ;;
       -n|--no-audit) audit=0;          shift ;;
       -a|--audit)    ask_audit=0;      shift ;;
-      -c|--code)     vscode=1;         shift ;;
+      -c|--code)     opener=code;      shift ;;
+      --t3)          opener=t3;        shift ;;
+      --cli)         opener=cli;       shift ;;
       --prompt)
         if [[ -z "$2" ]]; then print -u2 -- "claude-new: --prompt needs the text to start Claude with"; return 1; fi
         prompt="$2"; shift 2 ;;
@@ -482,10 +494,13 @@ print("{:<10} {:<14} {:<16} {:<9}".format("[" + (d.get("profile") or "?") + "]",
         done
         return 0 ;;
       -h|--help)
-        print -r -- 'claude-new [-p PROFILE] [-n|-a] [-c] [-t TICKET] [-T TYPE] [-g GOAL] [--done TEXT] [--path DIR]... [--prompt TEXT] [name]'
+        print -r -- 'claude-new [-p PROFILE] [-n|-a] [-c|--t3|--cli] [-t TICKET] [-T TYPE] [-g GOAL] [--done TEXT] [--path DIR]... [--prompt TEXT] [name]'
         print -r -- '    create a YYYY/MM/DD/HH-mm-ss_slug folder and start Claude in it'
         print -r -- '    -c / --code opens the folder in VS Code instead; the Claude extension there'
         print -r -- '    picks up the profile through claude-vscode'
+        print -r -- '    --t3 adds it to T3 Code as "TICKET · date · name" and opens it there; pick the'
+        print -r -- '    profile'"'"'s Claude instance in the thread. --cli starts Claude in this terminal.'
+        print -r -- "    Without any of them: CWS_OPEN (${CWS_OPEN:-cli})"
         print -r -- '    --prompt TEXT starts Claude with TEXT as the first prompt, e.g. --prompt /weekly-review'
         print -r -- "    TICKET is mandatory: PREFIX-123 (e.g. $CWS_TICKET_EXAMPLE), or Other"
         print -r -- '    -T / --type is the kind of work (permissions, job errors, ...); asked if omitted'
@@ -555,7 +570,7 @@ print("{:<10} {:<14} {:<16} {:<9}".format("[" + (d.get("profile") or "?") + "]",
       go="${go:-1}"
       if [[ "$go" == <-> ]] && (( go >= 1 && go <= ${#recent} )); then
         dir="${${recent[$go]}%%$'	'*}"
-        _claude_new_continue "$dir" "$profile" "$prompt" "$vscode"
+        _claude_new_continue "$dir" "$profile" "$prompt" "$opener"
         return
       elif [[ "$go" != "$i" ]]; then
         print -u2 -- "claude-new: invalid choice '$go'"; return 1
@@ -593,12 +608,20 @@ print("{:<10} {:<14} {:<16} {:<9}".format("[" + (d.get("profile") or "?") + "]",
     print -u2 -- "claude-new: config dir $cfg does not exist"
     return 1
   fi
-  if (( vscode )) && [[ -n "$prompt" ]]; then
-    print -u2 -- "claude-new: --prompt can't be used with -c (VS Code starts Claude itself)"
+  case "$opener" in
+    cli|code|t3) ;;
+    *) print -u2 -- "claude-new: CWS_OPEN must be cli, code or t3 (not '$opener')"; return 1 ;;
+  esac
+  if [[ "$opener" != cli && -n "$prompt" ]]; then
+    print -u2 -- "claude-new: --prompt needs Claude in the terminal (--cli): VS Code and T3 Code start Claude themselves"
     return 1
   fi
-  if (( vscode )) && ! command -v code >/dev/null 2>&1; then
+  if [[ "$opener" == code ]] && ! command -v code >/dev/null 2>&1; then
     print -u2 -- "claude-new: -c needs VS Code's 'code' command on PATH"
+    return 1
+  fi
+  if [[ "$opener" == t3 ]] && ! command -v claude-t3-sync >/dev/null 2>&1; then
+    print -u2 -- "claude-new: --t3 needs claude-t3-sync on PATH (run install.sh)"
     return 1
   fi
 
@@ -704,12 +727,7 @@ json.dump({
   print -r -- "→ $profile  $ticket  ${ttype:+[$ttype]  }${dir#$CLAUDE_WORK_ROOT/}${${audit:#1}:+  (no-audit)}"
   cd "$dir" || return 1
 
-  # VS Code: the extension starts Claude itself, through claude-vscode, which reads the
-  # profile from .session.json. Nothing waits for it, so ended_at stays empty.
-  if (( vscode )); then
-    code -n "$dir"
-    return
-  fi
+  _cws_open_request "$dir" "$opener" && return
 
   CLAUDE_CONFIG_DIR="$cfg" command claude ${prompt:+"$prompt"}
   local rc=$?

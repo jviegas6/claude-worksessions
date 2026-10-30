@@ -209,12 +209,16 @@ every activity behind it. `claude-audit --help` has the full list.
 ## claude-search
 
 ```
-claude-search QUERY... [--from DATE] [--to DATE] [--ai] [--no-pick] [--csv FILE]
+claude-search QUERY... [--from DATE] [--to DATE] [--ai] [--no-pick] [--t3|--cli] [--csv FILE]
 ```
 
 Ranks past sessions by ticket or topic across titles, your prompts, Claude's replies,
 commands run and linked meetings/mail. Prints the resume command for each and offers
 to resume one (`--no-pick` just lists). `--ai` asks Claude to judge relevance.
+With `CWS_OPEN="t3"` (or `--t3`) the session you pick opens in T3 Code instead: its folder's
+project, titled by ticket, where the thread is listed ([`claude-t3-sync --open`](#claude-t3-sync)).
+`--cli` resumes it in the terminal. T3 Code's own search covers titles and project names only,
+not what was said, so this is how to find a T3 session by its content.
 
 ## claude-sessions
 

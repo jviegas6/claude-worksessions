@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.25.0] — 2026-10-31
+
+- **`claude-search` opens the session you pick in T3 Code** when `CWS_OPEN` is `t3` (or with
+  `--t3`): the session's folder opens as its T3 project, where the thread is listed. `--cli`
+  resumes in the terminal as before. T3 Code's own search covers titles and project names,
+  not what was said, so this is how to find a T3 session by its content. Opening the thread
+  itself needs the session-to-thread mapping (#51).
+
 ## [2.24.0] — 2026-10-30
 
 - **T3 Code as a place to work** (`claude-new --t3`, `CWS_OPEN`). [T3 Code](https://github.com/pingdotgg/t3code)

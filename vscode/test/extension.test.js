@@ -1038,6 +1038,11 @@ test("Set waiting…: the flag in .session.json, from a request, a session or a 
   const savedXdg = process.env.XDG_DATA_HOME;
   process.env.XDG_DATA_HOME = path.join(dir, "data");
   t.after(() => { if (savedXdg === undefined) delete process.env.XDG_DATA_HOME; else process.env.XDG_DATA_HOME = savedXdg; });
+  // its own config.env: /pending takes the default profile from it, not from this machine's
+  fs.writeFileSync(path.join(dir, "config.env"), 'CWS_PROFILES="personal work"\nCWS_DEFAULT_PROFILE="personal"\n');
+  const savedConf = process.env.CWS_CONFIG;
+  process.env.CWS_CONFIG = path.join(dir, "config.env");
+  t.after(() => { if (savedConf === undefined) delete process.env.CWS_CONFIG; else process.env.CWS_CONFIG = savedConf; });
   const A = { path: path.join(root, "2026/10/12/10-00-00_a"), name: "firewall", ticket: "ABC-1", task_type: "", profile: "work",
               waiting: { on: "me", who: "Ana", what: "confirm the IP", since: "2026-10-12T08:00:00Z", where: "teams", link: "https://t/1" } };
   const A2 = { path: path.join(root, "2026/10/11/10-00-00_a2"), name: "firewall notes", ticket: "ABC-1", task_type: "", profile: "work" };

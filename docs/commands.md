@@ -191,6 +191,10 @@ claude-audit --apply decisions.json       # weekly review: record decisions in t
 claude-audit --schema                     # the activity-file format the skills write
 ```
 
+A decisions file can also move a session to another day, e.g. work done on a bank holiday
+that should count in the week before: `{"book_on": [{"key": "<session id>", "date": "2026-10-04"}]}`.
+Hours stay the same; the detail title keeps the real date.
+
 `--by-type` groups the period's hours by task type (sessions without one show as
 `(no type)`). The weekly summary table and CSV carry a **Task Type** column; `--copy`
 leaves it out so the clipboard still matches the tracker's own columns.

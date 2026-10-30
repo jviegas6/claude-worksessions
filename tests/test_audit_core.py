@@ -285,6 +285,20 @@ def test_split_by_day(audit):
     assert [p["cost"] for p in parts] == [{}, {"c": 1}]
 
 
+def test_rebook_moves_date_not_hours(audit):
+    start, end = local(2026, 10, 5, 11, 45), local(2026, 10, 5, 21, 5)
+    row = {"_start": start, "_end": end, "_stamps": [start, end], "_worked_s": 7440,
+           "date": "2026-10-05", "weekday": "Mon", "start": "", "end": "", "title": "Skill"}
+    audit.rebook(row, "2026-10-04")
+    assert row["_start"] == local(2026, 10, 4, 11, 45)
+    assert row["_end"] == local(2026, 10, 4, 21, 5)
+    assert row["_stamps"] == [local(2026, 10, 4, 11, 45), local(2026, 10, 4, 21, 5)]
+    assert (row["date"], row["weekday"], row["_worked_s"]) == ("2026-10-04", "Sun", 7440)
+    assert row["title"] == "Skill [worked Mon 05 Oct, booked on Sun 04 Oct]"
+    # booking a row on its own day changes nothing
+    assert audit.rebook(dict(row, title="x"), "2026-10-04")["title"] == "x"
+
+
 def g(source, start, end=None, worked=0.0, **kw):
     row = {"source": source, "_start": start, "_end": end, "_worked_s": worked}
     row.update(kw)

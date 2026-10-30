@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.24.0] — 2026-10-30
+
+- **T3 Code as a place to work** (`claude-new --t3`, `CWS_OPEN`). [T3 Code](https://github.com/pingdotgg/t3code)
+  runs Claude through the Agent SDK with the profile's config dir, so hooks, the guard, the
+  audit, skills and MCP servers work there unchanged. `claude-new --t3` creates the request
+  folder as usual, adds it to T3 Code as `TICKET · YYYY-MM-DD · name` and opens it in the app;
+  `--cli` starts Claude in the terminal, `-c` VS Code, and `CWS_OPEN` (`cli`, `code`, `t3`)
+  picks the default. Continuing in a recent folder opens the same way.
+- **`claude-t3-sync`**: titles every request folder's T3 project by its ticket and date, and
+  removes projects with no threads whose folder has been idle 14 days (`CWS_T3_IDLE_DAYS`) and
+  that wait on nobody. Shows the changes unless `--apply`; every change made goes to
+  `_audit/t3/`, and `--undo` puts it back. Changes go through T3's own `t3` command.
+
 ## [2.23.0] — 2026-10-18
 
 - **Who is the ball with?** (#49). A request folder can carry a `waiting` flag in

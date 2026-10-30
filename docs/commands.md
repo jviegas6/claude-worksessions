@@ -5,7 +5,7 @@ The flag-by-flag reference. For how to use them together see the [user guide](us
 ## claude-new
 
 ```
-claude-new [-p PROFILE] [-n|-a] [-c] [-t TICKET] [-T TYPE] [-g GOAL] [--done TEXT] [--path DIR]... [--prompt TEXT] [--new] [name]
+claude-new [-p PROFILE] [-n|-a] [-c|--t3|--cli] [-t TICKET] [-T TYPE] [-g GOAL] [--done TEXT] [--path DIR]... [--prompt TEXT] [--new] [name]
 claude-new -l
 claude-new -L
 ```
@@ -45,12 +45,49 @@ that profile. `ended_at` is filled in when Claude exits.
   Claude in the terminal. Start Claude from the extension there; it runs with the
   session's profile through [`claude-vscode`](#claude-vscode). `ended_at` stays empty,
   since nothing waits for VS Code to close.
+- `--t3` adds the new folder to [T3 Code](https://github.com/pingdotgg/t3code) as a project
+  titled `TICKET · YYYY-MM-DD · name` and opens it in the running app (through
+  [`claude-t3-sync --open`](#claude-t3-sync)). Start a thread there and pick the Claude instance
+  of the profile you chose: T3 Code picks the profile per thread, `claude-new` can't. Hooks,
+  the guard and the audit work as in the terminal, since they read the folder's `.session.json`.
+- `--cli` starts Claude in the terminal. With none of `-c`, `--t3`, `--cli`, `CWS_OPEN` in
+  `config.env` decides (`cli`, `code` or `t3`; default `cli`). Continuing in a recent folder
+  opens the same way.
 - `--prompt TEXT` starts Claude with `TEXT` as its first prompt — `--prompt /weekly-review`
-  opens the new request straight into that skill. Not with `-c`.
+  opens the new request straight into that skill. Only in the terminal (`--cli`).
 - `-l` lists the 15 most recent sessions with profile, ticket and type.
 - `-L` / `--profiles` lists the configured profiles: which is the default and which is
   shared, the description, the gateway URL if any, and a warning if `~/.claude-<name>`
   is missing.
+
+## claude-t3-sync
+
+```
+claude-t3-sync                 show what a sync would change
+claude-t3-sync --apply         make the changes; an undo file goes to _audit/t3/
+claude-t3-sync --undo FILE     put back what that run changed
+claude-t3-sync --open DIR      add DIR to T3 Code under its title, or retitle it, and open it
+                [--days N] [--limit N]
+```
+
+[T3 Code](https://github.com/pingdotgg/t3code) makes one project per folder its sessions ran
+in, so every request folder becomes a project named after the folder. A sync:
+
+- **titles** each request folder's project `TICKET · YYYY-MM-DD · name`, from `.session.json`,
+  so T3's search and sorting work by ticket and date;
+- **removes** a project that has **no threads** and whose folder has been idle for `--days`
+  (`CWS_T3_IDLE_DAYS`, 14) — no file changed and no session written — unless the request is
+  waiting on someone ([`claude-wait`](#claude-wait)). A project with threads stays: T3 can only
+  remove it by deleting its threads. Turn on T3's *Settings → Labs → Boring sidebar (group by
+  project)* and a project whose threads are all settled drops out of the sidebar by itself.
+
+Projects outside the request folders (repos, the work root) are left alone. Without `--apply`
+it only lists the changes; `--limit N` makes the first N (newest folders first), to try it on a
+few. Every change goes through T3's own `t3` command (`CWS_T3_BIN`, else `t3` on PATH, else
+`~/.t3/bin/t3`); each one made is written to `_audit/t3/sync-<time>.jsonl`, and `--undo` with
+that file renames the projects back and re-adds the removed ones under their old titles. The
+project list is read from T3's database, read-only, because `t3` has no command that lists
+projects; after a T3 update that changes it, the sync stops with a message instead of guessing.
 
 ## claude-goal
 

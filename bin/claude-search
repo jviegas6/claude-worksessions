@@ -410,10 +410,12 @@ def resume_cmd(r):
     return "cd {} && {} --resume {}".format(shell_path(d["cwd"]), launcher(r), d["session_id"])
 
 
-def pick_and_resume(results):
-    """Ask which result to resume, then cd there and start Claude on it (replaces this process)."""
+def pick_and_resume(results, opener="cli"):
+    """Ask which result to resume, then cd there and start Claude on it (replaces this process).
+    With opener t3, open the session's folder as a project in T3 Code instead, where the thread is."""
+    verb = "Open which session in T3 Code?" if opener == "t3" else "Resume which session?"
     try:
-        answer = input("Resume which session? [1-{}, Enter to skip] ".format(len(results))).strip()
+        answer = input("{} [1-{}, Enter to skip] ".format(verb, len(results))).strip()
     except (EOFError, KeyboardInterrupt):
         print()
         return
@@ -425,6 +427,10 @@ def pick_and_resume(results):
     d = r["doc"]
     if not os.path.isdir(d["cwd"]):
         sys.exit("claude-search: folder no longer exists: " + short(d["cwd"]))
+    if opener == "t3":
+        sys.stdout.flush()
+        os.execvp("claude-t3-sync", ["claude-t3-sync", "--open", d["cwd"]])
+        return
     if r["profile"] in CA.PROFILES:  # what claude-resume -p does
         os.environ["CLAUDE_CONFIG_DIR"] = os.path.join(HOME, ".claude-" + r["profile"])
     os.chdir(d["cwd"])
@@ -445,6 +451,11 @@ def main():
                     help="let Claude read the top candidates, keep the ones genuinely about the query "
                          "and say why (slower; no session is saved)")
     ap.add_argument("--no-pick", action="store_true", help="just list; don't offer to resume one")
+    where = ap.add_mutually_exclusive_group()
+    where.add_argument("--t3", dest="opener", action="store_const", const="t3",
+                       help="the session picked opens in T3 Code (default when CWS_OPEN is t3)")
+    where.add_argument("--cli", dest="opener", action="store_const", const="cli",
+                       help="the session picked resumes in this terminal")
     ap.add_argument("--csv", nargs="?", const="-", metavar="FILE", help="write CSV (to stdout by default)")
     args = ap.parse_args()
     query = " ".join(args.query)
@@ -512,7 +523,7 @@ def main():
         print("    " + resume_cmd(r))
         print()
     if not args.no_pick and sys.stdin.isatty() and sys.stdout.isatty():
-        pick_and_resume(results)
+        pick_and_resume(results, args.opener or ("t3" if CA.CONFIG.get("CWS_OPEN") == "t3" else "cli"))
 
 
 if __name__ == "__main__":

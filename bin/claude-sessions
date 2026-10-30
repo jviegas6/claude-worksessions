@@ -185,21 +185,37 @@ def request_dir(cwd, sid):
     return CA.session_folder(sid) or None
 
 
+WAITING_ON = ("me", "other")
+
+
+def waiting_of(raw):
+    """The request's waiting flag (claude-wait, claude-inbox), or None: who the ball is with
+    ("me" | "other"), who the other party is, what for, since when (ISO), where (teams, mail,
+    jira, ...) and a link to the thread. Anything malformed reads as no flag."""
+    w = raw.get("waiting") if isinstance(raw, dict) else None
+    if not isinstance(w, dict) or w.get("on") not in WAITING_ON:
+        return None
+    text = lambda k: str(w.get(k) or "").strip()
+    return {"on": w["on"], "who": text("who"), "what": text("what"), "since": text("since"),
+            "where": text("where"), "link": text("link")}
+
+
 def request_info(folder, sid):
-    """Name, ticket, task type and profile of a request folder, from its .session.json."""
+    """Name, ticket, task type, profile and waiting flag of a request folder, from its .session.json."""
     meta = CA.session_meta(folder)
     try:
         with open(os.path.join(folder, ".session.json")) as fh:
             raw = json.load(fh)
         name, when = raw.get("name"), raw.get("started_at")
     except (OSError, ValueError, AttributeError):
-        name = when = None
+        raw, name, when = {}, None, None
     return {"path": folder,
             "name": name or os.path.basename(folder),
             "started": request_started(folder, when if isinstance(when, str) else None),
             "ticket": meta["ticket"],
             "task_type": meta["session_types"].get(sid) or meta["task_type"],
-            "profile": "" if meta["profile"] == "unknown" else meta["profile"]}
+            "profile": "" if meta["profile"] == "unknown" else meta["profile"],
+            "waiting": waiting_of(raw)}
 
 
 SKIP_DIRS = {"node_modules", "__pycache__", "venv", ".venv", ".git"}

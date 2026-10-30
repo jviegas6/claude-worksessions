@@ -247,7 +247,7 @@ class Sidebar {
       return el.sessions.map(x => ({ kind: "session", session: x.session, request: x.request,
                                      showRequest: true, inActive: true }));
     }
-    if (el.kind === "group") return el.requests.map(r => ({ kind: "request", request: r }));
+    if (el.kind === "group" || el.kind === "topic") return el.requests.map(r => ({ kind: "request", request: r }));
     if (el.kind === "request") {
       const r = el.request, files = r.files || [];
       return [...r.sessions.map(s => ({ kind: "session", session: s, request: r, inPinned })),
@@ -328,12 +328,19 @@ class Sidebar {
       const it = new vscode.TreeItem(r.name, empty ? C.None : searching ? C.Expanded : C.Collapsed);
       it.id = idp + "r|" + r.path;
       const pinnedReq = M.isPinnedRequest(this.pins, this.data.work_root, r);
+      const w = M.waitingOf(r);
       it.contextValue = r.root ? "root" : pinnedReq ? "request-pinned" : "request";
       it.description = [pinnedReq && !el.inPinned && "pinned", this.grouping !== "ticket" && r.ticket,
                         r.task_type, r.profile, M.ago(r.mtime, now)].filter(Boolean).join(" · ");
-      it.iconPath = new vscode.ThemeIcon(r.sessions.some(s => this.isOpen(s.id) || s.active) ? "folder-active" : "folder");
+      const live = r.sessions.some(s => this.isOpen(s.id) || s.active);
+      it.iconPath = new vscode.ThemeIcon(live ? "folder-active" : "folder");
       const md = new vscode.MarkdownString();
       md.appendMarkdown("**").appendText(r.name).appendMarkdown("**\n\n");
+      if (w) {
+        md.appendMarkdown(`**${M.WAITING_LABELS[w.on]}** — `).appendText([w.who, w.what].filter(Boolean).join(": ") || "—")
+          .appendMarkdown("  \n").appendText([w.where, w.since ? "since " + w.since.slice(0, 16).replace("T", " ") : ""]
+                                               .filter(Boolean).join(" · ")).appendMarkdown("\n\n");
+      }
       for (const [k, v] of [["ticket", r.ticket], ["type", r.task_type], ["profile", r.profile],
                             ["sessions", String(r.sessions.length)], ["last activity", M.ago(r.mtime, now) + " ago"]]) {
         md.appendMarkdown(`${k}: `).appendText(v || "—").appendMarkdown("  \n");
@@ -411,6 +418,47 @@ class Sidebar {
     it.tooltip = md;
     return it;
   }
+}
+
+// Set waiting…: on a request (right-click), a session's request, the focused tab's, or pick one.
+async function setWaiting(bar, el) {
+  let r = el && el.request;
+  if (!r && el && el.session) r = bar.requestOf(el.session.id);
+  if (!r) { const s = bar.activeSession() || await pickSession(bar, "Set what request is waiting on which session?"); if (!s) return; r = bar.requestOf(s.id); }
+  if (!r || r.root) return vscode.window.showWarningMessage("That session has no request folder to flag.");
+  if (!fs.existsSync(path.join(r.path, ".session.json"))) return vscode.window.showWarningMessage(`No .session.json in ${path.basename(r.path)}.`);
+  const w = M.waitingOf(r);
+  const pick = await vscode.window.showQuickPick([
+    { label: "$(bell-dot) Needs my reply", description: w && w.on === "me" ? "current" : "", on: "me" },
+    { label: "$(watch) Waiting on others", description: w && w.on === "other" ? "current" : "", on: "other" },
+    ...(w ? [{ label: "$(check) Nobody — clear the flag", on: null }] : []),
+  ], { placeHolder: `${r.name} — who is the ball with?` });
+  if (!pick) return;
+  let who = "", what = "";
+  if (pick.on) {
+    who = await vscode.window.showInputBox({ prompt: pick.on === "me" ? "Who is waiting for your reply?" : "Who are you waiting on?",
+                                             value: (w && w.who) || "", placeHolder: "a person or team" });
+    if (who === undefined) return;
+    what = await vscode.window.showInputBox({ prompt: "What for? (one line)", value: (w && w.what) || "" });
+    if (what === undefined) return;
+  }
+  M.setWaiting(r.path, pick.on ? { on: pick.on, who: who.trim(), what: what.trim() } : null);
+  vscode.window.showInformationMessage(pick.on ? `${r.name}: ${M.WAITING_LABELS[pick.on].toLowerCase()} — ${who.trim() || "?"}`
+                                               : `${r.name}: waiting flag cleared.`);
+  bar.refresh();
+}
+
+// /pending: what needs a reply and what I am waiting on, in a Claude tab in the work root.
+// claude-pending keeps the run out of the audit (no request folder, no review row).
+function pending(bar) {
+  const conf = config();
+  const profile = conf.CWS_DEFAULT_PROFILE || (conf.CWS_PROFILES || "").split(/\s+/)[0];
+  bar.terminal("pending", bar.data.work_root, "claude-pending" + (profile ? ` -p ${profile}` : ""), "pending");
+}
+
+// Sweep empty folders: request folders with no session and no files, older than a week, to the bin.
+function sweepEmpty(bar) {
+  bar.terminal("sweep empty folders", bar.data.work_root, "claude-delete --empty-folders", "sweep");
 }
 
 // --- the search box above the tree --------------------------------------------------------
@@ -855,6 +903,9 @@ function activate(context) {
     view, status,
     vscode.window.registerWebviewViewProvider("claudeWorksessions.search", box),
     cmd("refresh", () => bar.refresh()),
+    cmd("setWaiting", el => setWaiting(bar, el)),
+    cmd("pending", () => pending(bar)),
+    cmd("sweepEmpty", () => sweepEmpty(bar)),
     cmd("grouping", async () => {
       const pick = await vscode.window.showQuickPick(
         M.GROUPINGS.map(g => ({ label: M.GROUPING_LABELS[g], g, description: g === bar.grouping ? "current" : "" })),
@@ -885,7 +936,7 @@ function activate(context) {
     cmd("revealInOS", el => vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(el.request.path))),
     cmd("openInWindow", el => openInWindow(el.request)),
     cmd("copyId", el => vscode.env.clipboard.writeText(el.session.id)),
-    cmd("copyForEmail", arg => copyForEmail(arg)),
+    cmd("copyForEmail", arg => copyForEmail(arg || (view.selection || []).find(x => x.kind === "file" && /\.(md|markdown)$/i.test(x.rel || "")))),
     cmd("deleteSession", el => deleteSession(bar, el)),
     cmd("restoreSession", el => restoreSession(bar, el)),
     cmd("purgeSession", el => purge(bar, ["--purge", el.m.id], `Delete "${el.m.title}" for good?`,

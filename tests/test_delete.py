@@ -316,3 +316,35 @@ def test_open_sessions_are_marked_active(sessions, world, monkeypatch):
     data = sessions.as_json(sessions.sessions())
     assert {s["id"]: s["active"] for s in data["sessions"]}["quiet-1"] is True
     assert sum(s["active"] for s in data["sessions"]) == 1
+
+
+def test_empty_folders_sweep(deleter, world, home, monkeypatch, tmp_path, capsys):
+    """--empty-folders: no session, nothing but .session.json / thread.md, older than --days, not pinned."""
+    monkeypatch.setenv("CWS_TRASH_DIR", str(tmp_path / "bin"))
+    root = world["root"]
+    lonely = request(home, "lonely", {"name": "lonely"})
+    noted = request(home, "noted", {"name": "noted"}, files=["thread.md"])
+    request(home, "notes", {"name": "notes"}, files=["notes.md"])
+    pinned = request(home, "pinned", {"name": "pinned"})
+    (root / "_config").mkdir(exist_ok=True)
+    (root / "_config" / "pinned.json").write_text(json.dumps({"requests": {"2026/09/23/10-00-00_pinned": 1}}))
+    assert [n for _, n in deleter.empty_folders(7)] == ["lonely", "noted"]
+    assert deleter.empty_folders(60) == []                       # 2026-09-23 is within 60 days
+    assert deleter.main(["--empty-folders", "--check"]) == 0
+    out = capsys.readouterr().out
+    assert "2026/09/23/10-00-00_lonely  lonely" in out and "2 empty folder(s)." in out and lonely.exists()
+    assert deleter.main(["--empty-folders", "--days", "60"]) == 0
+    assert "No empty request folder older than 60 days." in capsys.readouterr().out
+    monkeypatch.setattr("sys.stdin", io.StringIO("n\n"))
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    assert deleter.main(["--empty-folders"]) == 1 and lonely.exists()
+    assert deleter.main(["--empty-folders", "--yes"]) == 0
+    assert "Moved 2 folder(s) to the bin" in capsys.readouterr().out
+    assert not lonely.exists() and not noted.exists() and pinned.exists()
+    gone = deleter.deleted()
+    assert sorted(m["title"] for m in gone) == ["lonely", "noted"]
+    m = next(m for m in gone if m["title"] == "lonely")
+    assert m["id"] == "folder-10-00-00" and m["request"] == "lonely" and m["items"][0]["from"] == str(lonely)
+    deleter.restore(m)
+    assert (lonely / ".session.json").exists()
+    assert deleter.empty_folders(7) == [(str(lonely), "lonely")]

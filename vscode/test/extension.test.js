@@ -33,8 +33,9 @@ function fakeVscode(settings) {
     StatusBarAlignment: { Left: 1, Right: 2 },
     ProgressLocation: { Notification: 15 },
     RelativePattern: class { constructor(base, pattern) { this.base = base; this.pattern = pattern; } },
-    Uri: { file: p => ({ fsPath: p }) },
-    env: { clipboard: { writeText: async t => executed.push(["clipboard", t]) } },
+    Uri: { file: p => ({ fsPath: p }), parse: s => ({ external: s }) },
+    env: { clipboard: { writeText: async t => executed.push(["clipboard", t]) },
+           openExternal: async u => executed.push(["open", u.external]) },
     workspace: {
       textDocuments: [],
       getConfiguration: () => ({ get: (k, d) => (k in settings ? settings[k] : d) }),
@@ -605,6 +606,14 @@ test("copy for email: from the sidebar, a menu URI, the editor or a preview; sav
   fake.vscode.window.tabGroups = undefined;
   await run();
   assert.match(fake.messages.at(-1)[1], /Open or select a Markdown file/);
+  // from the palette with a Markdown file selected in the sidebar: that file
+  ctx.subscriptions[0].selection = [{ kind: "file", rel: "draft.md", request: { path: "/w/req" } }];
+  await run();
+  assert.strictEqual(calls().at(-1), "/w/req/draft.md");
+  ctx.subscriptions[0].selection = [{ kind: "file", rel: "data.csv", request: { path: "/w/req" } }];
+  await run();
+  assert.match(fake.messages.at(-1)[1], /Open or select a Markdown file/);
+  ctx.subscriptions[0].selection = [];
 
   await run({ fsPath: "/w/broken.md" });
   assert.deepStrictEqual(fake.messages.at(-1), ["error", "claude-md-email: pandoc is not installed"]);
@@ -988,8 +997,10 @@ test("active sessions, file sizes, retro and the guard mode (#25 #26 #27 #38)", 
   assert.match(view.description, / · guard: warn$/);
   assert.ok(guardKey() >= 1);
   const pkg = require("../package.json");
-  const entries = pkg.contributes.menus["view/title"].filter(e => e.command.startsWith("claudeWorksessions.guardMode."));
-  assert.deepStrictEqual(entries.map(e => e.when.split("== ").pop()), ["off", "shadow", "warn", "enforce"]);
+  // the mode is changed from the status bar; the four commands exist but stay out of the menus
+  assert.ok(!pkg.contributes.menus["view/title"].some(e => e.command.startsWith("claudeWorksessions.guardMode.")));
+  assert.deepStrictEqual(pkg.contributes.commands.filter(c => c.command.startsWith("claudeWorksessions.guardMode.")).map(c => c.command.split(".").pop()),
+                         ["off", "shadow", "warn", "enforce"]);
   assert.strictEqual(pkg.contributes.commands.find(c => c.command === "claudeWorksessions.guardMode.warn").title,
                      "Guard mode: warn\u2026");
   fake.answers.push(undefined);
@@ -1019,4 +1030,85 @@ test("active sessions, file sizes, retro and the guard mode (#25 #26 #27 #38)", 
   assert.doesNotMatch(view.description, /guard/);
   // a session starting or stopping refreshes the list
   assert.ok(fake.listeners["watch:*.json"].length >= 2);
+});
+
+test("Set waiting…: the flag in .session.json, from a request, a session or a pick (#49)", async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cws-attn-"));
+  const root = path.join(dir, "ws");
+  const savedXdg = process.env.XDG_DATA_HOME;
+  process.env.XDG_DATA_HOME = path.join(dir, "data");
+  t.after(() => { if (savedXdg === undefined) delete process.env.XDG_DATA_HOME; else process.env.XDG_DATA_HOME = savedXdg; });
+  // its own config.env: /pending takes the default profile from it, not from this machine's
+  fs.writeFileSync(path.join(dir, "config.env"), 'CWS_PROFILES="personal work"\nCWS_DEFAULT_PROFILE="personal"\n');
+  const savedConf = process.env.CWS_CONFIG;
+  process.env.CWS_CONFIG = path.join(dir, "config.env");
+  t.after(() => { if (savedConf === undefined) delete process.env.CWS_CONFIG; else process.env.CWS_CONFIG = savedConf; });
+  const A = { path: path.join(root, "2026/10/12/10-00-00_a"), name: "firewall", ticket: "ABC-1", task_type: "", profile: "work",
+              waiting: { on: "me", who: "Ana", what: "confirm the IP", since: "2026-10-12T08:00:00Z", where: "teams", link: "https://t/1" } };
+  const A2 = { path: path.join(root, "2026/10/11/10-00-00_a2"), name: "firewall notes", ticket: "ABC-1", task_type: "", profile: "work" };
+  const B = { path: path.join(root, "2026/10/11/10-00-00_b"), name: "Reply to Bo: quote", ticket: "Other", task_type: "support", profile: "",
+              files: [], files_truncated: false, size: 0, mtime: Date.now() / 1000 - 60, started: Date.now() / 1000 - 60,
+              waiting: { on: "other", who: "Bo", what: "a quote", since: "2026-10-10T08:00:00Z", where: "mail", link: "" } };
+  const C = { path: path.join(root, "2026/10/12/12-00-00_c"), name: "tidy", ticket: "XYZ-9", task_type: "", profile: "" };
+  for (const r of [A, A2, B, C]) { fs.mkdirSync(r.path, { recursive: true }); fs.writeFileSync(path.join(r.path, ".session.json"), JSON.stringify({ name: r.name, waiting: r.waiting })); }
+  const now = Date.now() / 1000;
+  const data = { work_root: root, sessions: [
+    { id: "s1", mtime: now - 60, cwd: A.path, in_work_root: true, title: "Fix the rule", first_prompt: "f", last_prompt: "l", request: A },
+    { id: "s2", mtime: now - 3600, cwd: A2.path, in_work_root: true, title: "Notes", first_prompt: "f", last_prompt: "l", request: A2 },
+    { id: "s3", mtime: now - 120, cwd: C.path, in_work_root: true, title: "Tidy", first_prompt: "f", last_prompt: "l", request: C },
+    { id: "s4", mtime: now - 30 * 86400, cwd: root, in_work_root: true, title: "old root", first_prompt: "f", last_prompt: "l", request: null },
+  ], requests: [B] };
+  const { bin, json } = stubSessions(dir, data);
+  const fake = fakeVscode({ sessionsCommand: bin });
+  const ctx = context();
+  await load(fake).activate(ctx);
+  await settle(ctx);
+  const bar = ctx.subscriptions[0].provider;
+  const run = (name, ...a) => fake.commands.get("claudeWorksessions." + name)(...a);
+  const b = { kind: "request", request: allItems(bar).find(([c]) => c.kind === "request" && c.request.name === "Reply to Bo: quote")[0].request };
+  // a flagged request keeps the plain row; the flag is in its tooltip
+  const [, aIt] = allItems(bar).find(([c]) => c.kind === "request" && c.request.name === "firewall");
+  assert.deepStrictEqual([aIt.iconPath.id, aIt.contextValue], ["folder", "request"]);
+  assert.match(aIt.tooltip.value, /\*\*Needs my reply\*\* — Ana: confirm the IP/);
+
+  // Set waiting…: pick the group, who and what; the file changes and the history keeps the old flag
+  fake.answers.push(items => items[0], "Bo", "the signed quote");
+  await run("setWaiting", b);
+  let meta = JSON.parse(fs.readFileSync(path.join(B.path, ".session.json"), "utf8"));
+  assert.deepStrictEqual([meta.waiting.on, meta.waiting.who, meta.waiting.what, meta.waiting.where, meta.waiting_history[0].on],
+                         ["me", "Bo", "the signed quote", "mail", "other"]);
+  assert.strictEqual(fake.messages.at(-1)[1], "Reply to Bo: quote: needs my reply — Bo");
+  // Esc at any step changes nothing
+  fake.answers.push(undefined);
+  await run("setWaiting", b);
+  fake.answers.push(items => items[1], undefined);
+  await run("setWaiting", b);
+  fake.answers.push(items => items[1], "Bo", undefined);
+  await run("setWaiting", b);
+  assert.strictEqual(JSON.parse(fs.readFileSync(path.join(B.path, ".session.json"), "utf8")).waiting.on, "me");
+  // from a session row (its request), and with nothing picked: the focused tab's session, else a pick
+  fake.answers.push(items => items[2]);
+  await run("setWaiting", { kind: "session", session: data.sessions[0] });
+  meta = JSON.parse(fs.readFileSync(path.join(A.path, ".session.json"), "utf8"));
+  assert.ok(!meta.waiting && meta.waiting_history[0].who === "Ana");
+  assert.strictEqual(fake.messages.at(-1)[1], "firewall: waiting flag cleared.");
+  fake.vscode.window.activeTerminal = undefined;
+  fake.answers.push(items => items[0], items => items[1], "Ana", "");   // pick s1, then "waiting on others"
+  await run("setWaiting");
+  assert.strictEqual(JSON.parse(fs.readFileSync(path.join(A.path, ".session.json"), "utf8")).waiting.on, "other");
+  fake.answers.push(undefined);
+  await run("setWaiting");                                                // no session picked
+  // a root session, or a folder with no .session.json
+  await run("setWaiting", { kind: "request", request: { root: true, path: root, name: "root" } });
+  assert.match(fake.messages.at(-1)[1], /no request folder/);
+  await run("setWaiting", { kind: "request", request: { path: path.join(root, "nowhere"), name: "x" } });
+  assert.match(fake.messages.at(-1)[1], /No \.session\.json/);
+
+  // /pending runs claude-pending (out of the audit) in a tab in the work root; the sweep in a tab too
+  await run("pending");
+  assert.deepStrictEqual([fake.terminals.at(-1).sent[0], fake.terminals.at(-1).name, fake.terminals.at(-1).cwd],
+                         ["claude-pending -p personal", "pending", root]);
+  await run("sweepEmpty");
+  assert.deepStrictEqual([fake.terminals.at(-1).sent[0], fake.terminals.at(-1).cwd], ["claude-delete --empty-folders", root]);
+
 });

@@ -9,6 +9,9 @@
   claude-delete --restore ID    put a deleted session back where it was
   claude-delete --purge ID      delete it for good (asks; --yes to not ask)
   claude-delete --empty         delete everything in the bin for good (asks; --yes)
+  claude-delete --empty-folders [--days N] [--check]
+                                move request folders with no session and no files, older than
+                                N days (7), to the bin; --check only shows them
 
 ID is a session id, or the start of one (8 characters are usually enough).
 
@@ -164,6 +167,33 @@ def put_in_bin(entry, paths):
     return folder
 
 
+def empty_folders(days=7):
+    """Request folders no session belongs to, with nothing in them but .session.json and
+    thread.md, whose date is more than `days` ago and that are not pinned: [(path, name)]."""
+    cutoff = (dt.datetime.now() - dt.timedelta(days=days)).strftime("%Y/%m/%d")
+    pins = {}
+    try:
+        with open(os.path.join(CA.DEFAULT_ROOT, "_config", "pinned.json")) as fh:
+            pins = json.load(fh).get("requests") or {}
+    except (OSError, ValueError, AttributeError):
+        pass
+    out = []
+    for r in CS.as_json(CS.sessions())["requests"]:
+        rel = os.path.relpath(r["path"], CA.DEFAULT_ROOT).replace(os.sep, "/")
+        if rel[:10] >= cutoff or rel in pins or [f for f in r["files"] if f != "thread.md"]:
+            continue
+        out.append((r["path"], r["name"] or os.path.basename(r["path"])))
+    return out
+
+
+def bin_folder(path, name):
+    """Move an empty request folder to the bin, as a deleted item with no session."""
+    rel = os.path.relpath(path, CA.DEFAULT_ROOT)
+    entry = {"id": "folder-" + os.path.basename(path)[:8], "title": name, "mtime": os.path.getmtime(path),
+             "request": {"name": name, "path": path, "ticket": None}}
+    return put_in_bin(entry, [path])
+
+
 def deleted():
     """What is in the bin, newest first: manifests, each with its bin folder as "dir"."""
     out = []
@@ -250,7 +280,27 @@ def main(argv=None):
     what.add_argument("--restore", metavar="ID", help="put a deleted session back")
     what.add_argument("--purge", metavar="ID", help="delete a deleted session for good")
     what.add_argument("--empty", action="store_true", help="delete everything in the bin for good")
+    what.add_argument("--empty-folders", action="store_true", help="request folders with no session and no files to the bin")
+    ap.add_argument("--days", type=int, default=7, help="--empty-folders: older than this many days (7)")
     args = ap.parse_args(argv)
+
+    if args.empty_folders:
+        folders = empty_folders(args.days)
+        if not folders:
+            print("No empty request folder older than {} days.".format(args.days))
+            return 0
+        for p, name in folders:
+            print("  {}  {}".format(os.path.relpath(p, CA.DEFAULT_ROOT), name))
+        if args.check:
+            print("{} empty folder(s).".format(len(folders)))
+            return 0
+        if not confirm("Move {} empty folder(s) to the bin?".format(len(folders)), args.yes):
+            print("Not moved.")
+            return 1
+        for p, name in folders:
+            bin_folder(p, name)
+        print("Moved {} folder(s) to the bin ({}); claude-delete --list shows them, --restore puts one back.".format(len(folders), bin_dir()))
+        return 0
 
     if args.list:
         items = deleted()

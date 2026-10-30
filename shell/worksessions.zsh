@@ -281,6 +281,89 @@ if has_done:
 PYEOF
 }
 
+# claude-wait [me|them|none] ["WHO"] ["WHAT"] [--where teams|mail|jira] [--link URL] [--since DATE] [--note TEXT]
+#   show or set who this request is waiting on; the VS Code sidebar's Open topics view lists it
+#   under "Waiting on me" or "Waiting on someone". none clears it. Every change is logged in
+#   the folder's thread.md, with --note's text (where things stand) under it.
+claude-wait() {
+  emulate -L zsh
+  local dir="$PWD" meta="" on="" who="" what="" where="" link="" since="" note=""
+  local -a rest=()
+  while (( $# )); do
+    case "$1" in
+      --where) where="$2"; shift 2 ;;
+      --link)  link="$2";  shift 2 ;;
+      --since) since="$2"; shift 2 ;;
+      -n|--note) note="$2"; shift 2 ;;
+      -h|--help)
+        print -r -- 'claude-wait [me|them|none] ["WHO"] ["WHAT"] [--where teams|mail|jira] [--link URL] [--since DATE] [--note TEXT]   show or set who the request waits on; the note goes to thread.md'
+        return 0 ;;
+      *) rest+=("$1"); shift ;;
+    esac
+  done
+  if (( ${#rest} )); then
+    case "${rest[1]:l}" in
+      me|mine)            on="me" ;;
+      them|other|others)  on="other" ;;
+      none|clear|nobody)  on="none" ;;
+      *) print -u2 -- "claude-wait: first argument must be me, them or none"; return 1 ;;
+    esac
+    who="${rest[2]:-}"; what="${(j: :)rest[3,-1]}"
+  fi
+  while [[ "$dir" == "$CLAUDE_WORK_ROOT"/* ]]; do
+    if [[ -f "$dir/.session.json" ]]; then meta="$dir/.session.json"; break; fi
+    dir="${dir:h}"
+  done
+  if [[ -z "$meta" ]]; then
+    print -u2 -- "claude-wait: no .session.json here (not inside a session folder)"; return 1
+  fi
+  WS_ON="$on" WS_WHO="$who" WS_WHAT="$what" WS_WHERE="$where" WS_LINK="$link" WS_SINCE="$since" WS_NOTE="$note" \
+    "$CWS_PYTHON" - "$meta" <<'PYEOF'
+import datetime, json, os, sys
+p = sys.argv[1]
+d = json.load(open(p))
+old = d.get("waiting") if isinstance(d.get("waiting"), dict) and d["waiting"].get("on") in ("me", "other") else None
+
+def show(w):
+    if not w:
+        return "waiting: nobody"
+    return "waiting on {}: {}{}{}{}".format(
+        "me" if w["on"] == "me" else "them", w.get("who") or "?",
+        " -- " + w["what"] if w.get("what") else "", " (" + w["where"] + ")" if w.get("where") else "",
+        " since " + w["since"][:10] if w.get("since") else "")
+
+on = os.environ["WS_ON"]
+thread = os.path.join(os.path.dirname(p), "thread.md")
+if not on:
+    print(show(old))
+    if os.path.exists(thread):
+        print("thread.md: {} entries".format(open(thread).read().count("\n## ")))
+    raise SystemExit(0)
+now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+if old:
+    d.setdefault("waiting_history", []).append(dict(old, until=now))
+if on == "none":
+    d.pop("waiting", None)
+else:
+    who, what = os.environ["WS_WHO"].strip(), os.environ["WS_WHAT"].strip()
+    keep = old or {}
+    d["waiting"] = {"on": on, "who": who or keep.get("who", ""), "what": what or keep.get("what", ""),
+                    "since": os.environ["WS_SINCE"].strip() or now,
+                    "where": os.environ["WS_WHERE"].strip() or keep.get("where", ""),
+                    "link": os.environ["WS_LINK"].strip() or keep.get("link", "")}
+json.dump(d, open(p, "w"), indent=2)
+# the change, and the note, go to thread.md: the context the next session starts from
+w = d.get("waiting")
+head = "## {} · {}".format(now[:16].replace("T", " "), "settled" if not w else show(w).replace(" since " + w["since"][:10], ""))
+note = os.environ["WS_NOTE"].strip()
+with open(thread, "a") as fh:
+    if fh.tell() == 0:
+        fh.write("# {}\n\nWho said what, in order. claude-inbox adds the messages it finds; claude-wait --note adds yours.\n\n".format(d.get("name") or os.path.basename(os.path.dirname(p))))
+    fh.write(head + "\n\n" + (note + "\n\n" if note else ""))
+print("{} -> {}".format(show(old), show(w)))
+PYEOF
+}
+
 # --- claude-new --------------------------------------------------------------------
 _claude_new_ticket() {
   # Normalise a ticket to PREFIX-123 or Other; non-zero if it is neither.
@@ -293,11 +376,71 @@ _claude_new_ticket() {
   print -r -- "$t"
 }
 
+# Request folders on TICKET from the last DAYS days, newest first: "path<TAB>relative  name  (age)".
+_cws_recent_folders() {
+  WS_TICKET="$1" WS_DAYS="$2" WS_ROOT="$CLAUDE_WORK_ROOT" "$CWS_PYTHON" - <<'PYEOF'
+import datetime, glob, json, os
+root, ticket, days = os.environ["WS_ROOT"], os.environ["WS_TICKET"].upper(), int(os.environ["WS_DAYS"])
+cutoff = (datetime.datetime.now() - datetime.timedelta(days=days)).strftime("%Y/%m/%d")
+out = []
+for meta in sorted(glob.glob(os.path.join(root, "[0-9]" * 4, "[0-9][0-9]", "[0-9][0-9]", "*", ".session.json")), reverse=True)[:400]:
+    folder = os.path.dirname(meta)
+    rel = os.path.relpath(folder, root).replace(os.sep, "/")
+    if rel[:10] < cutoff:
+        break
+    try:
+        d = json.load(open(meta))
+    except (OSError, ValueError):
+        continue
+    if (d.get("ticket") or "").strip().upper() != ticket:
+        continue
+    try:
+        when = datetime.datetime.strptime(rel[:19], "%Y/%m/%d/%H-%M-%S")
+        age = (datetime.datetime.now() - when).days
+        age = "today" if age == 0 else "{}d ago".format(age)
+    except ValueError:
+        age = "?"
+    out.append("{}\t{}  {}  ({})".format(folder, rel, d.get("name") or "", age))
+    if len(out) == 5:
+        break
+print("\n".join(out))
+PYEOF
+}
+
+# Open a request folder where claude-new was asked to: VS Code (its Claude extension starts
+# Claude through claude-vscode) or T3 Code (claude-t3-sync adds it under its ticket and opens it).
+# Nothing waits for either, so ended_at stays empty. Returns 1 for cli: the caller runs Claude.
+_cws_open_request() {
+  case "$2" in
+    code) code -n "$1" ;;
+    t3)   claude-t3-sync --open "$1" ;;
+    *)    return 1 ;;
+  esac
+  return 0
+}
+
+# Start Claude in an existing request folder: its recorded profile unless one was given.
+_claude_new_continue() {
+  local dir="$1" profile="$2" prompt="$3" opener="$4" cfg
+  if [[ -z "$profile" ]]; then
+    profile="$(WS_DIR="$dir" "$CWS_PYTHON" -c 'import json,os; print(json.load(open(os.path.join(os.environ["WS_DIR"], ".session.json"))).get("profile") or "")')"
+    profile="${profile:-$CWS_DEFAULT_PROFILE}"
+  fi
+  cfg="$HOME/.claude-$profile"
+  if [[ ! -d "$cfg" ]]; then
+    print -u2 -- "claude-new: config dir $cfg does not exist"; return 1
+  fi
+  print -r -- "→ $profile  continuing in ${dir#$CLAUDE_WORK_ROOT/}"
+  cd "$dir" || return 1
+  _cws_open_request "$dir" "$opener" && return
+  CLAUDE_CONFIG_DIR="$cfg" command claude ${prompt:+"$prompt"}
+}
+
 claude-new() {
   emulate -L zsh
   setopt local_options no_nomatch
 
-  local profile="" name="" ticket="" canon="" dir slug cfg started ended audit=1 ask_audit=1 ttype="" vscode=0 prompt=""
+  local profile="" name="" ticket="" canon="" dir slug cfg started ended audit=1 ask_audit=1 ttype="" opener="${CWS_OPEN:-cli}" prompt="" fresh=0
   local goal="" done_when="" goal_set=0
   local -a paths=()
   local -a profiles=(${=CWS_PROFILES})
@@ -318,10 +461,13 @@ claude-new() {
         return 0 ;;
       -n|--no-audit) audit=0;          shift ;;
       -a|--audit)    ask_audit=0;      shift ;;
-      -c|--code)     vscode=1;         shift ;;
+      -c|--code)     opener=code;      shift ;;
+      --t3)          opener=t3;        shift ;;
+      --cli)         opener=cli;       shift ;;
       --prompt)
         if [[ -z "$2" ]]; then print -u2 -- "claude-new: --prompt needs the text to start Claude with"; return 1; fi
         prompt="$2"; shift 2 ;;
+      --new) fresh=1; shift ;;
       -T|--type)     ttype="$2";       shift 2 ;;
       -g|--goal)     goal="$2"; goal_set=1; shift 2 ;;
       --done)        done_when="$2";   shift 2 ;;
@@ -348,10 +494,13 @@ print("{:<10} {:<14} {:<16} {:<9}".format("[" + (d.get("profile") or "?") + "]",
         done
         return 0 ;;
       -h|--help)
-        print -r -- 'claude-new [-p PROFILE] [-n|-a] [-c] [-t TICKET] [-T TYPE] [-g GOAL] [--done TEXT] [--path DIR]... [--prompt TEXT] [name]'
+        print -r -- 'claude-new [-p PROFILE] [-n|-a] [-c|--t3|--cli] [-t TICKET] [-T TYPE] [-g GOAL] [--done TEXT] [--path DIR]... [--prompt TEXT] [name]'
         print -r -- '    create a YYYY/MM/DD/HH-mm-ss_slug folder and start Claude in it'
         print -r -- '    -c / --code opens the folder in VS Code instead; the Claude extension there'
         print -r -- '    picks up the profile through claude-vscode'
+        print -r -- '    --t3 adds it to T3 Code as "TICKET · date · name" and opens it there; pick the'
+        print -r -- '    profile'"'"'s Claude instance in the thread. --cli starts Claude in this terminal.'
+        print -r -- "    Without any of them: CWS_OPEN (${CWS_OPEN:-cli})"
         print -r -- '    --prompt TEXT starts Claude with TEXT as the first prompt, e.g. --prompt /weekly-review'
         print -r -- "    TICKET is mandatory: PREFIX-123 (e.g. $CWS_TICKET_EXAMPLE), or Other"
         print -r -- '    -T / --type is the kind of work (permissions, job errors, ...); asked if omitted'
@@ -361,6 +510,7 @@ print("{:<10} {:<14} {:<16} {:<9}".format("[" + (d.get("profile") or "?") + "]",
         print -r -- '    -n / --no-audit keeps the session out of claude-audit and the weekly review'
         print -r -- '    (claude-search still finds it); -a / --audit keeps it in; asked if neither'
         print -r -- "    -p / --profile picks the profile (${profiles[*]}); asked if omitted"
+        print -r -- '    --new always makes a new folder: no offer to continue in a recent one on the same ticket'
         print -r -- 'claude-new -l    list recent sessions'
         print -r -- 'claude-new -L    list the configured profiles'
         return 0 ;;
@@ -399,6 +549,35 @@ print("{:<10} {:<14} {:<16} {:<9}".format("[" + (d.get("profile") or "?") + "]",
     [[ -t 0 ]] || return 1  # not interactive: fail rather than loop
   done
 
+  # A ticket that already has a request folder from the last two weeks: continue there
+  # instead of starting a fourth folder for the same work. --new skips the offer.
+  if (( ! fresh )) && [[ -t 0 && "$ticket" != "Other" ]]; then
+    local -a recent=("${(@f)$(_cws_recent_folders "$ticket" 14)}")
+    recent=("${(@)recent:#}")
+    if (( ${#recent} )); then
+      print -r -- ""
+      print -r -- "$ticket has recent request folders:"
+      local i=1 line
+      for line in $recent; do
+        printf '  %d) %s
+' $i "${line#*$'	'}"
+        (( i++ ))
+      done
+      printf '  %d) a new folder
+' $i
+      local go=""
+      read "go?Continue in [1]: " || return 1
+      go="${go:-1}"
+      if [[ "$go" == <-> ]] && (( go >= 1 && go <= ${#recent} )); then
+        dir="${${recent[$go]}%%$'	'*}"
+        _claude_new_continue "$dir" "$profile" "$prompt" "$opener"
+        return
+      elif [[ "$go" != "$i" ]]; then
+        print -u2 -- "claude-new: invalid choice '$go'"; return 1
+      fi
+    fi
+  fi
+
   if [[ -z "$profile" ]]; then
     if (( ${#profiles} == 1 )); then
       profile="${profiles[1]}"
@@ -429,12 +608,20 @@ print("{:<10} {:<14} {:<16} {:<9}".format("[" + (d.get("profile") or "?") + "]",
     print -u2 -- "claude-new: config dir $cfg does not exist"
     return 1
   fi
-  if (( vscode )) && [[ -n "$prompt" ]]; then
-    print -u2 -- "claude-new: --prompt can't be used with -c (VS Code starts Claude itself)"
+  case "$opener" in
+    cli|code|t3) ;;
+    *) print -u2 -- "claude-new: CWS_OPEN must be cli, code or t3 (not '$opener')"; return 1 ;;
+  esac
+  if [[ "$opener" != cli && -n "$prompt" ]]; then
+    print -u2 -- "claude-new: --prompt needs Claude in the terminal (--cli): VS Code and T3 Code start Claude themselves"
     return 1
   fi
-  if (( vscode )) && ! command -v code >/dev/null 2>&1; then
+  if [[ "$opener" == code ]] && ! command -v code >/dev/null 2>&1; then
     print -u2 -- "claude-new: -c needs VS Code's 'code' command on PATH"
+    return 1
+  fi
+  if [[ "$opener" == t3 ]] && ! command -v claude-t3-sync >/dev/null 2>&1; then
+    print -u2 -- "claude-new: --t3 needs claude-t3-sync on PATH (run install.sh)"
     return 1
   fi
 
@@ -540,12 +727,7 @@ json.dump({
   print -r -- "→ $profile  $ticket  ${ttype:+[$ttype]  }${dir#$CLAUDE_WORK_ROOT/}${${audit:#1}:+  (no-audit)}"
   cd "$dir" || return 1
 
-  # VS Code: the extension starts Claude itself, through claude-vscode, which reads the
-  # profile from .session.json. Nothing waits for it, so ended_at stays empty.
-  if (( vscode )); then
-    code -n "$dir"
-    return
-  fi
+  _cws_open_request "$dir" "$opener" && return
 
   CLAUDE_CONFIG_DIR="$cfg" command claude ${prompt:+"$prompt"}
   local rc=$?
@@ -563,6 +745,36 @@ json.dump(d, open(p, "w"), indent=2)
 ' 2>/dev/null
 
   return $rc
+}
+
+# claude-pending: the /pending skill in the work root, kept out of the audit like
+# `claude-new -n`. The root has no .session.json to carry the flag, so the session id is
+# fixed up front and listed in _audit/no-audit.txt before Claude starts.
+claude-pending() {
+  emulate -L zsh
+  local profile="$CWS_DEFAULT_PROFILE" cfg id list
+  while (( $# )); do
+    case "$1" in
+      -p|--profile) _cws_check_profile claude-pending "$2" || return 1; profile="$2"; shift 2 ;;
+      -h|--help)
+        print -r -- 'usage: claude-pending [-p PROFILE]'
+        print -r -- '    what in Teams and mail needs your reply and what you are waiting on: the'
+        print -r -- '    /pending skill in the work root, out of claude-audit (as claude-new -n)'
+        return 0 ;;
+      *) print -u2 -- "claude-pending: unknown option '$1'"; return 2 ;;
+    esac
+  done
+  cfg="$HOME/.claude-$profile"
+  if [[ ! -d "$cfg" ]]; then
+    print -u2 -- "claude-pending: config dir $cfg does not exist"; return 1
+  fi
+  id="$("$CWS_PYTHON" -c 'import uuid; print(uuid.uuid4())')"
+  list="$CLAUDE_WORK_ROOT/_audit/no-audit.txt"
+  mkdir -p "${list:h}"
+  print -r -- "$id  # $(date +%Y-%m-%d) /pending" >> "$list"
+  print -r -- "→ $profile  /pending in ${CLAUDE_WORK_ROOT:t}  (no-audit)"
+  cd "$CLAUDE_WORK_ROOT" || return 1
+  CLAUDE_CONFIG_DIR="$cfg" command claude --session-id "$id" /pending
 }
 
 # --- navigation ----------------------------------------------------------------------

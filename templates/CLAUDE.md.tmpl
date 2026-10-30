@@ -1,90 +1,48 @@
 # Work sessions
 
-This folder is the base path for the user's work. It is synced to OneDrive and is
-the source for the audit trail, so its layout matters.
+This folder is the user's work root. It is synced to OneDrive and is the source of the
+audit trail, so its layout matters.
 
-## Every request gets its own folder
+## One folder per request
 
-**Do not write files into the root of this folder.** When the user asks for a new
-piece of work, create a folder for it first and do everything inside that folder:
+**Never write files into the root of this folder.** Each piece of work lives in
+`YYYY/MM/DD/HH-mm-ss_short-slug/` (local time, lowercase, dashes, no colons). If a session is
+running in the root, create the request folder first and announce it. A clearly separate piece
+of work later in the same session gets its own folder.
 
-```
-work_sessions/YYYY/MM/DD/HH-mm-ss_short-slug/
-```
+Folders starting with `_` are infrastructure (`_config/` settings and the standing context
+below, `_audit/` exports, ledger and maps), not requests.
 
-Name it after the request: `2026/09/09/14-05-00_vnet-peering-issue`, local time of
-creation, lowercase, dashes for spaces, no punctuation. **No colons** in the time —
-OneDrive rejects them. If the user starts a clearly separate piece of work later
-in the same session, make a new folder for it rather than reusing the current one.
+## How a session starts
 
-Announce the folder you created so the user can find it.
+`claude-new -t TICKET "topic"` creates the folder, records the profile, the **Jira ticket**
+(`PREFIX-123` such as `{{CWS_TICKET_EXAMPLE}}`, or `Other`) and the **task type** in
+`.session.json`, and launches Claude there. With a ticket that already has a recent folder it
+offers to continue in it. `-n` keeps the session out of the audit and the weekly review.
 
-## Layout
+The ticket puts the session on the right tracker row in the weekly review. If a request has no
+ticket and the work clearly belongs to one, say so.
 
-| path | holds |
-|---|---|
-| `YYYY/MM/DD/HH-mm-ss_slug/` | one request: notes, scripts, data, outputs |
-| `YYYY/MM/DD/HH-mm-ss_slug/.session.json` | name, profile, ticket, task_type (the folder's default), session_types (per-session overrides), goal, done_when, started_at, ended_at |
-| `_audit/` | CSV exports from `claude-audit`; underscore keeps it out of `claude-new -l`. `_audit/guard/` holds claude-guard's judge decisions and your reviews of them |
-| `_config/` | claude-worksessions settings: `config.env`, `context.md` (the standing context below), `review-rules.md`, `guard-rules.md`, `pinned.json` (the VS Code sidebar's pins). The standing context below is copied in from `_config/context.md` — edit it there, then run `install.sh` to regenerate this file |
-| `_audit/moved-folders.json` | old → new path map from the 2026-09-18 move off flat `YYYY-MM-DD_slug/`. `claude-audit` and `claude-search` resolve transcript `cwd`s through it — don't delete it; add to it if folders are ever moved again |
+The task type is what **triggered** the work, not what it touched on the way: a job error that
+leads to a permission change is still `job errors`. If the trigger turns out to be something
+else, run `claude-type "<type>"` and say so in one line.
 
-Folders beginning with `_` are infrastructure, not requests.
+## Who is the ball with?
 
-## How sessions are meant to start
+When a session ends with someone else owing an answer, run
+`claude-wait them "<who>" "<what for>" --where teams|mail|jira [--link URL] --note "<where things stand>"`
+in the folder and say so in one line; `claude-wait me ...` when the user owes the reply;
+`claude-wait none` when it is settled. The note is for someone who was not here: what was
+asked, what was answered and where, what is open and by when. It goes to the folder's
+`thread.md`. **If a folder has a `thread.md`, read it before doing anything else there.**
 
-`claude-new -t TICKET "topic"` (from claude-worksessions, `shell/worksessions.zsh`, sourced
-from `~/.zshrc`) creates the `YYYY/MM/DD/HH-mm-ss_slug` folder, records the profile and the **Jira
-ticket** (mandatory: `PREFIX-123` such as `{{CWS_TICKET_EXAMPLE}}`, or `Other`), cd's in, and launches Claude.
-`-p PROFILE` skips the profile prompt (`claude-new -L` lists them); a leading `{{CWS_TICKET_EXAMPLE}}` is taken as the ticket;
-`claude-new -l` lists recent sessions with their ticket.
-`-n` / `--no-audit` writes `"audit": false` to `.session.json`; `claude-audit` (and so the
-weekly review and daily recap) then skips that session. `claude-search` still finds it.
-For a session with no request folder (e.g. started in the root), add its session id to
-`_audit/no-audit.txt` instead — flagging the root would hide every root session.
+## Finding and reviewing
 
-`.session.json` also carries a **task type** — what kind of work this is
-(permissions, job errors, new features, security, ...). `claude-new` suggests one from
-the session name and from the types already in use.
-
-**The type is what started the work, not everything it touches.** A job error that
-needs investigation, then a permission change, then a documentation update is
-`job errors` throughout — the permissions and documentation work only exists because
-the job failed. Type the trigger, not the detours.
-
-**If the work clearly moves to a different kind of task, change it**: run
-`claude-type "<type>"` in the session folder and say in one line that you did. That sets
-the type for **this session only** — the folder keeps its own default for the next one,
-and `claude-type --folder "<type>"` changes that default instead. Reuse an existing type
-where one fits (`claude-type` with no argument shows the current one and where it came
-from); invent a new one only when nothing fits. Change it only when the **trigger**
-turns out to have been something else — what looked like a job error was really a
-permissions request all along — never because the work passed through another type on
-the way.
-
-The ticket is what lets the weekly functional review put a session on the right
-tracker row without asking. If a session sitting in a request folder has no
-ticket in its `.session.json` and the work clearly belongs to one, say so.
-
-If a session was started some other way and is sitting in this root, create the
-request folder yourself before writing anything.
-
-## Weekly functional review
-
-The `weekly-review` skill fills the weekly tracker from sessions, Teams, calendar,
-mail, out-of-office and Jira. Its decisions live in `_audit/review/ledger.json` —
-never edit that by hand; record changes through `claude-audit --apply`.
-
-## Auditing
-
-`claude-audit [--day|--week|--month|--from/--to] [--detail|--reconcile] [--copy|--csv]` shows the
-tracker summary or every activity for any period. It reconstructs the trail from the Claude transcripts — it does not
-read this folder, so nothing here needs to be maintained by hand. Profile
-attribution comes from `.session.json`, which is why sessions should start via `claude-new`.
-
-`claude-search QUERY [--ai] [--from/--to]` finds past sessions on a ticket or topic,
-with the command to resume each. When the user asks where or when they worked on
-something, run it rather than grepping transcripts.
+- `claude-search QUERY [--ai]` finds past sessions on a ticket or topic. Use it when the user
+  asks where or when they worked on something; do not grep transcripts.
+- `claude-audit [--day|--week|--month]` reconstructs the trail from the transcripts. The
+  `weekly-review` skill fills the tracker; its decisions live in `_audit/review/ledger.json`,
+  changed only through `claude-audit --apply`.
 
 ---
 

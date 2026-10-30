@@ -1,5 +1,56 @@
 # Changelog
 
+## [2.25.0] — 2026-10-31
+
+- **`claude-search` opens the session you pick in T3 Code** when `CWS_OPEN` is `t3` (or with
+  `--t3`): the session's folder opens as its T3 project, where the thread is listed. `--cli`
+  resumes in the terminal as before. T3 Code's own search covers titles and project names,
+  not what was said, so this is how to find a T3 session by its content. Opening the thread
+  itself needs the session-to-thread mapping (#51).
+
+## [2.24.0] — 2026-10-30
+
+- **T3 Code as a place to work** (`claude-new --t3`, `CWS_OPEN`). [T3 Code](https://github.com/pingdotgg/t3code)
+  runs Claude through the Agent SDK with the profile's config dir, so hooks, the guard, the
+  audit, skills and MCP servers work there unchanged. `claude-new --t3` creates the request
+  folder as usual, adds it to T3 Code as `TICKET · YYYY-MM-DD · name` and opens it in the app;
+  `--cli` starts Claude in the terminal, `-c` VS Code, and `CWS_OPEN` (`cli`, `code`, `t3`)
+  picks the default. Continuing in a recent folder opens the same way.
+- **`claude-t3-sync`**: titles every request folder's T3 project by its ticket and date, and
+  removes projects with no threads whose folder has been idle 14 days (`CWS_T3_IDLE_DAYS`) and
+  that wait on nobody. Shows the changes unless `--apply`; every change made goes to
+  `_audit/t3/`, and `--undo` puts it back. Changes go through T3's own `t3` command.
+
+## [2.23.0] — 2026-10-18
+
+- **Who is the ball with?** (#49). A request folder can carry a `waiting` flag in
+  `.session.json` — who the ball is with (`me` | `other`), who the other party is, what for,
+  since when, where (teams, mail, jira) and a link to the thread. `claude-sessions --json`
+  carries it; **Set waiting…** in the sidebar (right-click a request or session, or the palette)
+  sets it, and a flagged request's tooltip shows it. (An Open topics view listing the flagged
+  topics was tried on this branch and dropped with the hourly scan: more panel than signal.)
+- **`claude-wait`** sets or clears the flag from a session folder (`claude-wait them "Ana"
+  "confirm the IP" --where teams --link URL --note "where things stand"`; `claude-wait me`;
+  `claude-wait none`). Every change and its note go to the folder's `thread.md`, the context a
+  later session starts from; the rendered `CLAUDE.md` asks Claude to read it first and to run
+  `claude-wait` with a note when a session leaves the ball with someone.
+- **`/pending` skill**: what in Teams and mail still needs a reply from you and what you are
+  waiting on, checked against the open topics. Read only: nothing created, drafted or sent.
+  `claude-pending` (and the sidebar's **What's pending?**) runs it in the work root with the
+  session listed in `_audit/no-audit.txt` first, so the run stays out of the review.
+  (An hourly scan that created a request folder per message was tried on this branch and
+  dropped: 18 folders in four days, eight never opened.)
+- **`claude-new` continues instead of creating**: with a ticket that has a request folder from
+  the last two weeks, it offers to start the session there; `--new` skips the offer.
+- **`claude-delete --empty-folders`** moves request folders with no session and no files, older
+  than seven days, to the bin; the sidebar hides such folders by default.
+- **Sidebar menus thinned**: the right-click menus keep open, new session here, reveal, pin, set
+  waiting and delete; the view title keeps new request, search, filter, grouping, run skill and
+  refresh. Everything else stays in the command palette.
+- The rendered `CLAUDE.md` is a third of its former length: the rules that change behaviour,
+  without the explanations.
+- `claude-sessions --json`: each request carries its `waiting` flag (or `null`).
+
 ## [2.21.0] — 2026-10-03
 
 - **claude-guard no longer judges tool calls against the prompt's targets** (#44, fixes #43).

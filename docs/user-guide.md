@@ -218,7 +218,7 @@ capped. Meetings, mail and chats saved by the recap and review skills are merged
 profile, ticket and type of each session come from its `.session.json`, which is why sessions
 should start with `claude-new`.
 
-Sessions started with `claude-new -n` (or listed in `_audit/no-audit.txt`) are left out.
+Sessions started with `claude-new -n` (or listed in `_audit/no-audit.txt`, as `claude-pending` does for its own run) are left out.
 `claude-search` still finds them.
 
 ---

@@ -8,7 +8,11 @@ across past sessions, and daily/weekly review skills — all driven by one confi
 |---|---|
 | `claude-new` | creates `YYYY/MM/DD/HH-mm-ss_slug/`, records profile + ticket in `.session.json`, starts Claude there |
 | `claude-new -c` | the same, then opens the folder in VS Code, where the Claude extension uses the session's profile |
+| `claude-new --t3` | the same, then adds the folder to [T3 Code](https://github.com/pingdotgg/t3code) as `TICKET · date · name` and opens it there; `CWS_OPEN` makes any of these the default |
+| `claude-t3-sync` | titles every request folder's T3 Code project by its ticket, and removes empty, idle ones; shows the changes first, `--apply` makes them, `--undo` puts them back |
 | VS Code sidebar | requests and their sessions by day or ticket, each session opened as a tab in its own folder and profile |
+| `claude-wait` | who the ball is with, per request: a flag in `.session.json` and notes in `thread.md`; `/pending` checks Teams and mail against it |
+| `claude-pending` | the `/pending` skill: what in Teams and mail still needs a reply from you, and what you are waiting on, checked against the open topics; nothing created, drafted or sent, and the run stays out of the audit |
 | `claude-resume` | Claude Code with a profile: `claude-resume -p work --resume ID`; no args opens the session picker |
 | `claude-audit` | what you worked on — per day, week, month — from transcripts plus meetings/mail/chats |
 | `claude-search` | find past sessions by ticket or topic, with the command to resume each |

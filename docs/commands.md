@@ -5,7 +5,7 @@ The flag-by-flag reference. For how to use them together see the [user guide](us
 ## claude-new
 
 ```
-claude-new [-p PROFILE] [-n|-a] [-c] [-t TICKET] [-T TYPE] [-g GOAL] [--done TEXT] [--path DIR]... [--prompt TEXT] [name]
+claude-new [-p PROFILE] [-n|-a] [-c|--t3|--cli] [-t TICKET] [-T TYPE] [-g GOAL] [--done TEXT] [--path DIR]... [--prompt TEXT] [--new] [name]
 claude-new -l
 claude-new -L
 ```
@@ -16,6 +16,12 @@ that profile. `ended_at` is filled in when Claude exits.
 
 - **Ticket is mandatory**: `PREFIX-123` or `Other`. A ticket-shaped first word is taken
   as the ticket: `claude-new PROJ-123 cost pipeline`.
+- **A ticket with recent folders offers to continue there.** When the ticket has request
+  folders from the last two weeks, `claude-new` lists the newest five and asks *Continue in
+  [1]:* — Enter starts Claude in the newest one (its recorded profile unless `-p` says
+  otherwise), the last number makes a new folder as usual. So a piece of work keeps one
+  folder across its sessions instead of one per conversation. `--new` skips the offer;
+  `Other` and a run without a terminal never get it.
 - `-p name` / `--profile name` picks the profile — any name in `CWS_PROFILES`, so a
   new profile needs no code change. Left out, you get a menu. An unknown name is an error.
 - `-n` / `--no-audit` keeps the session out of `claude-audit` and the weekly review.
@@ -39,12 +45,49 @@ that profile. `ended_at` is filled in when Claude exits.
   Claude in the terminal. Start Claude from the extension there; it runs with the
   session's profile through [`claude-vscode`](#claude-vscode). `ended_at` stays empty,
   since nothing waits for VS Code to close.
+- `--t3` adds the new folder to [T3 Code](https://github.com/pingdotgg/t3code) as a project
+  titled `TICKET · YYYY-MM-DD · name` and opens it in the running app (through
+  [`claude-t3-sync --open`](#claude-t3-sync)). Start a thread there and pick the Claude instance
+  of the profile you chose: T3 Code picks the profile per thread, `claude-new` can't. Hooks,
+  the guard and the audit work as in the terminal, since they read the folder's `.session.json`.
+- `--cli` starts Claude in the terminal. With none of `-c`, `--t3`, `--cli`, `CWS_OPEN` in
+  `config.env` decides (`cli`, `code` or `t3`; default `cli`). Continuing in a recent folder
+  opens the same way.
 - `--prompt TEXT` starts Claude with `TEXT` as its first prompt — `--prompt /weekly-review`
-  opens the new request straight into that skill. Not with `-c`.
+  opens the new request straight into that skill. Only in the terminal (`--cli`).
 - `-l` lists the 15 most recent sessions with profile, ticket and type.
 - `-L` / `--profiles` lists the configured profiles: which is the default and which is
   shared, the description, the gateway URL if any, and a warning if `~/.claude-<name>`
   is missing.
+
+## claude-t3-sync
+
+```
+claude-t3-sync                 show what a sync would change
+claude-t3-sync --apply         make the changes; an undo file goes to _audit/t3/
+claude-t3-sync --undo FILE     put back what that run changed
+claude-t3-sync --open DIR      add DIR to T3 Code under its title, or retitle it, and open it
+                [--days N] [--limit N]
+```
+
+[T3 Code](https://github.com/pingdotgg/t3code) makes one project per folder its sessions ran
+in, so every request folder becomes a project named after the folder. A sync:
+
+- **titles** each request folder's project `TICKET · YYYY-MM-DD · name`, from `.session.json`,
+  so T3's search and sorting work by ticket and date;
+- **removes** a project that has **no threads** and whose folder has been idle for `--days`
+  (`CWS_T3_IDLE_DAYS`, 14) — no file changed and no session written — unless the request is
+  waiting on someone ([`claude-wait`](#claude-wait)). A project with threads stays: T3 can only
+  remove it by deleting its threads. Turn on T3's *Settings → Labs → Boring sidebar (group by
+  project)* and a project whose threads are all settled drops out of the sidebar by itself.
+
+Projects outside the request folders (repos, the work root) are left alone. Without `--apply`
+it only lists the changes; `--limit N` makes the first N (newest folders first), to try it on a
+few. Every change goes through T3's own `t3` command (`CWS_T3_BIN`, else `t3` on PATH, else
+`~/.t3/bin/t3`); each one made is written to `_audit/t3/sync-<time>.jsonl`, and `--undo` with
+that file renames the projects back and re-adds the removed ones under their old titles. The
+project list is read from T3's database, read-only, because `t3` has no command that lists
+projects; after a T3 update that changes it, the sync stops with a message instead of guessing.
 
 ## claude-goal
 
@@ -112,6 +155,32 @@ changes it itself when a session's subject clearly shifts, and says so. `--backf
 guesses from the session name — it prints what it would set, and only writes with
 `--apply`.
 
+## claude-wait
+
+```
+claude-wait                                       show who this request is waiting on
+claude-wait them "Ana" "confirm the new IP" --where teams --link URL
+                                                  I am waiting on Ana: "Waiting on others"
+claude-wait me "Ana" "the firewall change"        Ana is waiting on me: "Needs my reply"
+claude-wait me                                    the reply came: flip it, keeping who, where and link
+claude-wait none                                  settled: clear the flag
+claude-wait them "Ana" "the IP" --note "Asked on Teams; she will check with networking by Thursday."
+                                                  ... and say where things stand
+```
+
+Run anywhere inside the session folder. The flag lives in `.session.json` as
+`waiting: { on: "me" | "other", who, what, since, where, link }`; the previous flag goes to
+`waiting_history` with an `until`. `claude-sessions --json` carries the flag; `/pending` checks
+Teams and mail against it; **Set waiting…** in the sidebar sets it and a flagged request's
+tooltip shows it.
+
+Every change is appended to the folder's **`thread.md`** — a dated heading with the new state,
+and under it the `--note` text: what was asked, what was answered and where, what is still
+open. That file is the context a later session starts from when the thread comes back (the
+rendered `CLAUDE.md` asks Claude to read it first, to run `claude-wait` with a note when a
+session leaves the ball with someone, and to clear the flag when the matter is settled).
+The `/pending` skill reads the same file to say what is tracked.
+
 ## claude-audit
 
 ```
@@ -140,12 +209,16 @@ every activity behind it. `claude-audit --help` has the full list.
 ## claude-search
 
 ```
-claude-search QUERY... [--from DATE] [--to DATE] [--ai] [--no-pick] [--csv FILE]
+claude-search QUERY... [--from DATE] [--to DATE] [--ai] [--no-pick] [--t3|--cli] [--csv FILE]
 ```
 
 Ranks past sessions by ticket or topic across titles, your prompts, Claude's replies,
 commands run and linked meetings/mail. Prints the resume command for each and offers
 to resume one (`--no-pick` just lists). `--ai` asks Claude to judge relevance.
+With `CWS_OPEN="t3"` (or `--t3`) the session you pick opens in T3 Code instead: its folder's
+project, titled by ticket, where the thread is listed ([`claude-t3-sync --open`](#claude-t3-sync)).
+`--cli` resumes it in the terminal. T3 Code's own search covers titles and project names only,
+not what was said, so this is how to find a T3 session by its content.
 
 ## claude-sessions
 
@@ -191,6 +264,8 @@ by side.
 | pin on a session or request | **Pin** it: a **Pinned** group at the top lists it whatever the grouping and sort (also right-click → Pin / Unpin). Pins live in `<work root>/_config/pinned.json`, so they follow the work root to other machines |
 | folder on a request | reveal it in the Explorer (right-click: in Finder, a new window, set task type) |
 | **Files** under a request | the request folder's files as a tree, with their count and size (**Files 4 · 21 KB**; each file's size on hover) — click to open (Markdown in the preview), right-click to reveal in Finder or copy the path |
+| right-click menus | kept short: open, new session here, reveal in Finder, pin, set waiting, delete. Everything else is in the command palette (**Work sessions: …**) |
+| **Set waiting…** on a request or session | who the ball is with, who and what for — `claude-wait` from the sidebar |
 | **Guard:** in the status bar | `claude-guard`'s mode; click to change it (`claude-guard mode`). The panel's subtitle ends with it too (`· guard: warn`), and its `…` menu has *Guard mode: warn…* |
 
 Every request folder is listed, including one with no session yet (just created, closed
@@ -211,6 +286,8 @@ panel), the terminal commands and your skills:
 | command | does |
 |---|---|
 | New request | `claude-new` in a tab |
+| What's pending? | `claude-pending` in a tab: the `/pending` skill in the work root, out of the audit |
+| Sweep empty folders | `claude-delete --empty-folders` in a tab |
 | Recent sessions… | `claude-sessions` as a pick list; picking opens the session |
 | Search sessions… / with Claude… | `claude-search` (`--ai`), hits in a pick list |
 | Audit… | `claude-audit` for today, this or last week, this month, a day or a week; summary or detail |
@@ -221,6 +298,7 @@ panel), the terminal commands and your skills:
 | Run retrospective… | `claude-retro` for last week, the last 7 or N days, or the week of a day, in a tab |
 | Open latest retrospective report | the newest `_audit/quality/*_retro.md` in the Markdown preview |
 | Guard mode… | `claude-guard mode`: off, shadow, warn or enforce (also the status-bar item) |
+| Set waiting on… | `claude-wait`: on a request (right-click), a session's request, the focused tab's, or pick one |
 | Focus the search box · Clear search | |
 
 Sessions are named by Claude's auto-title, else their first prompt; hovering shows the
@@ -248,7 +326,15 @@ claude-delete --list          # what is in the bin (--json too)
 claude-delete --restore ID    # put a deleted session back where it was
 claude-delete --purge ID      # delete it for good (asks; --yes)
 claude-delete --empty         # delete everything in the bin for good (asks; --yes)
+claude-delete --empty-folders [--days N] [--check]
+                              # request folders with no session and no files, older than N
+                              # days (7), to the bin; --check only lists them; --yes skips the ask
 ```
+
+`--empty-folders` is the sweep for folders that were created and never used: nothing in them
+but `.session.json` (and a `thread.md`), no session, not pinned, and dated more than `--days`
+ago. They go to the same bin, listed by `--list` and put back by `--restore`. The sidebar
+hides such folders by default (the **Sweep empty folders** entry in its … menu runs this).
 
 For clearing out test sessions and other noise. `ID` is a session id or its start.
 A session may go only when it has **no value**:

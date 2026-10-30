@@ -178,11 +178,11 @@ def test_json_output(sessions, home, monkeypatch, capsys):
         x["request"].pop("started")
     assert (a["id"], a["title"], a["first_prompt"], a["last_prompt"]) == ("a", "Title A", "first", "last A")
     assert a["request"] == {"path": str(req), "name": "demo work", "ticket": "BTPA-1",
-                            "task_type": "security", "profile": "work"}
+                            "task_type": "security", "profile": "work", "waiting": None}
     assert b["request"]["task_type"] == "permissions"          # per-session override
     assert c["first_prompt"] is None
     assert c["request"] == {"path": str(bare), "name": "09-00-00_bare", "ticket": "",
-                            "task_type": "", "profile": ""}
+                            "task_type": "", "profile": "", "waiting": None}
     assert d["request"] is None and d["in_work_root"] is True
     assert gone["in_work_root"] is False and gone["title"] is None
 
@@ -343,3 +343,23 @@ def test_json_lists_request_folders_with_no_session(sessions, home, monkeypatch,
     assert idle["mtime"] == 5_000_000_000 and idle["started"] == sessions.iso_epoch("2026-09-23T09:00:00Z")
     assert reqs["10-00-00_bare"]["files"] == [] and reqs["10-00-00_bare"]["mtime"] > 0
     assert [s["id"] for s in data["sessions"]] == ["b", "o"]
+
+
+def test_request_waiting_flag(sessions, home):
+    """The waiting flag (claude-wait / claude-inbox) rides along; anything malformed reads as none."""
+    day = home / "work_sessions" / "2026" / "10" / "12"
+    good = day / "10-00-00_good"
+    good.mkdir(parents=True)
+    (good / ".session.json").write_text(json.dumps({"name": "good", "waiting": {
+        "on": "me", "who": "Ana", "what": "confirm the IP", "since": "2026-10-12T08:00:00Z",
+        "where": "teams", "link": "https://teams/x", "extra": 1}}))
+    assert sessions.request_info(str(good), None)["waiting"] == {
+        "on": "me", "who": "Ana", "what": "confirm the IP", "since": "2026-10-12T08:00:00Z",
+        "where": "teams", "link": "https://teams/x"}
+    for i, bad in enumerate([{"on": "them"}, "me", {"who": "x"}, None]):
+        d = day / "11-00-0{}_bad".format(i)
+        d.mkdir()
+        (d / ".session.json").write_text(json.dumps({"name": "bad", "waiting": bad}))
+        assert sessions.request_info(str(d), None)["waiting"] is None
+    assert sessions.waiting_of({"waiting": {"on": "other", "who": None}}) == {
+        "on": "other", "who": "", "what": "", "since": "", "where": "", "link": ""}

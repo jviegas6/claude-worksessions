@@ -162,6 +162,9 @@ function ticketsInUse(data) {
 // A session-less request seen as a session, so the search and filters apply to it the same
 // way: its fields and files for the search, its start and last change for the day, its files
 // as artifacts.
+const STALE_EMPTY_DAYS = 7;
+const isStaleEmpty = (r, now) => !(r.files || []).filter(f => f !== "thread.md").length &&
+                                 now - (r.mtime || r.started || 0) > STALE_EMPTY_DAYS * 86400;
 const asSession = r => ({ id: "", request: r, started: r.started, mtime: r.mtime || r.started || 0, written: r.files });
 
 // Requests, newest activity first, each with its sessions newest first. Sessions with no
@@ -180,8 +183,12 @@ function requests(data, opts) {
     byPath.get(key).sessions.push(s);
   }
   const filter = (opts && opts.filter) || "", pass = passes(opts && opts.filters, opts && opts.now);
+  const now = (opts && opts.now) || Date.now() / 1000;
   for (const r of data.requests || []) {
     const s = asSession(r);
+    // a folder with no session and no files for a week is clutter: hidden unless showEmpty
+    // (claude-delete --empty-folders moves them to the bin)
+    if (!(opts && opts.showEmpty) && isStaleEmpty(r, now)) continue;
     if (!byPath.has(r.path) && matches(s, filter) && pass(s)) {
       byPath.set(r.path, { ...r, root: false, mtime: s.mtime, sessions: [] });
     }
@@ -469,6 +476,31 @@ function guardMode(conf) {
   return m in GUARD_MODES ? m : "off";
 }
 
+// --- waiting: who the ball is with (claude-wait) ----------------------------
+//   request.waiting: { on: "me" | "other", who, what, since (ISO), where, link } | null
+const WAITING_LABELS = { me: "Needs my reply", other: "Waiting on others" };
+const waitingOf = r => {
+  const w = r && r.waiting;
+  return w && typeof w === "object" && (w.on === "me" || w.on === "other") ? w : null;
+};
+const sinceEpoch = w => { const t = Date.parse((w && w.since) || ""); return isNaN(t) ? undefined : t / 1000; };
+
+// Set or clear a request's waiting flag in its .session.json, as claude-wait does:
+// w = { on, who, what, where?, link?, since? } or null to clear. Returns [old, new].
+function setWaiting(folder, w, now = new Date()) {
+  const p = path.join(folder, ".session.json");
+  const d = JSON.parse(fs.readFileSync(p, "utf8"));
+  const iso = now.toISOString().replace(/\.\d+Z$/, "Z");
+  const old = waitingOf(d);
+  if (old) (d.waiting_history ||= []).push({ ...old, until: iso });
+  if (w) {
+    d.waiting = { on: w.on, who: w.who || "", what: w.what || "", since: w.since || iso,
+                  where: w.where || (old && old.where) || "", link: w.link || (old && old.link) || "" };
+  } else delete d.waiting;
+  fs.writeFileSync(p, JSON.stringify(d, null, 2));
+  return [old, d.waiting || null];
+}
+
 // claude-audit arguments for a period and view.
 function auditArgs(period, detail, date) {
   const args = { today: ["--day"], week: ["--week"], lastweek: ["--week", date], month: ["--month"],
@@ -480,4 +512,6 @@ module.exports = { NO_TICKET, DAY_PRESETS, ARTIFACT_LABELS, dayRange, passes, fi
                    describeFilters, ticketsInUse, binDir, readDeleted, GROUPINGS, GROUPING_LABELS, SORTS, SORT_LABELS, ROOT_KEY, readPins, togglePin, requestKey,
                    isPinnedSession, isPinnedRequest, pinned, matches, shownFiles, fileChildren, visible, requests, dayOf, tree,
                    sessionLabel, tabName, ago, matchPending, parseCsv, taskTypes, setTaskType,
-                   readSkills, auditArgs, active, formatSize, latestRetro, retroArgs, GUARD_MODES, guardMode };
+                   readSkills, auditArgs, active, formatSize, latestRetro, retroArgs, GUARD_MODES, guardMode,
+                   WAITING_LABELS, waitingOf, setWaiting,
+                   isStaleEmpty };

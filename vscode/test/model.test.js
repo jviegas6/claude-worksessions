@@ -1,6 +1,9 @@
 // node --test vscode/test — run from tests/test_vscode.py as part of pytest.
 const test = require("node:test");
 const assert = require("node:assert");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
 const M = require("../model");
 
 const ROOT = "/w";
@@ -348,12 +351,13 @@ test("request folders with no session are requests too (#23)", () => {
   const bare = { ...req("2026/09/20/08-00-00_bare"), started: 10, mtime: 10, files: [] };
   const again = { ...B, started: 1, mtime: 1, files: [] };              // B has sessions: not twice
   const d = { ...data, requests: [idle, bare, again] };
-  const rs = M.requests(d);
+  const rs = M.requests(d, { showEmpty: true });      // bare is old and empty: hidden by default
   const got = rs.find(r => r.path === idle.path);
   assert.deepStrictEqual([got.sessions, got.mtime, got.started, got.root], [[], 2000, 1000, false]);
   assert.strictEqual(rs.filter(r => r.path === B.path).length, 1);
   assert.strictEqual(rs[0].path, idle.path);                            // newest activity first
-  assert.strictEqual(M.requests(d, { sort: "started" }).at(-1).path, bare.path);
+  assert.strictEqual(M.requests(d, { sort: "started", showEmpty: true }).at(-1).path, bare.path);
+  assert.ok(!M.requests(d).some(r => r.path === bare.path));
   // grouping, search, filters and ticket list apply to them
   assert.ok(M.tree(d, "day").some(g => g.key === "2026-09-23" && g.requests[0].path === idle.path));
   assert.ok(M.tree(d, "ticket").some(g => g.key === "BTPA-9"));
@@ -366,7 +370,7 @@ test("request folders with no session are requests too (#23)", () => {
   assert.ok(M.pinned(d, { sessions: {}, requests: { [M.requestKey(ROOT, idle.path)]: 1 } }).requests
     .some(r => r.path === idle.path));
   // no mtime at all: its start time
-  assert.strictEqual(M.requests({ ...data, requests: [{ ...bare, mtime: undefined }] })
+  assert.strictEqual(M.requests({ ...data, requests: [{ ...bare, mtime: undefined }] }, { showEmpty: true })
     .find(r => r.path === bare.path).mtime, 10);
 });
 
@@ -408,3 +412,38 @@ test("latestRetro: the newest _audit/quality/*_retro.md", () => {
   fs.symlinkSync(path.join(q, "nowhere"), path.join(q, "broken_retro.md"));
   assert.strictEqual(M.latestRetro(root), path.join(q, "2026-09-21_2026-09-27_retro.md"));
 });
+
+// --- waiting: the Attention view's data ------------------------------------------------------
+test("setWaiting writes, flips and clears the flag in .session.json", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cws-wait-"));
+  const p = path.join(dir, ".session.json");
+  fs.writeFileSync(p, JSON.stringify({ name: "x" }));
+  const at = new Date("2026-10-12T10:00:00.123Z");
+  let [old, now] = M.setWaiting(dir, { on: "other", who: "Ana", what: "the IP", where: "teams", link: "https://t/1" }, at);
+  assert.strictEqual(old, null);
+  assert.deepStrictEqual(now, { on: "other", who: "Ana", what: "the IP", since: "2026-10-12T10:00:00Z", where: "teams", link: "https://t/1" });
+  [old, now] = M.setWaiting(dir, { on: "me", who: "Ana", what: "" , since: "2026-10-12T11:00:00Z" }, at);
+  assert.strictEqual(old.on, "other");
+  assert.deepStrictEqual(now, { on: "me", who: "Ana", what: "", since: "2026-10-12T11:00:00Z", where: "teams", link: "https://t/1" });
+  const d = JSON.parse(fs.readFileSync(p, "utf8"));
+  assert.strictEqual(d.waiting_history.length, 1);
+  assert.strictEqual(d.waiting_history[0].until, "2026-10-12T10:00:00Z");
+  [old, now] = M.setWaiting(dir, null, at);
+  assert.strictEqual(old.on, "me");
+  assert.strictEqual(now, null);
+  assert.ok(!("waiting" in JSON.parse(fs.readFileSync(p, "utf8"))));
+  assert.strictEqual(JSON.parse(fs.readFileSync(p, "utf8")).name, "x");
+});
+
+test("stale empty folders are hidden unless showEmpty (claude-delete --empty-folders)", () => {
+  const now = Date.parse("2026-10-18T12:00:00Z") / 1000, day = 86400;
+  const fresh = req("2026/10/16/10-00-00_fresh", { files: [], mtime: now - 2 * day });
+  const stale = req("2026/10/05/10-00-00_stale", { files: [], mtime: now - 13 * day });
+  const noted = req("2026/10/05/11-00-00_noted", { files: ["thread.md"], mtime: now - 13 * day });
+  const kept = req("2026/10/05/12-00-00_kept", { files: ["notes.md"], mtime: now - 13 * day });
+  const d = { work_root: ROOT, sessions: [], requests: [fresh, stale, noted, kept] };
+  assert.deepStrictEqual(M.requests(d, { now }).map(r => r.name), ["10-00-00_fresh", "12-00-00_kept"]);
+  assert.deepStrictEqual(M.requests(d, { now, showEmpty: true }).map(r => r.name).sort(), ["10-00-00_fresh", "10-00-00_stale", "11-00-00_noted", "12-00-00_kept"]);
+  assert.ok(M.isStaleEmpty(stale, now) && M.isStaleEmpty(noted, now) && !M.isStaleEmpty(fresh, now) && !M.isStaleEmpty(kept, now));
+});
+

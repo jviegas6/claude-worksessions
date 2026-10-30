@@ -107,6 +107,55 @@ def test_code_flag_opens_vscode_instead_of_claude(tmp_path):
     assert d["profile"] == "work" and d["ended_at"] is None
 
 
+def t3_stubs(tmp_path):
+    """A claude-t3-sync stub that records what it was asked to open, and a claude that must not run."""
+    stub = tmp_path / "bin"
+    stub.mkdir()
+    (stub / "claude-t3-sync").write_text('#!/bin/sh\necho "$*" > "$HOME/t3-opened"\n')
+    (stub / "claude").write_text('#!/bin/sh\ntouch "$HOME/launched"\n')
+    for f in stub.iterdir():
+        f.chmod(0o755)
+    return str(stub) + os.pathsep + os.environ["PATH"]
+
+
+@pytest.mark.parametrize("flags, env", [("--t3", {}), ("", {"CWS_OPEN": "t3"})])
+def test_t3_opens_the_request_in_t3_code(tmp_path, flags, env):
+    (tmp_path / ".claude-work").mkdir()
+    r = run_new(tmp_path, flags + " -p work -t PROJ-1 -T tooling demo", PATH=t3_stubs(tmp_path), **env)
+    assert r.returncode == 0, r.stderr
+    meta = next(tmp_path.glob("[0-9]*/*/*/*/.session.json"))
+    assert (tmp_path / "t3-opened").read_text().split() == ["--open", str(meta.parent)]
+    assert not (tmp_path / "launched").exists()
+    assert json.loads(meta.read_text())["ended_at"] is None
+
+
+def test_cli_flag_overrides_cws_open(tmp_path):
+    (tmp_path / ".claude-work").mkdir()
+    r = run_new(tmp_path, "--cli -p work -t Other -T tooling demo", PATH=t3_stubs(tmp_path), CWS_OPEN="t3")
+    assert r.returncode == 0, r.stderr
+    assert (tmp_path / "launched").exists()
+    assert not (tmp_path / "t3-opened").exists()
+
+
+@pytest.mark.parametrize("args, env, message", [
+    ("--t3 --prompt /x", {}, "--prompt needs Claude in the terminal"),
+    ("", {"CWS_OPEN": "emacs"}, "CWS_OPEN must be cli, code or t3"),
+])
+def test_t3_option_errors(tmp_path, args, env, message):
+    (tmp_path / ".claude-work").mkdir()
+    r = run_new(tmp_path, args + " -p work -t Other -T tooling demo", PATH=t3_stubs(tmp_path), **env)
+    assert r.returncode == 1
+    assert message in r.stderr
+    assert not list(tmp_path.glob("[0-9]*"))
+
+
+def test_t3_needs_claude_t3_sync(tmp_path):
+    (tmp_path / ".claude-work").mkdir()
+    r = run_new(tmp_path, "--t3 -p work -t Other -T tooling demo", PATH="/usr/bin:/bin")
+    assert r.returncode == 1
+    assert "needs claude-t3-sync on PATH" in r.stderr
+
+
 def test_code_flag_needs_the_code_command(tmp_path):
     (tmp_path / ".claude-work").mkdir()
     r = run_new(tmp_path, "-c -p work -t Other -T tooling demo", PATH="/usr/bin:/bin")
@@ -486,7 +535,7 @@ def test_claude_new_prompt_starts_claude_with_it(tmp_path):
 
 @pytest.mark.parametrize("args,err", [
     ("--prompt", "--prompt needs the text"),
-    ("-c --prompt /x -p personal -t Other -T tooling demo", "can't be used with -c"),
+    ("-c --prompt /x -p personal -t Other -T tooling demo", "needs Claude in the terminal"),
 ])
 def test_claude_new_prompt_errors(tmp_path, args, err):
     (tmp_path / ".claude-personal").mkdir()
@@ -671,3 +720,105 @@ def test_claude_goal_shows_and_reanchors(tmp_path):
     with pytest.raises(subprocess.CalledProcessError) as e:
         zsh('cd "{}" && claude-goal x'.format(tmp_path), tmp_path)
     assert "no .session.json here" in e.value.stderr
+
+
+def test_claude_wait_shows_sets_flips_and_clears(tmp_path):
+    d = tmp_path / "2026" / "10" / "12" / "10-00-00_x"
+    (d / "sub").mkdir(parents=True)
+    (d / ".session.json").write_text(json.dumps({"name": "x"}))
+    wait = lambda args, cwd=d: zsh('cd "{}" && claude-wait {}'.format(cwd, args), tmp_path)
+    assert wait("") == "waiting: nobody\n"
+    out = wait("them Ana 'confirm the new IP' --where teams --link https://t/1 --since 2026-10-12T08:00:00Z", d / "sub")
+    assert out == "waiting: nobody -> waiting on them: Ana -- confirm the new IP (teams) since 2026-10-12\n"
+    meta = json.loads((d / ".session.json").read_text())
+    assert meta["waiting"] == {"on": "other", "who": "Ana", "what": "confirm the new IP",
+                               "since": "2026-10-12T08:00:00Z", "where": "teams", "link": "https://t/1"}
+    # the reply came: flip to me, keeping who, where and link; the old flag goes to the history
+    out = wait("me")
+    assert out.startswith("waiting on them: Ana -- confirm the new IP (teams) since 2026-10-12 -> waiting on me: Ana -- confirm the new IP (teams) since ")
+    meta = json.loads((d / ".session.json").read_text())
+    assert meta["waiting"]["on"] == "me" and meta["waiting"]["link"] == "https://t/1"
+    assert meta["waiting_history"][0]["on"] == "other" and meta["waiting_history"][0]["until"]
+    assert wait("none --note 'IP confirmed and added to the allow-list.'").endswith("-> waiting: nobody\n")
+    assert "waiting" not in json.loads((d / ".session.json").read_text())
+    # every change went to thread.md, with the note under its heading; the show says how many
+    t = (d / "thread.md").read_text()
+    assert t.startswith("# x\n\nWho said what, in order.")
+    heads = [ln for ln in t.splitlines() if ln.startswith("## ")]
+    assert [h.split(" · ", 1)[1] for h in heads] == ["waiting on them: Ana -- confirm the new IP (teams)",
+                                       "waiting on me: Ana -- confirm the new IP (teams)", "settled"]
+    assert t.endswith("· settled\n\nIP confirmed and added to the allow-list.\n\n")
+    assert wait("") == "waiting: nobody\nthread.md: 3 entries\n"
+    out = wait("them Ana --note 'Asked again.'")
+    assert (d / "thread.md").read_text().count("Asked again.") == 1
+    assert wait("--help").startswith("claude-wait [me|them|none]")
+    with pytest.raises(subprocess.CalledProcessError) as e:
+        wait("sideways")
+    assert "must be me, them or none" in e.value.stderr
+    with pytest.raises(subprocess.CalledProcessError) as e:
+        zsh('cd "{}" && claude-wait me'.format(tmp_path), tmp_path)
+    assert "no .session.json here" in e.value.stderr
+
+
+def test_claude_new_offers_to_continue_in_a_recent_folder_on_the_ticket(tmp_path):
+    (tmp_path / ".claude-personal").mkdir()
+    import datetime
+    today = datetime.datetime.now().strftime("%Y/%m/%d")
+    d = tmp_path / today / "09-00-00_first-look"
+    d.mkdir(parents=True)
+    (d / ".session.json").write_text(json.dumps({"name": "First look", "ticket": "PROJ-1", "profile": "personal"}))
+    # Enter takes the offer: no new folder, Claude starts in the old one
+    r = run_new_tty(tmp_path, "-t PROJ-1 -T tooling -a second look", "\n")
+    assert r.returncode == 0, r.stderr
+    assert "PROJ-1 has recent request folders:" in r.stdout and "1) {}/09-00-00_first-look  First look  (today)".format(today) in r.stdout
+    assert "2) a new folder" in r.stdout and "continuing in {}/09-00-00_first-look".format(today) in r.stdout
+    assert len(list(tmp_path.glob("[0-9]*/*/*/*/.session.json"))) == 1
+    # the last number makes a new folder; --new never asks; another ticket never asks; Other never asks
+    r = run_new_tty(tmp_path, "-t PROJ-1 -T tooling -a second look", "2\n\n\n")
+    assert r.returncode == 0, r.stderr
+    assert len(list(tmp_path.glob("[0-9]*/*/*/*/.session.json"))) == 2
+    r = run_new_tty(tmp_path, "--new -t PROJ-1 -T tooling -a third", "\n\n")
+    assert r.returncode == 0, r.stderr and "recent request folders" not in r.stdout
+    assert len(list(tmp_path.glob("[0-9]*/*/*/*/.session.json"))) == 3
+    r = run_new_tty(tmp_path, "-t PROJ-2 -T tooling -a other ticket", "\n\n")
+    assert r.returncode == 0 and "recent request folders" not in r.stdout
+    r = run_new_tty(tmp_path, "-t PROJ-1 -T tooling -a bad pick", "9\n")
+    assert r.returncode == 1 and "invalid choice '9'" in r.stderr
+
+
+def test_continuing_in_a_recent_folder_opens_it_in_t3(tmp_path):
+    (tmp_path / ".claude-personal").mkdir()
+    import datetime
+    d = tmp_path / datetime.datetime.now().strftime("%Y/%m/%d") / "09-00-00_first-look"
+    d.mkdir(parents=True)
+    (d / ".session.json").write_text(json.dumps({"name": "First look", "ticket": "PROJ-1", "profile": "personal"}))
+    stub = tmp_path / "bin"
+    stub.mkdir()
+    (stub / "claude-t3-sync").write_text('#!/bin/sh\necho "$*" > "$HOME/t3-opened"\n')
+    (stub / "claude-t3-sync").chmod(0o755)
+    r = run_new_tty(tmp_path, "--t3 -t PROJ-1 -T tooling -a second look", "\n")
+    assert r.returncode == 0, r.stderr
+    assert (tmp_path / "t3-opened").read_text().split() == ["--open", str(d)]
+
+
+def test_claude_pending_runs_the_skill_in_the_root_out_of_the_audit(tmp_path):
+    (tmp_path / ".claude-personal").mkdir()
+    stub = tmp_path / "bin"
+    stub.mkdir()
+    (stub / "claude").write_text('#!/bin/sh\necho "$PWD|$CLAUDE_CONFIG_DIR|$*" > "$HOME/launched"\n')
+    (stub / "claude").chmod(0o755)
+    env = dict(os.environ, CLAUDE_WORK_ROOT=str(tmp_path), CWS_CONFIG=os.devnull, ZDOTDIR=str(tmp_path),
+               HOME=str(tmp_path), CWS_PROFILES="personal work", CWS_DEFAULT_PROFILE="personal",
+               PATH=str(stub) + os.pathsep + os.environ["PATH"])
+    src = 'source "{}/shell/worksessions.zsh"\nclaude-pending'.format(REPO)
+    r = subprocess.run(["zsh", "-fc", src], env=env, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    cwd, cfg, args = (tmp_path / "launched").read_text().strip().split("|")
+    assert cwd == str(tmp_path) and cfg == str(tmp_path / ".claude-personal")
+    sid = re.fullmatch(r"--session-id ([0-9a-f-]{36}) /pending", args).group(1)
+    # the id is on the no-audit list before Claude starts, so the run never reaches the review
+    assert sid in (tmp_path / "_audit" / "no-audit.txt").read_text()
+    assert "(no-audit)" in r.stdout
+    # -p is checked like claude-new's
+    r = subprocess.run(["zsh", "-fc", src + " -p nope"], env=env, capture_output=True, text=True)
+    assert r.returncode == 1 and "unknown profile 'nope'" in r.stderr

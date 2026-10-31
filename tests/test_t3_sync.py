@@ -73,7 +73,6 @@ def t3(home, monkeypatch):
             con.close()
 
         def server(self):
-            (t3home / "userdata" / "server-runtime.json").write_text(json.dumps({"origin": "http://127.0.0.1:3773"}))
             (t3home / "userdata" / "environment-id").write_text("env-1\n")
 
         def calls(self):
@@ -255,7 +254,7 @@ def test_open_thread_opens_its_link(t3, sync, monkeypatch, capsys):
     opened = []
     monkeypatch.setattr(sync.subprocess, "run", lambda cmd, check: opened.append(cmd))
     assert sync.main(["--thread", "sess-b"]) == 0
-    link = "http://127.0.0.1:3773/env-1/import%3AclaudeAgent%3Asess-b"
+    link = "t3code://threads/env-1/import%3AclaudeAgent%3Asess-b"
     assert opened == [[("open" if sys.platform == "darwin" else "xdg-open"), link]]
     assert link in capsys.readouterr().out
 
@@ -272,7 +271,7 @@ def test_open_thread_without_a_thread_or_a_server(t3, sync, home):
     with pytest.raises(SystemExit, match="no T3 Code thread"):
         sync.open_thread("sess-x")
     t3.thread("th-1", session_id="sess-a")
-    with pytest.raises(SystemExit, match="server address not found"):
+    with pytest.raises(SystemExit, match="environment id not found"):
         sync.open_thread("sess-a")
     (home / ".t3" / "userdata" / "statev2.sqlite").unlink()
     assert sync.thread_for("sess-a") is None

@@ -5,7 +5,7 @@
   claude-t3-sync --apply         make those changes; an undo file goes to _audit/t3/
   claude-t3-sync --undo FILE     put back what that run changed
   claude-t3-sync --open DIR      add DIR to T3 under its title (or retitle it) and open it there
-  claude-t3-sync --thread ID     open the T3 thread that ran Claude session ID, in the browser
+  claude-t3-sync --thread ID     open the T3 thread that ran Claude session ID, in the T3 app
                  [--fallback DIR]  (no such thread: --open DIR instead)
 
 A sync gives every request folder's project the title "TICKET · YYYY-MM-DD · name" from its
@@ -91,19 +91,19 @@ def thread_for(session_id):
 
 
 def thread_link(thread_id):
-    """The thread's address on the local T3 server: <origin>/<environment id>/<thread id>."""
+    """The app link the T3 desktop app opens a thread from: t3code://threads/<environment>/<thread>."""
     try:
-        with open(os.path.join(t3_userdata(), "server-runtime.json")) as fh:
-            origin = json.load(fh)["origin"]
         with open(os.path.join(t3_userdata(), "environment-id")) as fh:
             env = fh.read().strip()
-    except (OSError, ValueError, KeyError):
-        raise SystemExit("claude-t3-sync: T3 Code's server address not found (is T3 Code running?)")
-    return "{}/{}/{}".format(origin.rstrip("/"), env, urllib.parse.quote(thread_id, safe=""))
+    except OSError:
+        env = ""
+    if not env:
+        raise SystemExit("claude-t3-sync: T3 Code's environment id not found (open T3 Code once)")
+    return "t3code://threads/{}/{}".format(env, urllib.parse.quote(thread_id, safe=""))
 
 
 def open_thread(session_id, fallback=None):
-    """Open the thread that ran the session in the browser; without one, the fallback folder in T3."""
+    """Open the thread that ran the session in the T3 app; without one, the fallback folder's project."""
     tid = thread_for(session_id)
     if tid is None:
         if fallback:
@@ -278,7 +278,7 @@ def main(argv=None):
     p.add_argument("--limit", type=int, help="at most N changes, newest folders first")
     p.add_argument("--undo", metavar="FILE", help="put back what the run that wrote FILE changed")
     p.add_argument("--open", metavar="DIR", help="add DIR to T3 Code (titled) and open it there")
-    p.add_argument("--thread", metavar="ID", help="open the T3 thread that ran Claude session ID, in the browser")
+    p.add_argument("--thread", metavar="ID", help="open the T3 thread that ran Claude session ID, in the T3 app")
     p.add_argument("--fallback", metavar="DIR", help="with --thread: open DIR's project when there is no thread")
     a = p.parse_args(argv)
     if a.thread:

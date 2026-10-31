@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.27.1] — 2026-10-31
+
+- `claude-t3-sync --thread` (and so `claude-search` with `CWS_OPEN=t3`) opens the thread in the
+  T3 desktop app, through its `t3code://threads/<environment>/<thread>` link, instead of the
+  local web page, which needed the browser paired with T3 first.
+
 ## [2.27.0] — 2026-10-31
 
 - **`claude-search` opens the T3 thread itself** (#51). Picking a session with `CWS_OPEN=t3`

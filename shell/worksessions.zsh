@@ -396,7 +396,7 @@ for meta in sorted(glob.glob(os.path.join(root, "[0-9]" * 4, "[0-9][0-9]", "[0-9
         continue
     try:
         when = datetime.datetime.strptime(rel[:19], "%Y/%m/%d/%H-%M-%S")
-        age = (datetime.datetime.now() - when).days
+        age = (datetime.date.today() - when.date()).days   # calendar days, not 24-hour blocks
         age = "today" if age == 0 else "{}d ago".format(age)
     except ValueError:
         age = "?"

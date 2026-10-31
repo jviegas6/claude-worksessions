@@ -801,6 +801,16 @@ def test_continuing_in_a_recent_folder_opens_it_in_t3(tmp_path):
     assert (tmp_path / "t3-opened").read_text().split() == ["--open", str(d)]
 
 
+def test_recent_folder_age_counts_calendar_days(tmp_path):
+    import datetime
+    yesterday = datetime.date.today() - datetime.timedelta(days=1)
+    d = tmp_path / yesterday.strftime("%Y/%m/%d") / "23-59-59_late"
+    d.mkdir(parents=True)
+    (d / ".session.json").write_text(json.dumps({"name": "Late", "ticket": "PROJ-7"}))
+    out = zsh('_cws_recent_folders PROJ-7 14', tmp_path)
+    assert out.strip().endswith("Late  (1d ago)")
+
+
 def test_claude_pending_runs_the_skill_in_the_root_out_of_the_audit(tmp_path):
     (tmp_path / ".claude-personal").mkdir()
     stub = tmp_path / "bin"

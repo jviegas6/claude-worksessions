@@ -412,7 +412,7 @@ def resume_cmd(r):
 
 def pick_and_resume(results, opener="cli"):
     """Ask which result to resume, then cd there and start Claude on it (replaces this process).
-    With opener t3, open the session's folder as a project in T3 Code instead, where the thread is."""
+    With opener t3, open the T3 Code thread that ran it instead (its folder's project if none)."""
     verb = "Open which session in T3 Code?" if opener == "t3" else "Resume which session?"
     try:
         answer = input("{} [1-{}, Enter to skip] ".format(verb, len(results))).strip()
@@ -429,7 +429,7 @@ def pick_and_resume(results, opener="cli"):
         sys.exit("claude-search: folder no longer exists: " + short(d["cwd"]))
     if opener == "t3":
         sys.stdout.flush()
-        os.execvp("claude-t3-sync", ["claude-t3-sync", "--open", d["cwd"]])
+        os.execvp("claude-t3-sync", ["claude-t3-sync", "--thread", d["session_id"], "--fallback", d["cwd"]])
         return
     if r["profile"] in CA.PROFILES:  # what claude-resume -p does
         os.environ["CLAUDE_CONFIG_DIR"] = os.path.join(HOME, ".claude-" + r["profile"])

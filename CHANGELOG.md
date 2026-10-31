@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.27.0] — 2026-10-31
+
+- **`claude-search` opens the T3 thread itself** (#51). Picking a session with `CWS_OPEN=t3`
+  opens the T3 Code thread that ran it, in the browser, through the new `claude-t3-sync --thread
+  ID`; the session's folder's project when T3 has no thread for it. Before, it opened the
+  project, and T3's `t3 app` starts a new empty thread there. T3's desktop app can't be sent to
+  a given thread, so the thread opens on the local T3 server's web page.
+- `claude-new`'s offer to continue in a recent folder counts its age in calendar days: a folder
+  from 23:00 yesterday, seen after midnight, is "1d ago", not "today".
+
 ## [2.26.0] — 2026-10-31
 
 - **claude-audit: book a session on another day** (`book_on`). Work done on a bank holiday

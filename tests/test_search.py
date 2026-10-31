@@ -341,7 +341,7 @@ def test_pick_opens_in_t3(search, monkeypatch, capsys, home):
     calls = []
     monkeypatch.setattr(os, "execvp", lambda f, args: calls.append((f, args)))
     search.pick_and_resume([{"profile": "work", "doc": {"cwd": str(folder), "session_id": "abc"}}], "t3")
-    assert calls == [("claude-t3-sync", ["claude-t3-sync", "--open", str(folder)])]
+    assert calls == [("claude-t3-sync", ["claude-t3-sync", "--thread", "abc", "--fallback", str(folder)])]
 
 
 @pytest.mark.parametrize("flags, config, opener", [

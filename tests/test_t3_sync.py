@@ -3,6 +3,7 @@
 import json
 import os
 import sqlite3
+import sys
 import time
 
 import pytest
@@ -29,6 +30,7 @@ def t3(home, monkeypatch):
     con.execute("create table projection_projects (project_id text, title text, workspace_root text, "
                 "created_at text, deleted_at text)")
     con.execute("create table orchestration_v2_projection_threads (thread_id text, project_id text, deleted_at text)")
+    con.execute("create table orchestration_v2_projection_provider_threads (thread_id text, payload_json text, updated_at text)")
     con.commit()
     con.close()
     log, exists, fail = home / "t3.log", home / "t3.exists", home / "t3.fail"
@@ -59,6 +61,20 @@ def t3(home, monkeypatch):
             for p in (d / ".session.json", d):
                 os.utime(str(p), (when, when))
             return d
+
+        def thread(self, thread_id, session_id=None, deleted=False):
+            con = sqlite3.connect(str(db))
+            con.execute("insert into orchestration_v2_projection_threads values (?, 'p', ?)",
+                        (thread_id, "2026-10-31" if deleted else None))
+            payload = {"nativeThreadRef": {"driver": "claudeAgent", "nativeId": session_id}} if session_id else {}
+            con.execute("insert into orchestration_v2_projection_provider_threads values (?, ?, '2026-10-30')",
+                        (thread_id, json.dumps(payload)))
+            con.commit()
+            con.close()
+
+        def server(self):
+            (t3home / "userdata" / "server-runtime.json").write_text(json.dumps({"origin": "http://127.0.0.1:3773"}))
+            (t3home / "userdata" / "environment-id").write_text("env-1\n")
 
         def calls(self):
             return log.read_text().splitlines() if log.exists() else []
@@ -222,3 +238,52 @@ def test_nothing_to_do(t3, sync, capsys):
     t3.project(d, "Other · 2026-10-30 · ok", threads=1)
     assert sync.main([]) == 0
     assert "already match" in capsys.readouterr().out
+
+
+def test_thread_for_native_and_imported_sessions(t3, sync):
+    t3.thread("th-1", session_id="sess-a")
+    t3.thread("import:claudeAgent:sess-b")
+    t3.thread("th-gone", session_id="sess-c", deleted=True)
+    assert sync.thread_for("sess-a") == "th-1"
+    assert sync.thread_for("sess-b") == "import:claudeAgent:sess-b"
+    assert sync.thread_for("sess-c") is None and sync.thread_for("nope") is None
+
+
+def test_open_thread_opens_its_link(t3, sync, monkeypatch, capsys):
+    t3.thread("import:claudeAgent:sess-b")
+    t3.server()
+    opened = []
+    monkeypatch.setattr(sync.subprocess, "run", lambda cmd, check: opened.append(cmd))
+    assert sync.main(["--thread", "sess-b"]) == 0
+    link = "http://127.0.0.1:3773/env-1/import%3AclaudeAgent%3Asess-b"
+    assert opened == [[("open" if sys.platform == "darwin" else "xdg-open"), link]]
+    assert link in capsys.readouterr().out
+
+
+def test_open_thread_falls_back_to_the_project(t3, sync, capsys):
+    d = t3.request("2026/10/30/15-00-00_q", {"ticket": "Other", "name": "q"})
+    sync.main(["--thread", "sess-x", "--fallback", str(d)])
+    real = os.path.realpath(str(d))
+    assert t3.calls()[-1] == "app {}".format(real)
+    assert "No T3 thread for session sess-x" in capsys.readouterr().out
+
+
+def test_open_thread_without_a_thread_or_a_server(t3, sync, home):
+    with pytest.raises(SystemExit, match="no T3 Code thread"):
+        sync.open_thread("sess-x")
+    t3.thread("th-1", session_id="sess-a")
+    with pytest.raises(SystemExit, match="server address not found"):
+        sync.open_thread("sess-a")
+    (home / ".t3" / "userdata" / "statev2.sqlite").unlink()
+    assert sync.thread_for("sess-a") is None
+
+
+def test_thread_for_unknown_database(t3, sync, home):
+    db = home / ".t3" / "userdata" / "statev2.sqlite"
+    db.unlink()
+    con = sqlite3.connect(str(db))
+    con.execute("create table other (x)")
+    con.commit()
+    con.close()
+    with pytest.raises(SystemExit, match="not what this version knows"):
+        sync.thread_for("sess-a")

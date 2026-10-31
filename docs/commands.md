@@ -67,6 +67,8 @@ claude-t3-sync                 show what a sync would change
 claude-t3-sync --apply         make the changes; an undo file goes to _audit/t3/
 claude-t3-sync --undo FILE     put back what that run changed
 claude-t3-sync --open DIR      add DIR to T3 Code under its title, or retitle it, and open it
+claude-t3-sync --thread ID [--fallback DIR]
+                               open the T3 thread that ran Claude session ID, in the browser
                 [--days N] [--limit N]
 ```
 
@@ -88,6 +90,12 @@ few. Every change goes through T3's own `t3` command (`CWS_T3_BIN`, else `t3` on
 that file renames the projects back and re-adds the removed ones under their old titles. The
 project list is read from T3's database, read-only, because `t3` has no command that lists
 projects; after a T3 update that changes it, the sync stops with a message instead of guessing.
+
+`--thread ID` finds the T3 thread that ran a Claude session — a thread T3 started records the
+session it runs, one imported from Claude's history is named after it — and opens its address
+on the local T3 server (`<origin>/<environment>/<thread>`) in the browser: the T3 desktop app has
+no way to be sent to one thread, `t3 app` only opens a new thread in a project. With no such
+thread (never run in T3, or deleted there), `--fallback DIR` opens DIR's project instead.
 
 ## claude-goal
 
@@ -219,8 +227,9 @@ claude-search QUERY... [--from DATE] [--to DATE] [--ai] [--no-pick] [--t3|--cli]
 Ranks past sessions by ticket or topic across titles, your prompts, Claude's replies,
 commands run and linked meetings/mail. Prints the resume command for each and offers
 to resume one (`--no-pick` just lists). `--ai` asks Claude to judge relevance.
-With `CWS_OPEN="t3"` (or `--t3`) the session you pick opens in T3 Code instead: its folder's
-project, titled by ticket, where the thread is listed ([`claude-t3-sync --open`](#claude-t3-sync)).
+With `CWS_OPEN="t3"` (or `--t3`) the session you pick opens in T3 Code instead: the thread that
+ran it, in the browser, or its folder's project when T3 has no thread for it
+([`claude-t3-sync --thread`](#claude-t3-sync)).
 `--cli` resumes it in the terminal. T3 Code's own search covers titles and project names only,
 not what was said, so this is how to find a T3 session by its content.
 

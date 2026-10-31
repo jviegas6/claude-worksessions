@@ -5,6 +5,8 @@
   claude-t3-sync --apply         make those changes; an undo file goes to _audit/t3/
   claude-t3-sync --undo FILE     put back what that run changed
   claude-t3-sync --open DIR      add DIR to T3 under its title (or retitle it) and open it there
+  claude-t3-sync --thread ID     open the T3 thread that ran Claude session ID, in the browser
+                 [--fallback DIR]  (no such thread: --open DIR instead)
 
 A sync gives every request folder's project the title "TICKET · YYYY-MM-DD · name" from its
 .session.json, and removes projects that have no threads and whose folder has been idle for
@@ -18,6 +20,7 @@ projects; if a T3 update changes that database, the sync stops and says so.
 """
 
 import argparse
+import urllib.parse
 import datetime as dt
 import glob
 import importlib.machinery
@@ -59,6 +62,58 @@ def t3_bin():
 def t3_db():
     home = CA.CONFIG.get("CWS_T3_HOME") or os.environ.get("T3CODE_HOME") or os.path.join(HOME, ".t3")
     return os.path.join(os.path.expanduser(home), "userdata", "statev2.sqlite")
+
+
+def t3_userdata():
+    return os.path.dirname(t3_db())
+
+
+def thread_for(session_id):
+    """The T3 thread that ran a Claude session: one T3 started records the session as its native
+    thread; one imported from Claude's history is named after it. None if T3 has no such thread."""
+    db = t3_db()
+    if not os.path.isfile(db):
+        return None
+    con = sqlite3.connect("file:{}?mode=ro".format(db), uri=True)
+    try:
+        row = con.execute(
+            "select p.thread_id from orchestration_v2_projection_provider_threads p "
+            "join orchestration_v2_projection_threads t on t.thread_id = p.thread_id "
+            "where t.deleted_at is null and (json_extract(p.payload_json, '$.nativeThreadRef.nativeId') = ? "
+            "or p.thread_id = ?) order by p.updated_at desc limit 1",
+            (session_id, "import:claudeAgent:" + session_id)).fetchone()
+    except sqlite3.Error as e:
+        raise SystemExit("claude-t3-sync: T3 Code's database is not what this version knows ({}); "
+                         "update claude-worksessions".format(e))
+    finally:
+        con.close()
+    return row[0] if row else None
+
+
+def thread_link(thread_id):
+    """The thread's address on the local T3 server: <origin>/<environment id>/<thread id>."""
+    try:
+        with open(os.path.join(t3_userdata(), "server-runtime.json")) as fh:
+            origin = json.load(fh)["origin"]
+        with open(os.path.join(t3_userdata(), "environment-id")) as fh:
+            env = fh.read().strip()
+    except (OSError, ValueError, KeyError):
+        raise SystemExit("claude-t3-sync: T3 Code's server address not found (is T3 Code running?)")
+    return "{}/{}/{}".format(origin.rstrip("/"), env, urllib.parse.quote(thread_id, safe=""))
+
+
+def open_thread(session_id, fallback=None):
+    """Open the thread that ran the session in the browser; without one, the fallback folder in T3."""
+    tid = thread_for(session_id)
+    if tid is None:
+        if fallback:
+            print("No T3 thread for session {}; opening its folder's project.".format(session_id[:8]))
+            return open_in_t3(fallback)
+        raise SystemExit("claude-t3-sync: no T3 Code thread for session {}".format(session_id))
+    link = thread_link(tid)
+    opener = ["open"] if sys.platform == "darwin" else ["xdg-open"]
+    subprocess.run(opener + [link], check=False)
+    print("T3 Code thread: " + link)
 
 
 def t3(*args):
@@ -223,7 +278,12 @@ def main(argv=None):
     p.add_argument("--limit", type=int, help="at most N changes, newest folders first")
     p.add_argument("--undo", metavar="FILE", help="put back what the run that wrote FILE changed")
     p.add_argument("--open", metavar="DIR", help="add DIR to T3 Code (titled) and open it there")
+    p.add_argument("--thread", metavar="ID", help="open the T3 thread that ran Claude session ID, in the browser")
+    p.add_argument("--fallback", metavar="DIR", help="with --thread: open DIR's project when there is no thread")
     a = p.parse_args(argv)
+    if a.thread:
+        open_thread(a.thread, a.fallback)
+        return 0
     if a.open:
         open_in_t3(a.open)
         return 0

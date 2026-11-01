@@ -138,10 +138,10 @@ def test_transcript_files_none(audit):
 def test_session_meta_variants(audit, home):
     assert audit.session_meta("")["profile"] == "unknown"
     d = home / "work_sessions" / "req"
-    write_json(d / ".session.json", {"profile": "work", "ticket": " BTPA-1 ", "task_type": " tooling ",
+    write_json(d / ".session.json", {"profile": "work", "ticket": " DATA-1 ", "task_type": " tooling ",
                                      "session_types": {"sid": "permissions"}, "audit": False})
     m = audit.session_meta(str(d))
-    assert m == {"profile": "work", "ticket": "BTPA-1", "task_type": "tooling",
+    assert m == {"profile": "work", "ticket": "DATA-1", "task_type": "tooling",
                  "session_types": {"sid": "permissions"}, "audit": False}
     assert audit.session_meta(str(d)) is m  # cached
     assert audit.profile_for(str(d)) == "work"
@@ -156,18 +156,18 @@ def test_session_meta_variants(audit, home):
 
 def test_session_folder_and_meta_for(audit, home):
     req = home / "work_sessions" / "req"
-    write_json(req / ".session.json", {"profile": "work", "ticket": "BTPA-2"})
+    write_json(req / ".session.json", {"profile": "work", "ticket": "DATA-2"})
     write_json(audit.SESSION_FOLDERS_PATH, {"sid-1": str(req)})
     repo = home / "repo"
     repo.mkdir()
     assert audit.session_folder("sid-1") == str(req)
     assert audit.session_folder("other") == ""
     # ran in a folder without metadata -> falls back to the assigned request folder
-    assert audit.meta_for(str(repo), "sid-1")["ticket"] == "BTPA-2"
+    assert audit.meta_for(str(repo), "sid-1")["ticket"] == "DATA-2"
     # no assignment -> the empty meta
     assert audit.meta_for(str(repo), "sid-2")["profile"] == "unknown"
     # own metadata wins
-    assert audit.meta_for(str(req), "sid-2")["ticket"] == "BTPA-2"
+    assert audit.meta_for(str(req), "sid-2")["ticket"] == "DATA-2"
 
 
 def test_session_folder_missing_or_bad_file(audit):
@@ -387,7 +387,7 @@ def make_session(stamps, info=None, cost=None, turns=None, path="/t/sid-123.json
 
 def test_build_row_with_cost_and_session_type(audit, home):
     req = home / "work_sessions" / "req"
-    write_json(req / ".session.json", {"profile": "work", "ticket": "BTPA-9", "task_type": "tooling",
+    write_json(req / ".session.json", {"profile": "work", "ticket": "DATA-9", "task_type": "tooling",
                                        "session_types": {"sid-123": "permissions"}})
     stamps = [local(2026, 9, 9, 10), local(2026, 9, 9, 10, 4)]
     cost = {"totalCostUSD": 1.23456, "totalLinesAdded": 10, "totalLinesRemoved": 2,
@@ -397,7 +397,7 @@ def test_build_row_with_cost_and_session_type(audit, home):
     row = audit.build_row(s, 300, 120, 1800)
     assert row["date"] == "2026-09-09" and row["worked_h"] == 0.5
     assert row["worked_exact"] == "0:04:00" and row["elapsed"] == "0:04:00"
-    assert row["profile"] == "work" and row["ticket"] == "BTPA-9"
+    assert row["profile"] == "work" and row["ticket"] == "DATA-9"
     assert row["task_type"] == "permissions"
     assert row["title"] == ("line opening " + "y" * 100)[:80]
     assert row["cost_usd"] == 1.2346 and row["lines_added"] == 10 and row["lines_removed"] == 2
@@ -408,7 +408,7 @@ def test_build_row_with_cost_and_session_type(audit, home):
     assert set(audit.COLUMNS) <= set(row)
 
     ev = audit.session_as_event(row)
-    assert ev["source"] == "claude" and ev["_key"] == "sid-123" and ev["_ticket"] == "BTPA-9"
+    assert ev["source"] == "claude" and ev["_key"] == "sid-123" and ev["_ticket"] == "DATA-9"
     assert ev["_task_type"] == "permissions" and ev["detail"] == str(req)
 
 
@@ -465,9 +465,9 @@ def test_stopwords_include_org(home, monkeypatch):
 
 
 def test_jira_keys(audit):
-    text = "see BTPA-12 and UTF-8, ABC-3 and SHA-256"
-    assert audit.jira_keys(text, set()) == {"BTPA-12", "ABC-3"}
-    assert audit.jira_keys(text, {"BTPA"}) == {"BTPA-12"}
+    text = "see DATA-12 and UTF-8, ABC-3 and SHA-256"
+    assert audit.jira_keys(text, set()) == {"DATA-12", "ABC-3"}
+    assert audit.jira_keys(text, {"DATA"}) == {"DATA-12"}
     assert audit.jira_keys(None, set()) == set()
 
 
@@ -513,21 +513,21 @@ def item(source, start, title, end=None, **kw):
 def test_prepare_items_subject_precedence(audit):
     t = local(2026, 9, 9, 9)
     led = audit.empty_ledger()
-    led["jira_prefixes"] = ["BTPA"]
-    led["ignore_tickets"] = ["BTPA-99"]
-    confirmed = item("claude", t, "Session one", session_id="s1", _ticket="btpa-5",
-                     _folder="/w/req-folder", _text="talks about BTPA-7 and ABC-1")
+    led["jira_prefixes"] = ["DATA"]
+    led["ignore_tickets"] = ["DATA-99"]
+    confirmed = item("claude", t, "Session one", session_id="s1", _ticket="data-5",
+                     _folder="/w/req-folder", _text="talks about DATA-7 and ABC-1")
     led["assign"]["s1"] = {"subject": "Confirmed subj"}
     inferred = item("email", t, "RE: Report", _key="k1")
     same = item("meeting", t, "Stand-up", _subject="Stand-up")
-    ignored = item("claude", t, "Other ticket", session_id="s2", _ticket="BTPA-99",
-                   _text="BTPA-99")
+    ignored = item("claude", t, "Other ticket", session_id="s2", _ticket="DATA-99",
+                   _text="DATA-99")
     other = item("claude", t, "", session_id="s3", _ticket="Other")
     audit.prepare_items([confirmed, inferred, same, ignored, other], {"k1": "Report subj"}, led)
 
     assert confirmed["_status"] == "confirmed" and confirmed["subject"] == "Confirmed subj"
-    assert confirmed["_declared"] == "BTPA-5"
-    assert confirmed["_jira"] == {"BTPA-5", "BTPA-7"}
+    assert confirmed["_declared"] == "DATA-5"
+    assert confirmed["_jira"] == {"DATA-5", "DATA-7"}
     assert confirmed["_lkey"] == "s1" and "req" in confirmed["_title_tok"] | confirmed["_tok"]
     assert inferred["_status"] == "inferred" and inferred["subject"] == "Report subj"
     assert inferred["_clean"] == "Report" and inferred["_lkey"].startswith("evt_")

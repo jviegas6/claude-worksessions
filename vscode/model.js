@@ -136,7 +136,7 @@ function passes(filters, now) {
 const filtersActive = f => !!(f && ((f.day && f.day.preset && f.day.preset !== "any") ||
                                     (f.tickets && f.tickets.length) || (f.artifacts && f.artifacts !== "any")));
 
-// A short description of what is filtered, for the panel's subtitle: "today · BTPA-1 · with artifacts".
+// A short description of what is filtered, for the panel's subtitle: "today · PROJ-1 · with artifacts".
 function describeFilters(f) {
   if (!filtersActive(f)) return "";
   const parts = [];

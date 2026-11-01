@@ -13,6 +13,8 @@
   kept), and puts the reply on the clipboard to accept or reject. Any browser; the same from VS
   Code, T3 Code or a terminal. A local server started on demand (`127.0.0.1`, `CWS_PLAN_PORT`,
   token in `~/.cache/claude-worksessions/plan-server.json`) serves only the work root.
+- `install.sh` only suggests `--update` when a newer release exists: on a branch ahead of the
+  newest tag, it used to suggest it, and `--update` then went back to that older release.
 
 ## [2.30.0] — 2026-11-01
 

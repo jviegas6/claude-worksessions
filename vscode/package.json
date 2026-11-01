@@ -277,6 +277,12 @@
         "title": "Sweep empty folders (claude-delete --empty-folders)",
         "category": "Work sessions",
         "icon": "$(trash)"
+      },
+      {
+        "command": "claudeWorksessions.openPlan",
+        "title": "Open plan (claude-plan)",
+        "category": "Work sessions",
+        "icon": "$(type-hierarchy)"
       }
     ],
     "menus": {
@@ -432,6 +438,16 @@
           "command": "claudeWorksessions.copyForEmail",
           "when": "view == claudeWorksessions.sessions && viewItem == file-md",
           "group": "1_open@2"
+        },
+        {
+          "command": "claudeWorksessions.openPlan",
+          "when": "view == claudeWorksessions.sessions && viewItem =~ /^request/",
+          "group": "inline@2"
+        },
+        {
+          "command": "claudeWorksessions.openPlan",
+          "when": "view == claudeWorksessions.sessions && viewItem =~ /^request/",
+          "group": "1_open@2"
         }
       ],
       "commandPalette": [
@@ -517,6 +533,10 @@
         },
         {
           "command": "claudeWorksessions.guardMode.enforce",
+          "when": "false"
+        },
+        {
+          "command": "claudeWorksessions.openPlan",
           "when": "false"
         }
       ],

@@ -456,6 +456,15 @@ function pending(bar) {
   bar.terminal("pending", bar.data.work_root, "claude-pending" + (profile ? ` -p ${profile}` : ""), "pending");
 }
 
+// Open plan: the request's plan.json as a DAG in the browser editor. claude-plan starts its
+// local server when needed and opens the default browser; nothing runs in a terminal.
+function openPlan(el) {
+  const r = el && el.request;
+  if (!r) return;
+  run(binPath("claude-plan"), [r.path]).catch(err =>
+    vscode.window.showErrorMessage(`claude-plan failed: ${err.message}`));
+}
+
 // Sweep empty folders: request folders with no session and no files, older than a week, to the bin.
 function sweepEmpty(bar) {
   bar.terminal("sweep empty folders", bar.data.work_root, "claude-delete --empty-folders", "sweep");
@@ -906,6 +915,7 @@ function activate(context) {
     cmd("setWaiting", el => setWaiting(bar, el)),
     cmd("pending", () => pending(bar)),
     cmd("sweepEmpty", () => sweepEmpty(bar)),
+    cmd("openPlan", el => openPlan(el)),
     cmd("grouping", async () => {
       const pick = await vscode.window.showQuickPick(
         M.GROUPINGS.map(g => ({ label: M.GROUPING_LABELS[g], g, description: g === bar.grouping ? "current" : "" })),

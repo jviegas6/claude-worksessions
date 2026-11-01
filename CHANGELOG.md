@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.28.0] — 2026-11-01
+
+- **`claude-new --t3 --prompt TEXT`** starts the thread itself, on the right profile: the
+  request folder is created as usual, then a T3 thread with TEXT as its first message runs on
+  the T3 Claude instance whose config dir is the session's profile, and opens in the app. So a
+  one-click `/weekly-review` (personal profile, with Microsoft 365) is a T3 project script.
+  Before, `--prompt` was terminal-only and the profile had to be picked in each thread.
+- `claude-t3-sync --open DIR --prompt TEXT --profile NAME` does it; the model is the one last
+  used on that instance, else `CWS_T3_MODEL`.
+
 ## [2.27.2] — 2026-11-01
 
 - **weekly-review and workday-recap no longer repeat each other or the script.** The rules

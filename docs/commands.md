@@ -48,13 +48,15 @@ that profile. `ended_at` is filled in when Claude exits.
 - `--t3` adds the new folder to [T3 Code](https://github.com/pingdotgg/t3code) as a project
   titled `TICKET · YYYY-MM-DD · name` and opens it in the running app (through
   [`claude-t3-sync --open`](#claude-t3-sync)). Start a thread there and pick the Claude instance
-  of the profile you chose: T3 Code picks the profile per thread, `claude-new` can't. Hooks,
+  of the profile you chose: T3 Code picks the profile per thread. With `--prompt`, `claude-new`
+  starts that thread itself, on the profile's instance (see `claude-t3-sync --prompt`). Hooks,
   the guard and the audit work as in the terminal, since they read the folder's `.session.json`.
 - `--cli` starts Claude in the terminal. With none of `-c`, `--t3`, `--cli`, `CWS_OPEN` in
   `config.env` decides (`cli`, `code` or `t3`; default `cli`). Continuing in a recent folder
   opens the same way.
 - `--prompt TEXT` starts Claude with `TEXT` as its first prompt — `--prompt /weekly-review`
-  opens the new request straight into that skill. Only in the terminal (`--cli`).
+  opens the new request straight into that skill. With `--t3` it is the first message of a
+  thread started on the profile's T3 instance. Not with `-c`.
 - `-l` lists the 15 most recent sessions with profile, ticket and type.
 - `-L` / `--profiles` lists the configured profiles: which is the default and which is
   shared, the description, the gateway URL if any, and a warning if `~/.claude-<name>`
@@ -67,6 +69,7 @@ claude-t3-sync                 show what a sync would change
 claude-t3-sync --apply         make the changes; an undo file goes to _audit/t3/
 claude-t3-sync --undo FILE     put back what that run changed
 claude-t3-sync --open DIR      add DIR to T3 Code under its title, or retitle it, and open it
+               [--prompt TEXT --profile NAME]   start a thread with TEXT instead, and open it
 claude-t3-sync --thread ID [--fallback DIR]
                                open the T3 thread that ran Claude session ID, in the T3 app
                 [--days N] [--limit N]
@@ -96,6 +99,11 @@ session it runs, one imported from Claude's history is named after it — and op
 desktop app through its app link, `t3code://threads/<environment>/<thread>` (`t3 app` would only
 open a new thread in the project). With no such thread (never run in T3, or deleted there),
 `--fallback DIR` opens DIR's project instead.
+
+`--open DIR --prompt TEXT --profile NAME` starts a thread in DIR's project with TEXT as its first
+message (`t3 thread start`) and opens it. It runs on the T3 Claude instance whose
+`CLAUDE_CONFIG_DIR` is `~/.claude-NAME` (T3's *Settings > Providers*), with the model last used
+on that instance, else `CWS_T3_MODEL`; with neither, T3's project default decides.
 
 ## claude-goal
 

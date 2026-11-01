@@ -5,6 +5,9 @@
   claude-t3-sync --apply         make those changes; an undo file goes to _audit/t3/
   claude-t3-sync --undo FILE     put back what that run changed
   claude-t3-sync --open DIR      add DIR to T3 under its title (or retitle it) and open it there
+                 [--prompt TEXT --profile NAME]
+                                 start a thread there instead, with TEXT, on the T3 Claude
+                                 instance whose config dir is ~/.claude-NAME, and open it
   claude-t3-sync --thread ID     open the T3 thread that ran Claude session ID, in the T3 app
                  [--fallback DIR]  (no such thread: --open DIR instead)
 
@@ -116,13 +119,44 @@ def open_thread(session_id, fallback=None):
     print("T3 Code thread: " + link)
 
 
-def t3(*args):
-    """Run t3; (ok, first error line)."""
+def t3(*args, out=False):
+    """Run t3; (ok, first error line), or with out=True (ok, first error line, stdout)."""
     r = subprocess.run([t3_bin()] + list(args), capture_output=True, text=True)
     lines = [ln.strip() for ln in (r.stderr + r.stdout).splitlines()
              if ln.strip() and not ln.strip().startswith("at ")]
     err = next((ln for ln in lines if "Error" in ln), lines[0] if lines else "")
-    return r.returncode == 0, err
+    return (r.returncode == 0, err, r.stdout.strip()) if out else (r.returncode == 0, err)
+
+
+def instance_for(profile):
+    """The T3 Claude provider instance that runs with ~/.claude-<profile>, from T3's settings."""
+    want = os.path.realpath(os.path.join(HOME, ".claude-" + profile))
+    try:
+        with open(os.path.join(t3_userdata(), "settings.json")) as fh:
+            instances = json.load(fh).get("providerInstances") or {}
+    except (OSError, ValueError):
+        instances = {}
+    for iid, inst in instances.items():
+        home = ((inst or {}).get("config") or {}).get("homePath") or ""
+        if inst.get("enabled", True) and home and os.path.realpath(os.path.expanduser(home)) == want:
+            return iid
+    raise SystemExit("claude-t3-sync: no T3 Claude instance uses ~/.claude-{} (add one in T3: "
+                     "Settings > Providers, CLAUDE_CONFIG_DIR ~/.claude-{})".format(profile, profile))
+
+
+def model_for(instance):
+    """The model last used on that instance in T3, else CWS_T3_MODEL; None leaves it to T3."""
+    con = sqlite3.connect("file:{}?mode=ro".format(t3_db()), uri=True)
+    try:
+        row = con.execute(
+            "select json_extract(payload_json, '$.modelSelection.model') from orchestration_v2_projection_threads "
+            "where provider_instance_id = ? and json_extract(payload_json, '$.modelSelection.model') is not null "
+            "order by updated_at desc limit 1", (instance,)).fetchone()
+    except sqlite3.Error:
+        row = None
+    finally:
+        con.close()
+    return (row and row[0]) or CA.CONFIG.get("CWS_T3_MODEL") or None
 
 
 def request_rel(path):
@@ -255,8 +289,9 @@ def undo(path):
     return failed
 
 
-def open_in_t3(path):
-    """Add the folder to T3 under its title, or retitle the project it already is; open it."""
+def open_in_t3(path, prompt=None, profile=None):
+    """Add the folder to T3 under its title, or retitle the project it already is; open it.
+    With a prompt, start a thread there on the profile's instance instead and open that."""
     path = os.path.realpath(path)
     name = title(path) if request_rel(path) else os.path.basename(path)
     ok, err = t3("project", "add", path, "--title", name)
@@ -264,6 +299,22 @@ def open_in_t3(path):
         ok, err = t3("project", "rename", path, name)
     if not ok:
         raise SystemExit("claude-t3-sync: T3 Code could not add {}: {}".format(path, err))
+    if prompt:
+        args = ["thread", "start", path, prompt, "--title", name]
+        if profile:
+            instance = instance_for(profile)
+            model = model_for(instance)
+            if model:                     # t3 ignores --provider without --model
+                args += ["--provider", instance, "--model", model]
+            else:
+                print("No model known for {}; T3 uses the project's default instance.".format(instance))
+        ok, err, tid = t3(*args, out=True)
+        if not ok or not tid:
+            raise SystemExit("claude-t3-sync: T3 Code could not start a thread in {}: {}".format(path, err))
+        link = thread_link(tid.splitlines()[-1].strip())
+        subprocess.run((["open"] if sys.platform == "darwin" else ["xdg-open"]) + [link], check=False)
+        print("T3 Code: {} · thread started".format(name))
+        return
     ok, err = t3("app", path)
     if not ok:
         raise SystemExit("claude-t3-sync: T3 Code could not open {} (is the app running?): {}".format(path, err))
@@ -278,6 +329,8 @@ def main(argv=None):
     p.add_argument("--limit", type=int, help="at most N changes, newest folders first")
     p.add_argument("--undo", metavar="FILE", help="put back what the run that wrote FILE changed")
     p.add_argument("--open", metavar="DIR", help="add DIR to T3 Code (titled) and open it there")
+    p.add_argument("--prompt", metavar="TEXT", help="with --open: start a thread with TEXT and open it")
+    p.add_argument("--profile", metavar="NAME", help="with --prompt: run it on the instance using ~/.claude-NAME")
     p.add_argument("--thread", metavar="ID", help="open the T3 thread that ran Claude session ID, in the T3 app")
     p.add_argument("--fallback", metavar="DIR", help="with --thread: open DIR's project when there is no thread")
     a = p.parse_args(argv)
@@ -285,7 +338,7 @@ def main(argv=None):
         open_thread(a.thread, a.fallback)
         return 0
     if a.open:
-        open_in_t3(a.open)
+        open_in_t3(a.open, a.prompt, a.profile)
         return 0
     if a.undo:
         return 1 if undo(a.undo) else 0

@@ -158,7 +158,9 @@ version_notice() {
     git -C "$REPO" fetch --tags --quiet 2>/dev/null || return 0
   fi
   local newest="$(newest_tag)"
-  [[ -n "$newest" && "$newest" != "v$VERSION" ]] && \
+  # only a newer release: on a branch ahead of the newest tag, --update would go back
+  [[ -n "$newest" && "$newest" != "v$VERSION" &&
+     "$(print -rl -- "${newest#v}" "$VERSION" | sort -V | tail -1)" != "$VERSION" ]] && \
     say "v$VERSION installed · $newest available — ./install.sh --update"
   return 0
 }

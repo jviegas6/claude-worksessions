@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.31.1] — 2026-11-01
+
+- `install.sh` only suggests `--update` when a newer release exists: on a branch ahead of the
+  newest tag, it used to suggest it, and `--update` then went back to that older release.
+
 ## [2.31.0] — 2026-11-01
 
 - **Plans as a DAG** (`claude-plan`, the `/plan` skill, **Open plan** on a request in the VS Code

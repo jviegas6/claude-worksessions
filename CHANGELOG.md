@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.27.2] — 2026-11-01
+
+- **weekly-review and workday-recap no longer repeat each other or the script.** The rules
+  for gathering a day's evidence (time zones, the user's own messages, chat bursts, the
+  leave / personal / notice classes, rate limits) live only in `workday-recap`; `weekly-review`
+  gathers a missing day by following it. Neither skill re-documents `claude-audit`'s options,
+  durations or utilisation arithmetic any more: they point to `claude-audit --help-all`, and
+  the arithmetic stays described once, in the LLD. 41 lines fewer, same behaviour.
+
 ## [2.27.1] — 2026-10-31
 
 - `claude-t3-sync --thread` (and so `claude-search` with `CWS_OPEN=t3`) opens the thread in the

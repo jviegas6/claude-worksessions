@@ -91,7 +91,8 @@ Two things to get right:
   covered, and warns when results are partial. Read it, and pass any limitation
   through to the user rather than implying full coverage.
 
-Paginate with `nextOffset` when the day is busy.
+Paginate with `nextOffset` when the day is busy. Busy days hit Graph rate limits (429):
+fetch one day at a time, and say where coverage is partial.
 
 ## Step 4 — emails sent
 
@@ -154,15 +155,9 @@ claude-audit --day YYYY-MM-DD --detail          # every activity, with task and 
 claude-audit --day YYYY-MM-DD --detail --csv    # saved as _audit/claude-audit_<day>_detail.csv
 ```
 
-It always reads `_audit/activity/`. Each row carries `event_id`, `subject_id`,
-`session_id` and `row_id` — the weekly summary row it rolls up into
-(`claude-audit --week … --csv` writes those rows plus a `_breakdown.csv` keyed by
-`row_id`). Ids are content-derived: identical on every re-run, and a `subject_id`
-is the same across days whenever the subject name is, so keep names stable.
-`duration` (rounded up to the half hour) and `duration_exact` (unrounded) are on
-each subject's first row per period (the day, or each week); `duration_exact`
-summed by `row_id` equals
-the summary's hours, and the detail view prints that reconciliation check.
+It always reads `_audit/activity/`. Ids are content-derived, so a `subject_id` is the
+same across days whenever the subject name is: keep names stable. `claude-audit
+--help-all` and `--schema` describe the columns and the file format.
 
 Collapse chat bursts before writing them out — a run of messages in one chat with
 gaps under ~30 minutes is one conversation and becomes one row, with the message
@@ -172,8 +167,10 @@ Classify calendar entries that are not meetings you attend — the weekly review
 reads these day files, so the classes matter:
 
 - `"source": "leave"` — out-of-office that is all-day or four hours or more
-  (`showAs: "oof"`), including multi-day blocks; the weekly review turns these into
-  Leave days. Put a multi-day block in the file of the first day it covers.
+  (`showAs: "oof"`), including multi-day blocks and ones that began before the days
+  you are gathering; the weekly review turns these into Leave days. Put a multi-day
+  block in the file of the first gathered day it covers. The calendar is the only
+  out-of-office source: the connector can *set* automatic replies but not read them.
 - `"source": "personal"` — lunch, focus time, other short self-booked blocks.
 - `"source": "notice"` — tentative or free entries, change windows and
   announcements (e.g. patching change windows, which can run for many hours). When two
@@ -218,22 +215,12 @@ unlinked event is its own subject, which is a perfectly good answer. In the pros
 recap, say which links were inferred so the user can correct them; a correction
 is cheap because the activity JSON is kept and can be re-run.
 
-### How `duration` is computed
+### Durations
 
-Per subject, rounded up to `--round-to` (default 30 min), written on the
-**first row only** so the column sums straight down to a day total:
-
-- session `worked_exact` counts in full;
-- a meeting adds its booked time **only** if no session in the same subject was
-  running through it — otherwise the same clock is counted twice;
-- a subject made only of emails/chats is measured like `worked`: each burst's own
-  span plus the gaps between messages, each gap capped at `--read-cap`. A lone
-  email is an instant and costs nothing; two mails three hours apart are two
-  minutes, not three hours;
-- anything else with no measured time stays at 0.0.
-
-**Never sum `worked_h` and `scheduled_h`.** They overlap: a session can run
-through a meeting,. Report them as two figures.
+The script computes `duration` per subject and never counts a meeting that a session in
+the same subject ran through. Don't recompute it. **Never sum `worked_h` and
+`scheduled_h`** yourself: a session can run through a meeting, so report them as two
+figures.
 
 Write the prose recap to `{{CWS_WORK_ROOT}}/_daily/YYYY-MM-DD.md`
 (create `_daily/` if needed; the leading underscore keeps it out of `claude-new -l`).

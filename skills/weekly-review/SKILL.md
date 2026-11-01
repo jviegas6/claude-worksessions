@@ -25,24 +25,12 @@ Default: this week from Thursday on, otherwise last week. Say which week you cho
 
 ## 1 — Evidence for every weekday
 
-Each Mon–Fri needs `_audit/activity/YYYY-MM-DD.json`. The daily recap writes these;
-gather any that are missing using the workday-recap rules (time-zone
-normalisation, the user's own messages only, chat bursts collapsed to one row).
-Never overwrite an existing day file — it may hold confirmed subjects.
-
-Classify calendar entries for the weekly view:
-
-- `"source": "leave"` — out-of-office blocks that are all-day or four hours or more
-  (`showAs: "oof"`), including multi-day blocks that began before the week. Put
-  the block in the file of the first weekday it covers. The calendar is the only
-  OOO source: the connector can *set* automatic replies but has no tool to read them.
-- `"source": "personal"` — lunch, focus time. Visible, never counted.
-- `"source": "notice"` — tentative or free entries, change windows and
-  announcements (e.g. patching change windows). When two meetings clash, the one
-  not accepted is a notice. Visible, never counted.
-
-Chat search hits Graph rate limits (429) on busy days: fetch one day at a time,
-page with `nextOffset`, and say where coverage is partial.
+Each Mon–Fri needs `_audit/activity/YYYY-MM-DD.json`. Gather a missing day exactly as
+the `workday-recap` skill does (read its SKILL.md): its steps 0–4 and the day file of
+step 6 — local times, the user's own messages, chat bursts as one row, calendar entries
+classed as leave, personal or notice. Skip its prose recap. That skill is the one place
+those rules live; don't restate them here. Never overwrite an existing day file — it may
+hold confirmed subjects.
 
 ## 2 — Jira context (read-only)
 
@@ -166,40 +154,27 @@ usually work done in Jira itself; mention them, don't guess.
 ## 6 — Produce
 
 ```
-claude-audit --week YYYY-MM-DD              # the rows, every column, in the terminal
-claude-audit --week YYYY-MM-DD --detail     # every activity behind them, with task and ticket
-claude-audit --week YYYY-MM-DD --csv        # save: _audit/claude-audit_week-<monday>_summary.csv
-                                            # plus _breakdown.csv (hours, flag evidence, row_id)
+claude-audit --week YYYY-MM-DD             # the rows, every column
+claude-audit --week YYYY-MM-DD --detail    # the activities behind them
+claude-audit --week YYYY-MM-DD --by-type   # the week's split by task type: worth a line
 ```
 
-When the user is about to paste, suggest `--copy`: it copies the rows tab-separated,
-without a header, for the first empty tracker row. It overwrites whatever they had
-copied, so it's theirs to run (or yours when asked). A month is `--month YYYY-MM`:
-one block per week that starts in it.
+`claude-audit --help-all` lists every other option (CSV export, `--copy`, the Task Type
+column, `--month`); read it rather than relying on memory. What is yours to judge:
 
-`--detail` covers exactly the days the summary covers and ends with a reconciliation
-line: `duration_exact` summed by `row_id` equals each summary row's hours to the
-second. If it ever says "does NOT reconcile", report that to the user — it is a bug.
-
-The terminal table and the CSV carry a **Task Type** column (the type most of the
-row's time carries); `--copy` leaves it out, because the clipboard has to match the
-tracker's own columns — pass `--with-type` if the tracker has gained a Type column, or
-`--no-type` to drop it everywhere. `claude-audit --week YYYY-MM-DD --by-type` gives the week's
-split by type — worth a line in what you report.
-
-Show the rows. Then state plainly anything the run flagged: unmapped hours must
-be **zero** before the rows are pasted, and minor subjects left out.
+- Show the rows, then state plainly what the run flagged. Unmapped hours must be
+  **zero** before the rows are pasted.
+- `--detail` ends with a reconciliation line. "does NOT reconcile" is a bug: report it.
+- When the user is about to paste, suggest `--copy`. It overwrites their clipboard, so
+  it is theirs to run, or yours when asked.
 
 ## Rules
 
 - **Never paste guesses.** Unmapped time is kept out of the rows; resolve it or map
   it to `(ignore)`.
-- Utilisation is the share of **tracked** time — sessions, meetings, correspondence —
-  not of a 40-hour week. Leave takes days ÷ 5 first; the rest is split by largest
-  remainder in 10% steps. **Every worked row shows a percentage** — the user's rule,
-  0% makes no sense for work that happened. Each row gets at least one step, taken
-  from the row rounded up the most; if there are more rows than steps left after
-  leave, the week drops to 5% steps.
+- Utilisation is computed by the script: the share of **tracked** time (sessions,
+  meetings, correspondence), not of a 40-hour week, after leave, and every worked row
+  gets at least one step. Explain it when asked; never recompute or adjust it by hand.
 - Columns E–K come from **evidence**, per row, per week — not fixed per task. The
   definitions are the tracker's header row: E Assessments / Roadmaps / Reference
   Architectures / Security / Standards, F Func Spec support, G HLD delivered,
@@ -212,9 +187,6 @@ be **zero** before the rows are pasted, and minor subjects left out.
 - Tickets in the ledger's `ignore_tickets` are never matched or suggested (see
   `review-rules.md` for the user's list). Record any new one with `"ignore_tickets"`
   and `"remove_tasks"` in a decisions file.
-- **Small subjects are counted, never left out, and never asked about.** Anything under
-  `--min-subject` (10 min) that isn't mapped goes to its best-matching task on that
-  task's default ticket — programme work to its epic — otherwise to the default
-  task. They show as `auto_mapped` in the detail CSV; glance at them, and
-  map any mis-filed one explicitly.
+- **Small subjects are mapped by the script, never asked about** (`auto_mapped` in the
+  detail CSV). Glance at them and map any mis-filed one explicitly.
 - Read-only everywhere except the ledger and the output files.

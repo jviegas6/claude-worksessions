@@ -28,7 +28,7 @@ success (a number, a test or who approves), who, date, risk. Each step:
  "deps": ["ids of the steps it comes after"]}
 ```
 
-Header: `ticket`, `title`, `goal`, `success`, `deadline`, `nodes`. Every step that changes something
+Header: `ticket`, `title`, `goal`, `success`, `deadline` (`YYYY-MM-DD`), `nodes`. Every step that changes something
 has a rollback, or says why it can't be undone. Every step has a date: a best estimate is better
 than none. Order comes only from `deps`; there are no positions.
 

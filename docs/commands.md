@@ -75,8 +75,8 @@ A request's plan is `plan.json` in its folder: a header (ticket, title, goal, su
 deadline) and steps, each with who, status, a date, what has to happen, what can go wrong, the
 check, the rollback, the evidence and the steps it comes after. The editor draws it as a DAG:
 drag a step onto another to put it after, onto its top strip to put it before, onto its sides
-to run it in parallel; the layout comes only from those dependencies. Steps with no date show
-in red.
+to run it in parallel; the layout comes only from those dependencies. Steps with no date, and a
+plan with no deadline, show in red; both are dates (`YYYY-MM-DD`).
 
 Every save keeps the file it replaces as `plan.vN.json`, and is refused when `plan.json`
 changed on disk since the editor loaded it; with nothing unsaved, the editor reloads by itself

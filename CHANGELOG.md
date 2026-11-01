@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.31.2] — 2026-11-01
+
+- Plans: the deadline is a date (`YYYY-MM-DD`), picked with a date field like each step's date,
+  and shown in red when it's missing or isn't a date.
+
 ## [2.31.1] — 2026-11-01
 
 - `install.sh` only suggests `--update` when a newer release exists: on a branch ahead of the

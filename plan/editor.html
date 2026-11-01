@@ -109,7 +109,7 @@ function layers(){
 function hasCycle(){try{layers();return false}catch{return true}}
 function render(){
   layers();
-  $("#hdr").innerHTML=`<b>${plan.ticket?esc(plan.ticket)+" · ":""}${esc(plan.title)}</b> <span style="font-size:11px">(click to edit)</span><br>Goal: ${esc(plan.goal)||"—"}<br>Success: ${esc(plan.success)||"—"}${plan.deadline?"<br>Deadline: "+esc(plan.deadline):""}`;
+  $("#hdr").innerHTML=`<b>${plan.ticket?esc(plan.ticket)+" · ":""}${esc(plan.title)}</b> <span style="font-size:11px">(click to edit)</span><br>Goal: ${esc(plan.goal)||"—"}<br>Success: ${esc(plan.success)||"—"}<br>Deadline: ${fmtDate(plan.deadline)}`;
   $("#hdr").onclick=editPlan; $("#hdr").style.cursor="pointer";
   if(!plan.nodes.length)$("#layers").innerHTML='<div class="empty">No steps yet. Click “+ New step”.</div>';
   const L=$("#layers"); if(plan.nodes.length)L.innerHTML="";
@@ -196,9 +196,10 @@ function ingest(t){
 function select(id){selId=id;render()}
 function editPlan(){
   selId=null; document.querySelectorAll(".node.sel").forEach(e=>e.classList.remove("sel"));
-  const F=[["title","Plan"],["ticket","Ticket (e.g. BTPA-1234)"],["goal","Goal",1],["success","Success: how we know it's right",1],["deadline","Deadline"]];
+  const F=[["title","Plan"],["ticket","Ticket (e.g. BTPA-1234)"],["goal","Goal",1],["success","Success: how we know it's right",1],["deadline","Deadline","date"]];
   $("#side").innerHTML="<h3 style='margin:0 0 4px'>Plan</h3>"+F.map(([k,l,ta])=>`<label>${l}</label>`+
-    (ta?`<textarea id="p_${k}">${esc(plan[k])}</textarea>`:`<input id="p_${k}" value="${esc(plan[k])}">`)).join("");
+    (ta==="date"?`<input id="p_${k}" type="date" value="${ISO.test(plan[k]||"")?plan[k]:""}">`
+     :ta?`<textarea id="p_${k}">${esc(plan[k])}</textarea>`:`<input id="p_${k}" value="${esc(plan[k])}">`)).join("");
   $("#side").innerHTML+=`<label style="margin-top:16px">Steps <button class="ai" id="askAdd">✨ suggest missing steps</button></label>`+
     sugAdd.map((a,i)=>`<div class="sug"><div class="lbl">Suggested new step</div><div class="v"><b>${esc(a.title)}</b>${a.when?" · "+esc(a.when):""}${a.deps?.length?"\nAfter: "+a.deps.map(d=>esc(byId(d)?.title||d)).join(", "):""}${a.does?"\n"+esc(a.does):""}${a.risks?.length?"\nRisks: "+a.risks.map(esc).join("; "):""}</div><button data-addacc="${i}">Accept</button><button data-addrej="${i}">Reject</button></div>`).join("");
   $("#askAdd").onclick=()=>copyAsk(null,"add");

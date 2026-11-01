@@ -1,0 +1,366 @@
+#!/usr/bin/env python3
+"""claude-plan: a request's plan as a DAG of steps, edited in the browser.
+
+  claude-plan [DIR]       open DIR's plan (default: the current folder) in the default browser,
+                          starting the local server if it isn't running; prints the URL
+  claude-plan --url DIR   start the server if needed and print the URL, open nothing
+  claude-plan --serve     run the server in the foreground (what the commands above start)
+  claude-plan --stop      stop the server
+
+The plan is DIR/plan.json: a header (ticket, title, goal, success, deadline) and steps, each
+with who, status, a date, what has to happen, what can go wrong, the check, the rollback and
+the steps it depends on. Every save keeps the file it replaces as plan.vN.json, and a save is
+refused when plan.json changed on disk since the editor loaded it (Claude updates it too).
+
+✨ in the editor asks Claude Code for a suggestion: `claude -p` in DIR, with DIR's profile, and
+only Read, Grep and Glob — no MCP servers, no edits, no shell, nothing kept as a session. The
+reply goes to the clipboard; the editor's "Paste suggestion" reads it. Works the same from
+VS Code, T3 Code or a terminal, because nothing here depends on the app that started it.
+
+The server listens on 127.0.0.1 only (CWS_PLAN_PORT, 8765, or the next free port), serves only
+folders inside the work root, and every call needs the token kept in
+~/.cache/claude-worksessions/plan-server.json (0600), which is in the URL it opens.
+"""
+
+import http.server
+import importlib.machinery
+import importlib.util
+import json
+import os
+import re
+import secrets
+import shutil
+import signal
+import subprocess
+import sys
+import threading
+import time
+import urllib.parse
+import urllib.request
+
+
+def load_audit():
+    """claude-audit, for the configuration and the folder's profile."""
+    path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "claude-audit")
+    if not os.path.isfile(path):
+        path = os.path.join(os.path.expanduser("~"), ".local", "bin", "claude-audit")
+    loader = importlib.machinery.SourceFileLoader("claude_audit", path)
+    spec = importlib.util.spec_from_loader("claude_audit", loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+CA = load_audit()
+HOME = os.path.expanduser("~")
+ROOT = os.path.realpath(CA.DEFAULT_ROOT)
+EDITOR = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "plan", "editor.html")
+STATE = os.path.join(HOME, ".cache", "claude-worksessions", "plan-server.json")
+LOG = os.path.join(HOME, ".cache", "claude-worksessions", "plan-server.log")
+PLAN = "plan.json"
+VERSIONED = re.compile(r"^plan\.v(\d+)\.json$")
+ASK_TIMEOUT = 600
+RULES = ("You answer suggestion requests from a plan editor (a DAG of steps). Reply with ONLY the "
+         "JSON block the request asks for: no prose, no markdown fences. Make the suggestions "
+         "specific to this request folder and the user's environment; read the folder's files "
+         "if that helps.")
+ASK_LOCK = threading.Lock()
+
+
+class Conflict(Exception):
+    """plan.json changed on disk since the editor loaded it."""
+
+
+# --- the plan on disk -----------------------------------------------------------------------
+
+def request_dir(path):
+    """DIR as a real path, if it is a folder inside the work root; ValueError otherwise."""
+    real = os.path.realpath(path or "")
+    if not path or not os.path.isdir(real):
+        raise ValueError("not a folder: {}".format(path))
+    if os.path.commonpath([real, ROOT]) != ROOT:
+        raise ValueError("only folders inside the work root ({}) have plans here".format(ROOT))
+    return real
+
+
+def mtime(d):
+    """plan.json's modification time in ns, or None when there is no plan yet."""
+    try:
+        return os.stat(os.path.join(d, PLAN)).st_mtime_ns
+    except FileNotFoundError:
+        return None
+
+
+def read_plan(d):
+    """(plan or None, mtime or None)."""
+    m = mtime(d)
+    if m is None:
+        return None, None
+    with open(os.path.join(d, PLAN)) as fh:
+        return json.load(fh), m
+
+
+def next_version(d):
+    nums = [int(m.group(1)) for m in map(VERSIONED.match, os.listdir(d)) if m]
+    return max(nums, default=0) + 1
+
+
+def write_plan(d, plan, base):
+    """Save plan as DIR/plan.json; (new mtime, name of the backup or None).
+
+    base is the mtime the editor loaded (None for a new plan): anything else on disk means
+    someone else saved since, and nothing is written."""
+    if not isinstance(plan, dict) or not isinstance(plan.get("nodes"), list):
+        raise ValueError("a plan needs a list of nodes")
+    current = mtime(d)
+    if current != base:
+        raise Conflict()
+    backup = None
+    if current is not None:
+        backup = "plan.v{}.json".format(next_version(d))
+        shutil.copy2(os.path.join(d, PLAN), os.path.join(d, backup))
+    tmp = os.path.join(d, ".plan.json.tmp")
+    with open(tmp, "w") as fh:
+        json.dump(plan, fh, indent=2, ensure_ascii=False)
+        fh.write("\n")
+    os.replace(tmp, os.path.join(d, PLAN))
+    return mtime(d), backup
+
+
+# --- ✨: Claude Code, read-only ----------------------------------------------------------------
+
+def claude_bin():
+    for cand in (CA.CONFIG.get("CWS_CLAUDE_BIN"), shutil.which("claude"), os.path.join(HOME, ".local", "bin", "claude")):
+        if cand and os.path.isfile(os.path.expanduser(cand)) and os.access(os.path.expanduser(cand), os.X_OK):
+            return os.path.expanduser(cand)
+    raise RuntimeError("Claude Code's claude command not found (or set CWS_CLAUDE_BIN)")
+
+
+def config_dir(d):
+    """~/.claude-<profile> of the request folder (its .session.json), else the default profile."""
+    profile = CA.profile_for(d)
+    if profile in ("", "unknown"):
+        profile = CA.CONFIG.get("CWS_DEFAULT_PROFILE") or CA.PROFILES[0]
+    return os.path.join(HOME, ".claude-" + profile)
+
+
+def copy_to_clipboard(text):
+    for cmd in (["pbcopy"], ["wl-copy"], ["xclip", "-selection", "clipboard"], ["clip.exe"]):
+        if shutil.which(cmd[0]):
+            subprocess.run(cmd, input=text, text=True, check=True)
+            return True
+    return False
+
+
+def ask(d, text):
+    """Claude Code's reply to a ✨ request about DIR's plan; also put on the clipboard."""
+    args = [claude_bin(), "-p", "--tools", "Read,Grep,Glob", "--strict-mcp-config",
+            "--no-session-persistence", "--append-system-prompt", RULES]
+    env = dict(os.environ, CLAUDE_CONFIG_DIR=config_dir(d))
+    with ASK_LOCK:  # one at a time: each costs a Claude run
+        try:
+            r = subprocess.run(args, input=text, capture_output=True, text=True, cwd=d, env=env, timeout=ASK_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            raise RuntimeError("Claude took more than {} s".format(ASK_TIMEOUT))
+    if r.returncode != 0 or not r.stdout.strip():
+        detail = (r.stderr or r.stdout).strip().splitlines()
+        raise RuntimeError("claude -p failed ({}): {}".format(r.returncode, detail[-1] if detail else "no output"))
+    reply = r.stdout.strip()
+    if not copy_to_clipboard(reply):
+        raise RuntimeError("no clipboard command found (pbcopy, wl-copy, xclip or clip.exe)")
+    return reply
+
+
+# --- the server -----------------------------------------------------------------------------
+
+def make_handler(token):
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, fmt, *args):  # keep request lines out of the log; errors are reported
+            pass
+
+        def reply(self, code, body, ctype="application/json"):
+            data = body if isinstance(body, bytes) else json.dumps(body).encode()
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(data)
+
+        def route(self):
+            url = urllib.parse.urlsplit(self.path)
+            query = urllib.parse.parse_qs(url.query)
+            return url.path, (query.get("dir") or [""])[0]
+
+        def authorised(self):
+            if secrets.compare_digest(self.headers.get("X-Token", ""), token):
+                return True
+            self.reply(403, {"error": "wrong token: open the plan with claude-plan or /plan"})
+            return False
+
+        def body(self):
+            return self.rfile.read(int(self.headers.get("Content-Length") or 0)).decode()
+
+        def do_GET(self):
+            path, folder = self.route()
+            if path == "/":
+                with open(EDITOR, "rb") as fh:
+                    return self.reply(200, fh.read(), "text/html; charset=utf-8")
+            if path == "/health":
+                return self.reply(200, {"ok": True, "pid": os.getpid()}) if self.authorised() else None
+            if path not in ("/plan", "/mtime"):
+                return self.reply(404, {"error": "not found"})
+            if not self.authorised():
+                return None
+            try:
+                d = request_dir(folder)
+                if path == "/mtime":
+                    return self.reply(200, {"mtime": mtime(d)})
+                plan, m = read_plan(d)
+                return self.reply(200, {"plan": plan, "mtime": m, "name": os.path.basename(d)})
+            except ValueError as e:
+                return self.reply(400, {"error": str(e)})
+
+        def do_POST(self):
+            path, folder = self.route()
+            if path not in ("/plan", "/ask"):
+                return self.reply(404, {"error": "not found"})
+            if not self.authorised():
+                return None
+            try:
+                d = request_dir(folder)
+                if path == "/plan":
+                    payload = json.loads(self.body())
+                    m, backup = write_plan(d, payload.get("plan"), payload.get("base"))
+                    return self.reply(200, {"mtime": m, "backup": backup})
+                text = self.body()
+                if not text.startswith("DAG-SUGGEST"):
+                    return self.reply(400, {"error": "not a suggestion request"})
+                return self.reply(200, {"ok": True, "reply": ask(d, text)})
+            except Conflict:
+                return self.reply(409, {"error": "plan.json changed on disk since it was loaded"})
+            except ValueError as e:
+                return self.reply(400, {"error": str(e)})
+            except RuntimeError as e:
+                return self.reply(502, {"error": str(e)})
+
+    return Handler
+
+
+def read_state():
+    try:
+        with open(STATE) as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return None
+
+
+def write_state(state):
+    os.makedirs(os.path.dirname(STATE), exist_ok=True)
+    fd = os.open(STATE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        json.dump(state, fh)
+
+
+def bind(port):
+    """A server on 127.0.0.1:port, or the next of the following ten ports that is free."""
+    for p in range(port, port + 11):
+        try:
+            return http.server.ThreadingHTTPServer(("127.0.0.1", p), None)
+        except OSError:
+            continue
+    raise SystemExit("claude-plan: no free port in {}-{}".format(port, port + 10))
+
+
+def serve():
+    token = secrets.token_urlsafe(24)
+    srv = bind(int(CA.CONFIG.get("CWS_PLAN_PORT") or 8765))
+    srv.RequestHandlerClass = make_handler(token)
+    write_state({"pid": os.getpid(), "port": srv.server_address[1], "token": token})
+    print("claude-plan: serving on http://127.0.0.1:{}".format(srv.server_address[1]), flush=True)
+    signal.signal(signal.SIGTERM, lambda *a: threading.Thread(target=srv.shutdown).start())
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        srv.server_close()
+        if (read_state() or {}).get("pid") == os.getpid():
+            os.remove(STATE)
+
+
+def alive(state):
+    """True if the server in state answers with its token."""
+    if not state:
+        return False
+    req = urllib.request.Request("http://127.0.0.1:{}/health".format(state["port"]), headers={"X-Token": state["token"]})
+    try:
+        with urllib.request.urlopen(req, timeout=1) as r:
+            return json.load(r).get("ok") is True
+    except (OSError, ValueError):
+        return False
+
+
+def ensure_server(wait=8.0):
+    """The running server's state, starting one in the background if needed."""
+    state = read_state()
+    if alive(state):
+        return state
+    os.makedirs(os.path.dirname(LOG), exist_ok=True)
+    with open(LOG, "a") as log:
+        subprocess.Popen([sys.executable, os.path.realpath(__file__), "--serve"], stdin=subprocess.DEVNULL,
+                         stdout=log, stderr=log, start_new_session=True)
+    deadline = time.time() + wait
+    while time.time() < deadline:
+        state = read_state()
+        if alive(state):
+            return state
+        time.sleep(0.2)
+    raise SystemExit("claude-plan: the server did not start; see {}".format(LOG))
+
+
+def url_for(state, d):
+    return "http://127.0.0.1:{}/?dir={}#{}".format(state["port"], urllib.parse.quote(d, safe=""), state["token"])
+
+
+def open_url(url):
+    for cmd in (["open"], ["wslview"], ["xdg-open"]):
+        if shutil.which(cmd[0]):
+            subprocess.run(cmd + [url], check=False)
+            return True
+    return False
+
+
+def stop():
+    state = read_state()
+    if not alive(state):
+        if state:
+            os.remove(STATE)
+        print("claude-plan: not running")
+        return
+    os.kill(state["pid"], signal.SIGTERM)
+    print("claude-plan: stopped")
+
+
+def main(argv):
+    if argv[:1] in (["-h"], ["--help"]):
+        print(__doc__.strip())
+        return
+    if argv[:1] == ["--serve"]:
+        return serve()
+    if argv[:1] == ["--stop"]:
+        return stop()
+    url_only = argv[:1] == ["--url"]
+    rest = argv[1:] if url_only else argv
+    try:
+        d = request_dir(rest[0] if rest else os.getcwd())
+    except ValueError as e:
+        raise SystemExit("claude-plan: {}".format(e))
+    url = url_for(ensure_server(), d)
+    print(url)
+    if not url_only and not open_url(url):
+        print("claude-plan: no browser opener found; open the URL above")
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

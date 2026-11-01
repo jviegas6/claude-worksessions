@@ -1112,3 +1112,33 @@ test("Set waiting…: the flag in .session.json, from a request, a session or a 
   assert.deepStrictEqual([fake.terminals.at(-1).sent[0], fake.terminals.at(-1).cwd], ["claude-delete --empty-folders", root]);
 
 });
+
+test("Open plan: claude-plan with the request's folder; its error is shown; on every request's row", async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cws-plan-"));
+  const bin = path.join(dir, "bin");
+  fs.mkdirSync(bin);
+  const log = path.join(dir, "plan.log");
+  fs.writeFileSync(path.join(bin, "claude-sessions"), `#!/bin/sh\necho '{"work_root":"${dir}","sessions":[]}'\n`, { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, "claude-plan"),
+    `#!/bin/sh\necho "$*" >> "${log}"\ncase "$1" in *broken*) echo "claude-plan: not a folder: $1" >&2; exit 1;; esac\n`, { mode: 0o755 });
+  const fake = fakeVscode({ sessionsCommand: path.join(bin, "claude-sessions"), openIn: "terminal" });
+  const ctx = context();
+  await load(fake).activate(ctx);
+  await settle(ctx);
+  const run = el => fake.commands.get("claudeWorksessions.openPlan")(el);
+  const wait = async cond => { for (let i = 0; i < 100 && !cond(); i++) await new Promise(r => setTimeout(r, 10)); };
+
+  run({ request: { path: "/w/2026/11/01/10-00-00_req" } });
+  await wait(() => fs.existsSync(log));
+  assert.deepStrictEqual(fs.readFileSync(log, "utf8").trim().split("\n"), ["/w/2026/11/01/10-00-00_req"]);
+  run(undefined);                                                               // from the palette: nothing
+  run({ request: { path: "/w/broken" } });
+  await wait(() => fake.messages.length && fake.messages.at(-1)[0] === "error");
+  assert.deepStrictEqual(fake.messages.at(-1), ["error", "claude-plan failed: claude-plan: not a folder: /w/broken"]);
+
+  const pkg = require("../package.json");
+  const menus = pkg.contributes.menus["view/item/context"].filter(m => m.command === "claudeWorksessions.openPlan");
+  assert.deepStrictEqual(menus.map(m => m.group), ["inline@2", "1_open@2"]);
+  assert.ok(menus.every(m => /viewItem =~ \/\^request\//.test(m.when)));
+  assert.ok(pkg.contributes.menus.commandPalette.some(m => m.command === "claudeWorksessions.openPlan" && m.when === "false"));
+});

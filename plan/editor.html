@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Plan</title>
+<style>
+:root{--bg:#fafafa;--fg:#1d1d1f;--mut:#6e6e73;--card:#fff;--bd:#d2d2d7;--ok:#2da44e;--warn:#d4a017;--info:#2f81f7;--bad:#e5534b;--sel:#2f81f7}
+@media (prefers-color-scheme:dark){:root{--bg:#161617;--fg:#e8e8ed;--mut:#98989d;--card:#1f1f21;--bd:#3a3a3c}}
+*{box-sizing:border-box}
+body{margin:0;font:13px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--bg);color:var(--fg);display:flex;height:100vh}
+#main{flex:1;overflow:auto;padding:14px 18px}
+#side{width:380px;border-left:1px solid var(--bd);overflow:auto;padding:14px 16px;background:var(--card)}
+.bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+button{font:inherit;padding:5px 10px;border:1px solid var(--bd);border-radius:6px;background:var(--card);color:var(--fg);cursor:pointer}
+button.primary{background:var(--sel);border-color:var(--sel);color:#fff} button:disabled{opacity:.45;cursor:default}
+#msg{color:var(--mut)} #msg.err{color:var(--bad)} #msg.ok{color:var(--ok)}
+.hdr{color:var(--mut);margin-bottom:8px} .hdr b{color:var(--fg)}
+.help{font-size:12px;color:var(--mut);margin-bottom:14px}
+#wrap{position:relative;padding-bottom:40px}
+svg{position:absolute;inset:0;pointer-events:none;overflow:visible;color:var(--mut)}
+.layer{display:flex;justify-content:center;gap:14px;margin-bottom:30px;position:relative;z-index:1}
+.node{position:relative;width:170px;border:1.5px solid var(--bd);border-left-width:5px;border-radius:8px;background:var(--card);padding:6px 9px;cursor:grab;user-select:none}
+.node .t{font-weight:600;font-size:12px} .node .w{font-size:11px;color:var(--mut);margin-top:2px}
+.node.sel{box-shadow:0 0 0 2px var(--sel)} .node.dragging{opacity:.35}
+.done{border-left-color:var(--ok)} .open{border-left-color:var(--warn)} .waiting{border-left-color:var(--info)} .failed{border-left-color:var(--bad)} .todo{border-left-color:var(--mut)}
+.node.drop-after{box-shadow:inset 0 -4px 0 var(--sel),0 0 0 2px var(--sel)}
+.node.drop-before{box-shadow:inset 0 4px 0 var(--sel),0 0 0 2px var(--sel)}
+.node.drop-left{box-shadow:inset 4px 0 0 var(--sel),0 0 0 2px var(--sel)}
+.node.drop-right{box-shadow:inset -4px 0 0 var(--sel),0 0 0 2px var(--sel)}
+#hint{position:fixed;pointer-events:none;background:var(--sel);color:#fff;font-size:11px;padding:2px 7px;border-radius:4px;display:none;z-index:9}
+label{display:block;font-size:11px;color:var(--mut);margin:10px 0 3px}
+input,select,textarea{width:100%;font:inherit;padding:5px 7px;border:1px solid var(--bd);border-radius:6px;background:var(--bg);color:var(--fg)}
+textarea{min-height:52px;resize:vertical}
+.deps{max-height:170px;overflow:auto;border:1px solid var(--bd);border-radius:6px;padding:4px 7px;background:var(--bg)}
+.deps label{display:flex;gap:6px;align-items:center;margin:2px 0;color:var(--fg);font-size:12px}
+.deps input{width:auto}
+.row2{display:flex;gap:8px} .row2>div{flex:1}
+.danger{color:var(--bad);border-color:var(--bad);margin-top:16px}
+.empty{color:var(--mut);margin-top:40px;text-align:center}
+button.ai{padding:0 5px;font-size:11px;margin-left:4px;border-color:transparent;background:transparent}
+button.ai:hover{border-color:var(--bd)}
+.sug{border:1px dashed var(--sel);border-radius:6px;padding:6px 8px;margin-top:4px;font-size:12px}
+.sug .v{white-space:pre-wrap;margin-bottom:6px}.sug button{font-size:11px;padding:2px 8px;margin-right:4px}
+.sug .lbl{font-size:10.5px;color:var(--sel);margin-bottom:3px}
+</style></head><body>
+<div id="main">
+  <div class="bar">
+    <button class="primary" id="bSave" disabled>Save</button>
+    <button id="bReload" disabled>Reload from disk</button>
+    <button id="bNew" disabled>+ New step</button>
+    <button id="bPaste" disabled title="Paste Claude's reply with suggestions">Paste suggestion</button>
+    <span id="msg">Loading…</span>
+  </div>
+  <div class="hdr" id="hdr"></div>
+  <div class="help">Drag a step onto another: <b>onto it</b> → goes after · <b>onto its top strip</b> → goes before · <b>onto its sides</b> → runs in parallel. Screen position is derived from the dependencies.</div>
+  <div id="wrap"><svg id="edges"></svg><div id="layers"></div></div>
+</div>
+<div id="side"><div class="empty">Click a step to edit it.</div></div>
+<div id="hint"></div>
+<script>
+let dir=null, plan=null, dirty=false, selId=null, dragId=null;
+const $=s=>document.querySelector(s);
+const icon={you:"👤",claude:"🤖",others:"👥",external:"🌐"};
+const STAT=["todo","open","waiting","done","failed"], WHO=["you","claude","others","external"];
+const msg=(t,c="")=>{const m=$("#msg");m.textContent=t;m.className=c};
+const byId=id=>plan.nodes.find(n=>n.id===id);
+const ISO=/^\d{4}-\d{2}-\d{2}$/;
+const fmtDate=v=>!v?'<span style="color:var(--bad)">no date</span>':ISO.test(v)?new Date(v+"T12:00").toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short",year:"numeric"}):'<span style="color:var(--bad)">invalid date: '+esc(v)+'</span>';
+const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+/* ---------- plan.json through claude-plan (http://127.0.0.1:PORT/?dir=FOLDER#TOKEN) ---------- */
+const DIR=new URLSearchParams(location.search).get("dir"), TOKEN=location.hash.slice(1);
+let mtime=null;                       // plan.json's mtime when loaded/saved; null = no file yet
+async function api(path,opts={}){
+  const r=await fetch(`${path}?dir=${encodeURIComponent(DIR||"")}`,{...opts,headers:{"X-Token":TOKEN,...(opts.headers||{})}});
+  const o=await r.json().catch(()=>({error:`HTTP ${r.status}`}));
+  if(!r.ok){const e=new Error(o.error||`HTTP ${r.status}`);e.status=r.status;throw e}
+  return o}
+async function load(){
+  const o=await api("/plan"); const isNew=!o.plan; mtime=o.mtime;
+  plan=o.plan||{ticket:"",title:"New plan",goal:"",success:"",deadline:"",nodes:[]};
+  plan.nodes.forEach(n=>{n.deps??=[]});
+  document.title=`Plan · ${o.name}`;
+  dirty=isNew; selId=null; sug={};sugAdd=[];["#bSave","#bReload","#bNew","#bPaste"].forEach(b=>$(b).disabled=false);
+  render();
+  if(isNew){editPlan();msg(`“${o.name}” has no plan yet: fill in the header and create the first step · unsaved`)}
+  else msg(`Plan of “${o.name}” loaded (${plan.nodes.length} steps).`,"ok");
+}
+$("#bReload").onclick=async()=>{if(dirty&&!confirm("There are unsaved changes. Discard them?"))return;await load()};
+$("#bSave").onclick=async()=>{
+  try{
+    const out={...plan,nodes:plan.nodes.map(({layer,...r})=>r)};
+    const o=await api("/plan",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({base:mtime,plan:out})});
+    mtime=o.mtime; dirty=false; msg(o.backup?`Saved. Previous version in ${o.backup}.`:"Saved: plan.json created.","ok");
+  }catch(e){msg(e.status===409?"Not saved: plan.json changed on disk since you loaded it (Claude may have updated it). Reload, then redo your change.":"Save failed: "+e.message,"err")}
+};
+// Claude updates plan.json too: pick that up when there is nothing unsaved here, warn when there is.
+setInterval(async()=>{if(!plan||!DIR)return;try{const o=await api("/mtime");
+  if(o.mtime!==mtime){if(dirty)msg("plan.json changed on disk while you have unsaved changes. Reload to see it (your changes are lost) or save to be told again.","err");else{await load();msg("Reloaded: plan.json was updated on disk.","ok")}}}catch{}},5000);
+(async()=>{if(!DIR||!TOKEN){msg("Open this page with claude-plan (or /plan in a session).","err");return}
+  try{await load()}catch(e){msg("Could not load the plan: "+e.message,"err")}})();
+window.onbeforeunload=e=>{if(dirty){e.preventDefault();return""}};
+function touch(t){dirty=true;msg(t+" · unsaved")}
+
+/* ---------- graph ---------- */
+function layers(){
+  const memo={}, f=(id,seen)=>{if(seen.has(id))throw new Error("ciclo");if(id in memo)return memo[id];
+    const n=byId(id); const d=n.deps.filter(byId);
+    return memo[id]=d.length?1+Math.max(...d.map(x=>f(x,new Set([...seen,id])))):0};
+  plan.nodes.forEach(n=>n.layer=f(n.id,new Set()));
+}
+function hasCycle(){try{layers();return false}catch{return true}}
+function render(){
+  layers();
+  $("#hdr").innerHTML=`<b>${plan.ticket?esc(plan.ticket)+" · ":""}${esc(plan.title)}</b> <span style="font-size:11px">(click to edit)</span><br>Goal: ${esc(plan.goal)||"—"}<br>Success: ${esc(plan.success)||"—"}${plan.deadline?"<br>Deadline: "+esc(plan.deadline):""}`;
+  $("#hdr").onclick=editPlan; $("#hdr").style.cursor="pointer";
+  if(!plan.nodes.length)$("#layers").innerHTML='<div class="empty">No steps yet. Click “+ New step”.</div>';
+  const L=$("#layers"); if(plan.nodes.length)L.innerHTML="";
+  const by={}; plan.nodes.forEach(n=>(by[n.layer]??=[]).push(n));
+  Object.keys(by).sort((a,b)=>a-b).forEach(k=>{
+    const row=document.createElement("div"); row.className="layer";
+    by[k].forEach(n=>{
+      const d=document.createElement("div"); d.className="node "+n.status+(n.id===selId?" sel":""); d.id="n_"+n.id; d.draggable=true;
+      d.innerHTML=`<div class="t">${icon[n.who]||""} ${esc(n.title)}</div><div class="w">${fmtDate(n.when)}</div>`;
+      d.onclick=()=>select(n.id);
+      d.ondragstart=e=>{dragId=n.id;d.classList.add("dragging");e.dataTransfer.effectAllowed="move"};
+      d.ondragend=()=>{dragId=null;d.classList.remove("dragging");clearDrop()};
+      d.ondragover=e=>{if(!dragId||dragId===n.id)return;e.preventDefault();const z=zone(e,d);clearDrop();d.classList.add("drop-"+z);
+        const h=$("#hint");h.style.display="block";h.style.left=e.clientX+12+"px";h.style.top=e.clientY+12+"px";
+        h.textContent={after:`after “${n.title}”`,before:`before “${n.title}”`,left:`in parallel with “${n.title}”`,right:`in parallel with “${n.title}”`}[z]};
+      d.ondragleave=()=>d.className=d.className.replace(/ drop-\w+/g,"");
+      d.ondrop=e=>{e.preventDefault();const z=zone(e,d);clearDrop();move(dragId,n.id,z)};
+      row.appendChild(d)});
+    L.appendChild(row)});
+  requestAnimationFrame(edges);
+  if(selId&&byId(selId))side(byId(selId));
+}
+function zone(e,el){const r=el.getBoundingClientRect(),x=(e.clientX-r.left)/r.width,y=(e.clientY-r.top)/r.height;
+  if(x<.18)return"left"; if(x>.82)return"right"; return y<.35?"before":"after"}
+function clearDrop(){document.querySelectorAll(".node").forEach(n=>n.className=n.className.replace(/ drop-\w+/g,""));$("#hint").style.display="none"}
+function edges(){
+  const s=$("#edges"),w=$("#wrap").getBoundingClientRect(); s.setAttribute("width",w.width); s.setAttribute("height",w.height);
+  let h='<defs><marker id="a" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7z" fill="currentColor"/></marker></defs>';
+  plan.nodes.forEach(n=>n.deps.forEach(d=>{const A=document.getElementById("n_"+d),B=document.getElementById("n_"+n.id);if(!A||!B)return;
+    const a=A.getBoundingClientRect(),b=B.getBoundingClientRect();
+    const x1=a.left+a.width/2-w.left,y1=a.bottom-w.top,x2=b.left+b.width/2-w.left,y2=b.top-w.top-2,m=(y1+y2)/2;
+    h+=`<path d="M${x1},${y1} C${x1},${m} ${x2},${m} ${x2},${y2}" fill="none" stroke="currentColor" stroke-opacity=".5" stroke-width="1.3" marker-end="url(#a)"/>`}));
+  s.innerHTML=h;
+}
+new ResizeObserver(()=>plan&&edges()).observe($("#wrap"));
+
+/* ---------- drag semantics ---------- */
+function move(xId,yId,z){
+  const X=byId(xId),Y=byId(yId), snap=JSON.stringify(plan.nodes.map(n=>[n.id,n.deps]));
+  if(z==="after"){X.deps=[yId]}
+  else if(z==="before"){X.deps=Y.deps.filter(d=>d!==xId); Y.deps=[xId]}
+  else {X.deps=Y.deps.filter(d=>d!==xId)}            // parallel: same predecessors as Y
+  if(hasCycle()){                                     // undo, nothing changes
+    const old=new Map(JSON.parse(snap)); plan.nodes.forEach(n=>n.deps=old.get(n.id));
+    msg(`Refused: “${X.title}” ${z==="after"?"after":z==="before"?"before":"in parallel with"} “${Y.title}” creates a cycle.`,"err"); render(); return}
+  selId=xId; touch(`“${X.title}” now ${z==="after"?"after":z==="before"?"before":"in parallel with"} “${Y.title}”`); render();
+}
+
+/* ---------- AI suggestions via clipboard ---------- */
+let sug={}, sugAdd=[];
+const FIELDS=["title","does","risks","check","rollback"];
+const lab=(t,k)=>`<label>${t} <button class="ai" data-ask="${k}" title="Ask T3 for a suggestion">✨</button></label>`;
+const box=(n,k)=>{const v=sug[n.id+"|"+k];if(v===undefined)return"";
+  return `<div class="sug"><div class="lbl">Suggestion${k==="risks"?" (added to the current risks)":""}</div><div class="v">${esc([].concat(v).join("\n"))}</div><button data-acc="${k}">Accept</button><button data-rej="${k}">Reject</button></div>`};
+function askText(n,k){
+  const steps=plan.nodes.map(o=>`- ${o.id} · ${o.title} · ${o.status} · ${o.when||"no date"} · after: ${o.deps.join(", ")||"—"}`).join("\n");
+  const head=`DAG-SUGGEST\nPlan: ${plan.ticket||""} ${plan.title}\nGoal: ${plan.goal||"—"}\nSuccess: ${plan.success||"—"}\nDeadline: ${plan.deadline||"—"}\n\nSteps (id · title · status · date · after):\n${steps}\n\n`;
+  if(k==="add") return head+`Request: suggest the steps that are missing for this plan to reach its goal (include checks and rollback where a step changes something).\nReply with only this JSON, no prose:\n{"suggestions":[{"add":{"title":"…","who":"you|claude|others|external","when":"YYYY-MM-DD","does":"…","risks":["…"],"check":"…","rollback":"…","deps":["<existing step id>"]}}]}`;
+  const {layer,...clean}=n;
+  return head+`Selected step:\n${JSON.stringify(clean,null,1)}\n\nRequest: suggest "${k}" for step "${n.id}".\nReply with only this JSON, no prose:\n{"suggestions":[{"node":"${n.id}","field":"${k}","value":${k==="risks"?'["…"]':'"…"'}}]}`;
+}
+// ✨ sends the request to the session's "DAG · suggestions" thread in T3; the reply lands on the clipboard.
+let asking=false;
+async function copyAsk(n,k){const t=askText(n,k);
+  if(asking){msg("A request to T3 is already running. Wait for the reply.","err");return}
+  asking=true; const what=k==="add"?"missing steps":`“${k}” of “${n.title}”`, t0=Date.now();
+  const tick=setInterval(()=>msg(`✨ T3 working on ${what}… ${Math.round((Date.now()-t0)/1000)} s`),1000);
+  try{await api("/ask",{method:"POST",headers:{"Content-Type":"text/plain"},body:t});
+    msg(`T3 reply is on the clipboard (${what}). Click “Paste suggestion”.`,"ok")}
+  catch(e){msg("T3 didn't reply: "+e.message,"err")}
+  finally{clearInterval(tick);asking=false}}
+$("#bPaste").onclick=async()=>{let t="";try{t=await navigator.clipboard.readText()}catch{}
+  if(!t.includes('"suggestions"'))t=window.prompt("Paste Claude's reply here:")||""; if(t)ingest(t)};
+function ingest(t){
+  let o; try{o=JSON.parse(t.slice(t.indexOf("{"),t.lastIndexOf("}")+1))}catch{msg("Couldn't read the reply: no suggestions JSON found.","err");return}
+  let c=0,first=null;
+  (o.suggestions||[]).forEach(x=>{if(x.add){sugAdd.push(x.add);c++}else if(byId(x.node)&&FIELDS.includes(x.field)){sug[x.node+"|"+x.field]=x.value;c++;first??=x.node}});
+  if(!c){msg("The reply has no valid suggestions for this plan.","err");return}
+  msg(`${c} suggestion(s) received. Accept or reject them in the panel.`,"ok");
+  if(first){selId=first;render()}else editPlan();
+}
+
+/* ---------- side panel ---------- */
+function select(id){selId=id;render()}
+function editPlan(){
+  selId=null; document.querySelectorAll(".node.sel").forEach(e=>e.classList.remove("sel"));
+  const F=[["title","Plan"],["ticket","Ticket (e.g. BTPA-1234)"],["goal","Goal",1],["success","Success: how we know it's right",1],["deadline","Deadline"]];
+  $("#side").innerHTML="<h3 style='margin:0 0 4px'>Plan</h3>"+F.map(([k,l,ta])=>`<label>${l}</label>`+
+    (ta?`<textarea id="p_${k}">${esc(plan[k])}</textarea>`:`<input id="p_${k}" value="${esc(plan[k])}">`)).join("");
+  $("#side").innerHTML+=`<label style="margin-top:16px">Steps <button class="ai" id="askAdd">✨ suggest missing steps</button></label>`+
+    sugAdd.map((a,i)=>`<div class="sug"><div class="lbl">Suggested new step</div><div class="v"><b>${esc(a.title)}</b>${a.when?" · "+esc(a.when):""}${a.deps?.length?"\nAfter: "+a.deps.map(d=>esc(byId(d)?.title||d)).join(", "):""}${a.does?"\n"+esc(a.does):""}${a.risks?.length?"\nRisks: "+a.risks.map(esc).join("; "):""}</div><button data-addacc="${i}">Accept</button><button data-addrej="${i}">Reject</button></div>`).join("");
+  $("#askAdd").onclick=()=>copyAsk(null,"add");
+  document.querySelectorAll("[data-addacc]").forEach(b=>b.onclick=()=>{const a=sugAdd[+b.dataset.addacc];let i=1;while(byId("n"+i))i++;
+    const n={id:"n"+i,title:a.title||"New step",who:WHO.includes(a.who)?a.who:"you",status:"todo",when:ISO.test(a.when||"")?a.when:"",does:a.does||"",risks:[].concat(a.risks||[]),deps:[].concat(a.deps||[]).filter(byId)};
+    ["check","rollback"].forEach(k=>{if(a[k])n[k]=a[k]});
+    plan.nodes.push(n); if(hasCycle()){plan.nodes.pop();msg("Refused: that step creates a cycle.","err");return}
+    sugAdd.splice(+b.dataset.addacc,1); touch(`step “${n.title}” created from a suggestion`); render(); editPlan()});
+  document.querySelectorAll("[data-addrej]").forEach(b=>b.onclick=()=>{sugAdd.splice(+b.dataset.addrej,1);editPlan()});
+  F.forEach(([k])=>$("#p_"+k).onchange=e=>{plan[k]=e.target.value.trim();touch("header edited");render();editPlan()});
+  setTimeout(()=>{if(!plan.goal)$("#p_title").focus()},0);
+}
+function side(n){
+  const list=v=>Array.isArray(v)?v.join("\n"):(v??"");
+  const opts=(arr,v)=>arr.map(o=>`<option ${o===v?"selected":""}>${o}</option>`).join("");
+  const others=plan.nodes.filter(o=>o.id!==n.id);
+  $("#side").innerHTML=`
+   ${lab("Step","title")}<input id="f_title" value="${esc(n.title)}">${box(n,"title")}
+   <div class="row2"><div><label>Who</label><select id="f_who">${opts(WHO,n.who)}</select></div>
+   <div><label>Status</label><select id="f_status">${opts(STAT,n.status)}</select></div></div>
+   <label>When</label><input id="f_when" type="date" value="${ISO.test(n.when||"")?n.when:""}">
+   ${lab("What has to happen","does")}<textarea id="f_does">${esc(n.does)}</textarea>${box(n,"does")}
+   ${lab("What can go wrong (one per line)","risks")}<textarea id="f_risks">${esc(list(n.risks))}</textarea>${box(n,"risks")}
+   ${lab("Check","check")}<textarea id="f_check">${esc(n.check)}</textarea>${box(n,"check")}
+   ${lab("Rollback","rollback")}<textarea id="f_rollback">${esc(n.rollback)}</textarea>${box(n,"rollback")}
+   <label>Replan</label><input id="f_replan" value="${esc(n.replan)}">
+   <label>Incident</label><input id="f_incident" value="${esc(n.incident)}">
+   <label>Evidence</label><input id="f_evidence" value="${esc(n.evidence)}">
+   <label>Depends on</label><div class="deps">${others.map(o=>`<label><input type="checkbox" data-dep="${o.id}" ${n.deps.includes(o.id)?"checked":""}>${esc(o.title)}</label>`).join("")}</div>
+   <button class="danger" id="f_del">Delete step</button>`;
+  ["title","who","status","when","does","check","rollback","replan","incident","evidence"].forEach(k=>{
+    $("#f_"+k).onchange=e=>{const v=e.target.value.trim(); if(v)n[k]=v; else delete n[k]; if(k==="title"&&!v)n.title="(untitled)"; touch(`“${n.title}” edited`); render()}});
+  $("#f_risks").onchange=e=>{n.risks=e.target.value.split("\n").map(s=>s.trim()).filter(Boolean);touch(`“${n.title}” edited`)};
+  document.querySelectorAll("[data-dep]").forEach(c=>c.onchange=()=>{
+    const d=c.dataset.dep, before=[...n.deps];
+    n.deps=c.checked?[...n.deps,d]:n.deps.filter(x=>x!==d);
+    if(hasCycle()){n.deps=before;msg("Refused: that dependency creates a cycle.","err");render();return}
+    touch(`dependencies of “${n.title}”`);render()});
+  document.querySelectorAll("[data-ask]").forEach(b=>b.onclick=()=>copyAsk(n,b.dataset.ask));
+  document.querySelectorAll("[data-acc]").forEach(b=>b.onclick=()=>{const k=b.dataset.acc,v=sug[n.id+"|"+k];
+    if(k==="risks")n.risks=[...new Set([...(n.risks||[]),...[].concat(v)])]; else n[k]=String(v);
+    delete sug[n.id+"|"+k]; touch(`suggestion accepted in “${n.title}”`); render()});
+  document.querySelectorAll("[data-rej]").forEach(b=>b.onclick=()=>{delete sug[n.id+"|"+b.dataset.rej];render()});
+  $("#f_del").onclick=()=>{if(!confirm(`Delete “${n.title}”? Steps that depended on it will depend on what it depended on.`))return;
+    plan.nodes.forEach(o=>{if(o.deps.includes(n.id))o.deps=[...new Set([...o.deps.filter(x=>x!==n.id),...n.deps])]});
+    plan.nodes=plan.nodes.filter(o=>o.id!==n.id); selId=null; $("#side").innerHTML='<div class="empty">Click a step to edit it.</div>';
+    touch(`“${n.title}” deleted`); render()};
+}
+$("#bNew").onclick=()=>{
+  let i=1; while(byId("n"+i))i++;
+  const n={id:"n"+i,title:"New step",who:"you",status:"todo",when:(selId&&byId(selId).when)||"",does:"",risks:[],deps:selId?[selId]:[]};
+  plan.nodes.push(n); selId=n.id; touch("new step"+(n.deps.length?` after “${byId(n.deps[0]).title}”`:"")); render();
+  setTimeout(()=>{$("#f_title").focus();$("#f_title").select()},0);
+};
+</script></body></html>

@@ -62,6 +62,38 @@ that profile. `ended_at` is filled in when Claude exits.
   shared, the description, the gateway URL if any, and a warning if `~/.claude-<name>`
   is missing.
 
+## claude-plan
+
+```
+claude-plan [DIR]       open DIR's plan (default: the current folder) in the default browser
+claude-plan --url DIR   print the URL, open nothing
+claude-plan --serve     run the server in the foreground
+claude-plan --stop      stop the server
+```
+
+A request's plan is `plan.json` in its folder: a header (ticket, title, goal, success,
+deadline) and steps, each with who, status, a date, what has to happen, what can go wrong, the
+check, the rollback, the evidence and the steps it comes after. The editor draws it as a DAG:
+drag a step onto another to put it after, onto its top strip to put it before, onto its sides
+to run it in parallel; the layout comes only from those dependencies. Steps with no date show
+in red.
+
+Every save keeps the file it replaces as `plan.vN.json`, and is refused when `plan.json`
+changed on disk since the editor loaded it; with nothing unsaved, the editor reloads by itself
+when Claude updates the file. The `/plan` skill opens it from a session and keeps it current
+while the work goes on; **Open plan** on a request in the VS Code sidebar does the same.
+
+✨ next to a field (or *suggest missing steps* in the header) asks Claude Code: `claude -p` in
+the folder, with its profile, and only Read, Grep and Glob — no MCP servers, no edits, no shell,
+no session kept. The reply goes to the clipboard and **Paste suggestion** shows it under the
+field to accept or reject. It works the same from VS Code, T3 Code or a terminal.
+
+The server (started on demand, in the background) listens on `127.0.0.1` only, on
+`CWS_PLAN_PORT` (8765) or the next free port, serves only folders inside the work root, and
+needs the token from `~/.cache/claude-worksessions/plan-server.json` (mode 0600) on every call;
+the URL it opens carries it. Its log is `~/.cache/claude-worksessions/plan-server.log`.
+`CWS_CLAUDE_BIN` points at another `claude`.
+
 ## claude-t3-sync
 
 ```

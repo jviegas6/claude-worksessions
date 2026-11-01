@@ -85,35 +85,35 @@ def write_json(path, data):
 LEDGER = {
     "default_task": "BI Migration",
     "leave_task": "Annual Leave",
-    "jira_prefixes": ["BTPA"],
+    "jira_prefixes": ["DATA"],
     "tasks": [
-        {"task": "Data Platform", "tickets": ["BTPA-1"], "default_ticket": "BTPA-1",
-         "keywords": ["ingestion", "pipeline"], "comments": {"BTPA-1": "Keep ingestion running"}},
-        {"task": "BI Migration", "tickets": ["BTPA-9"], "default_ticket": "BTPA-9",
+        {"task": "Data Platform", "tickets": ["DATA-1"], "default_ticket": "DATA-1",
+         "keywords": ["ingestion", "pipeline"], "comments": {"DATA-1": "Keep ingestion running"}},
+        {"task": "BI Migration", "tickets": ["DATA-9"], "default_ticket": "DATA-9",
          "keywords": ["migration", "report"]},
-        {"task": "Security", "tickets": ["BTPA-2"], "keywords": ["storage", "access"]},
+        {"task": "Security", "tickets": ["DATA-2"], "keywords": ["storage", "access"]},
     ],
 }
 
 JIRA = [
-    {"key": "BTPA-1", "summary": "Ingestion pipeline failures", "status": "In Progress", "mine": True,
+    {"key": "DATA-1", "summary": "Ingestion pipeline failures", "status": "In Progress", "mine": True,
      "updated": "2026-09-08T10:00:00+0000"},
-    {"key": "BTPA-2", "summary": "Grant storage access", "status": "Done", "mine": True,
+    {"key": "DATA-2", "summary": "Grant storage access", "status": "Done", "mine": True,
      "updated": "2026-09-08T09:10:00Z"},
-    {"key": "BTPA-5", "summary": "Quarterly vendor invoices", "status": "To Do", "mine": True,
+    {"key": "DATA-5", "summary": "Quarterly vendor invoices", "status": "To Do", "mine": True,
      "updated": "2026-09-09T12:00:00Z"},
-    {"key": "BTPA-6", "summary": "Ingestion pipeline subtask", "status": "Done", "mine": True,
+    {"key": "DATA-6", "summary": "Ingestion pipeline subtask", "status": "Done", "mine": True,
      "updated": "2026-09-09T12:00:00Z"},
-    {"key": "BTPA-7", "summary": "Somebody else's", "status": "To Do", "mine": False,
+    {"key": "DATA-7", "summary": "Somebody else's", "status": "To Do", "mine": False,
      "updated": "2026-09-09T12:00:00Z"},
-    {"key": "BTPA-8", "summary": "bad stamp", "mine": True, "updated": "not a date"},
-    {"key": "BTPA-9", "summary": "BI reports", "mine": True, "updated": ""},
+    {"key": "DATA-8", "summary": "bad stamp", "mine": True, "updated": "not a date"},
+    {"key": "DATA-9", "summary": "BI reports", "mine": True, "updated": ""},
 ]
 
 ACTIVITY = {
     "events": [
         {"source": "meeting", "start": "2026-09-07T11:00:00", "end": "2026-09-07T11:30:00",
-         "title": "Pipeline review BTPA-1", "counterparties": ["a@x.com"], "subject": "Pipeline fix"},
+         "title": "Pipeline review DATA-1", "counterparties": ["a@x.com"], "subject": "Pipeline fix"},
         {"source": "email", "start": "2026-09-07T12:00:00", "title": "RE: Pipeline review",
          "counterparties": "a@x.com", "subject": "Pipeline fix"},
         {"source": "meeting", "start": "2026-09-08T10:00:00", "end": "2026-09-08T10:30:00",
@@ -139,7 +139,7 @@ ACTIVITY = {
 def world(home, utc):
     """A worked week; returns a namespace with the paths the tests poke at."""
     root = home / "work_sessions"
-    pipe = request_folder(root, "09-00-00_pipeline-fix", ticket="BTPA-1", task_type="job errors",
+    pipe = request_folder(root, "09-00-00_pipeline-fix", ticket="DATA-1", task_type="job errors",
                           session_types={SID_PIPE: "job errors"})
     perm = request_folder(root, "10-00-00_storage-access", ticket="Other", task_type="permissions")
     hidden = request_folder(root, "11-00-00_private", ticket="Other", audit=False)
@@ -169,7 +169,7 @@ def run(mod, *argv):
 
 
 def args_for(mod, **kw):
-    base = dict(day=None, week=None, month=None, start=None, end=None, min_subject=10.0,
+    base = dict(day=None, week=None, month=None, report=None, friday=None, start=None, end=None, min_subject=10.0,
                 util_step=10, round_to=30.0, ledger=None, activity=mod.ACTIVITY_DIR)
     base.update(kw)
     return types.SimpleNamespace(**base)
@@ -430,7 +430,7 @@ def test_summary_week_table(mod, world, capsys):
     run(mod, "--week", WEEK)
     out = capsys.readouterr().out
     assert out.startswith("Summary · week of Mon 7 Sep 2026")
-    assert "Data Platform" in out and "BTPA-1" in out and "Keep ingestion running" in out
+    assert "Data Platform" in out and "DATA-1" in out and "Keep ingestion running" in out
     assert "Annual Leave" in out and "Out of office: Thu 10 (half), Fri 11" in out
     assert "job errors" in out                 # Task Type column
     # the pipeline session plus its meeting and email are one subject on one row
@@ -496,7 +496,7 @@ def test_summary_copy_uses_tracker_columns(mod, world, monkeypatch, capsys):
 def test_summary_week_overrides(mod, world, capsys):
     ledger = json.loads(world.ledger.read_text())
     ledger["weeks"] = {WEEK: {"leave_days": 0, "rows": {
-        "Data Platform|BTPA-1": {"utilization": 40, "flags": {"hld": "Yes"}, "comments": "Override text",
+        "Data Platform|DATA-1": {"utilization": 40, "flags": {"hld": "Yes"}, "comments": "Override text",
                                  "meetings": "Yes"}}}}
     ledger["subjects"] = {mod.stable_id("sub_", "Grant storage access to the team"): {
         "subject": "Grant storage access to the team", "task": "Security", "ticket": "Other"}}
@@ -515,7 +515,7 @@ def test_summary_week_overrides(mod, world, capsys):
 
 def test_summary_day_keeps_only_comment_overrides(mod, world, capsys):
     ledger = json.loads(world.ledger.read_text())
-    ledger["weeks"] = {WEEK: {"rows": {"Data Platform|BTPA-1": {"utilization": 10, "comments": "Day text"},
+    ledger["weeks"] = {WEEK: {"rows": {"Data Platform|DATA-1": {"utilization": 10, "comments": "Day text"},
                                        "Other|X": {"utilization": 5}}}}
     write_json(world.ledger, ledger)
     target = world.home / "d.csv"
@@ -572,7 +572,7 @@ def test_summary_long_comments_are_cut(mod, world, capsys):
         write_transcript(world.home, sid, str(world.root / "2026" / "09" / "07" / "09-00-00_pipeline-fix"),
                          8, 11 + i // 2, 20, title=title)
         names[title] = mod.stable_id("sub_", title)
-    ledger["subjects"] = {sid: {"subject": t, "task": "Data Platform", "ticket": "BTPA-1"}
+    ledger["subjects"] = {sid: {"subject": t, "task": "Data Platform", "ticket": "DATA-1"}
                           for t, sid in names.items()}
     write_json(world.ledger, ledger)
     target = world.home / "long.csv"
@@ -609,7 +609,7 @@ def test_detail_csv_has_row_ids_and_types(mod, world, capsys):
     run(mod, "--week", WEEK, "--detail", "--csv", str(target))
     rows = list(csv.DictReader(open(target)))
     assert list(rows[0]) == mod.ACTIVITY_COLUMNS
-    meeting = next(r for r in rows if r["title"] == "Pipeline review BTPA-1")
+    meeting = next(r for r in rows if r["title"] == "Pipeline review DATA-1")
     session = next(r for r in rows if r["session_id"] == SID_PIPE)
     assert meeting["task"] == "Data Platform" and meeting["row_id"] == session["row_id"]
     assert meeting["task_type"] == "job errors"      # inherited from the session
@@ -631,9 +631,9 @@ def test_reconcile_view_both_ways(mod, world, capsys):
     assert out.startswith("Reconciliation · week of Mon 7 Sep 2026")
     assert "Activities -> tickets" in out and "Tickets -> activities" in out
     assert "not reconciled to a ticket" in out
-    assert "BTPA-5" in out and "no activity found" in out     # x: nothing like it
-    assert "BTPA-7" not in out                                # not mine
-    assert "BTPA-8" not in out                                # unparsable stamp
+    assert "DATA-5" in out and "no activity found" in out     # x: nothing like it
+    assert "DATA-7" not in out                                # not mine
+    assert "DATA-8" not in out                                # unparsable stamp
     assert "probably have their activity booked elsewhere" in out
 
 
@@ -643,18 +643,18 @@ def test_reconcile_csv(mod, world, capsys):
     rows = list(csv.DictReader(open(target)))
     assert list(rows[0]) == mod.RECONCILE_COLUMNS
     tix = {r["ticket"]: r for r in rows if r["side"] == "tickets"}
-    assert tix["BTPA-1"]["status"] == "ok" and float(tix["BTPA-1"]["hours"]) > 0
-    assert tix["BTPA-5"]["status"] == "x"
-    assert tix["BTPA-2"]["status"] == "?" and "Grant storage access" in tix["BTPA-2"]["note"]
-    # BTPA-6 looks like the pipeline work, which is booked to BTPA-1 and checks out
-    assert "BTPA-6" not in tix and "also covers 1 related: BTPA-6" in tix["BTPA-1"]["note"]
+    assert tix["DATA-1"]["status"] == "ok" and float(tix["DATA-1"]["hours"]) > 0
+    assert tix["DATA-5"]["status"] == "x"
+    assert tix["DATA-2"]["status"] == "?" and "Grant storage access" in tix["DATA-2"]["note"]
+    # DATA-6 looks like the pipeline work, which is booked to DATA-1 and checks out
+    assert "DATA-6" not in tix and "also covers 1 related: DATA-6" in tix["DATA-1"]["note"]
 
 
 def test_reconcile_without_jira(mod, world, capsys):
     os.remove(world.audit_dir / "review" / "jira.json")
     ledger = json.loads(world.ledger.read_text())
     ledger["subjects"] = {mod.stable_id("sub_", "Grant storage access to the team"): {
-        "subject": "Grant storage access to the team", "task": "Security", "ticket": "BTPA-2"}}
+        "subject": "Grant storage access to the team", "task": "Security", "ticket": "DATA-2"}}
     write_json(world.ledger, ledger)
     os.remove(world.audit_dir / "activity" / (WEEK + ".json"))
     for sid in (SID_TINY, SID_ROOT):
@@ -671,23 +671,23 @@ def test_reconcile_mentions_and_task_vocabulary(mod, world, capsys):
     write_json(world.ledger, ledger)
     jira = JIRA + [
         # no subject shares its words, but the Data Platform task's vocabulary does
-        {"key": "BTPA-11", "summary": "Lakehouse hardening", "status": "To Do", "mine": True,
+        {"key": "DATA-11", "summary": "Lakehouse hardening", "status": "To Do", "mine": True,
          "updated": "2026-09-12T12:00:00Z"},
-        # named by an email in the pipeline subject, which is booked to BTPA-1
-        {"key": "BTPA-12", "summary": "Zebra", "status": "To Do", "mine": True,
+        # named by an email in the pipeline subject, which is booked to DATA-1
+        {"key": "DATA-12", "summary": "Zebra", "status": "To Do", "mine": True,
          "updated": "2026-09-12T12:00:00Z"},
     ]
     write_json(world.audit_dir / "review" / "jira.json", jira)
     act = json.loads(json.dumps(ACTIVITY))
     act["events"].append({"source": "email", "start": "2026-09-07T12:30:00",
-                          "title": "About BTPA-12", "subject": "Pipeline fix"})
+                          "title": "About DATA-12", "subject": "Pipeline fix"})
     write_json(world.audit_dir / "activity" / (WEEK + ".json"), act)
     target = world.home / "rec2.csv"
     run(mod, "--week", WEEK, "--reconcile", "--csv", str(target))
     tix = {r["ticket"]: r for r in csv.DictReader(open(target)) if r["side"] == "tickets"}
-    # both look like work booked to BTPA-1, which checks out, so they fold into it
-    assert "BTPA-11" not in tix and "BTPA-12" not in tix
-    assert "BTPA-11" in tix["BTPA-1"]["note"] and "BTPA-12" in tix["BTPA-1"]["note"]
+    # both look like work booked to DATA-1, which checks out, so they fold into it
+    assert "DATA-11" not in tix and "DATA-12" not in tix
+    assert "DATA-11" in tix["DATA-1"]["note"] and "DATA-12" in tix["DATA-1"]["note"]
 
 
 def test_build_review_ignored_default_ticket_and_small_matches(mod, world):
@@ -708,7 +708,7 @@ def test_build_review_ignored_default_ticket_and_small_matches(mod, world):
     items, led, idf, _ = mod.gather(args, first, last, 300, 120)
     days = mod.workdays(first, last)
     _, detail, report = mod.build_review(items, led, WEEK, days, {}, args, 120, idf)
-    assert ("BI Migration", "BTPA-9") in {(d["task"], d["ticket"]) for d in detail}
+    assert ("BI Migration", "DATA-9") in {(d["task"], d["ticket"]) for d in detail}
     assert not any("Grant storage" in d["subjects"] for d in detail)
     small = next(s for s in report["subjects"] if s["name"] == "Ingestion pipeline lakehouse note")
     assert small["mapping"]["task"] == "Data Platform" and small["mapping"]["status"] == "auto"
@@ -726,7 +726,7 @@ def test_by_type_and_sessions_views(mod, world, capsys):
     run(mod, "--week", WEEK, "--sessions")
     out = capsys.readouterr().out
     assert out.startswith("Sessions · week of Mon 7 Sep 2026 · 4 sessions")
-    assert "BTPA-1" in out and "Grant storage access" in out
+    assert "DATA-1" in out and "Grant storage access" in out
     target = world.home / "sessions.csv"
     run(mod, "--week", WEEK, "--sessions", "--csv", str(target))
     rows = list(csv.DictReader(open(target)))
@@ -744,7 +744,7 @@ def test_single_activity_file(mod, world, capsys):
     run(mod, "--week", WEEK, "--detail", "--activity",
         str(world.audit_dir / "activity" / (WEEK + ".json")))
     out = capsys.readouterr().out
-    assert "Pipeline review BTPA-1" in out and "no Teams/calendar/mail data" not in out
+    assert "Pipeline review DATA-1" in out and "no Teams/calendar/mail data" not in out
 
 
 # ---------------------------------------------------------------- main(): propose / apply / misc
@@ -786,7 +786,7 @@ def test_propose_links_and_unknowns(mod, world, capsys):
 def test_propose_jira_match_is_shown(mod, world, capsys):
     run(mod, "--week", WEEK, "--propose")
     out = capsys.readouterr().out
-    assert 'Jira: BTPA-2 "Grant storage access"' in out
+    assert 'Jira: DATA-2 "Grant storage access"' in out
 
 
 def test_propose_needs_a_week(mod, world):
@@ -832,3 +832,194 @@ def test_apply_decisions_book_on(mod, tmp_path):
     with pytest.raises(ValueError):
         mod.apply_decisions(str(bad), str(ledger))
     assert "sid-2" not in json.loads(ledger.read_text())["book_on"]
+
+
+# ---------------------------------------------------------------- weekly report email
+
+def test_report_window_ends_on_the_report_day(mod, monkeypatch):
+    wed, tue = dt.date(2026, 9, 9), dt.date(2026, 9, 8)
+    # sent on Wednesday: the Wednesday before to the Tuesday
+    assert mod.report_window(wed) == (dt.date(2026, 9, 2), tue)
+    assert mod.report_window(dt.date(2026, 9, 14)) == (dt.date(2026, 9, 2), tue)
+    monkeypatch.setattr(mod, "REPORT_DAY", "Fri")
+    assert mod.report_window(wed) == (dt.date(2026, 8, 28), dt.date(2026, 9, 3))
+    monkeypatch.setattr(mod, "REPORT_DAY", "Xyz")
+    with pytest.raises(SystemExit):
+        mod.report_window(wed)
+
+
+def test_day_runs_joins_consecutive_days(mod):
+    d = lambda m, day: dt.date(2026, m, day)
+    assert mod.day_runs([d(10, 26), d(10, 22), d(10, 23), d(10, 22)]) == "Thu 22–Fri 23, Mon 26 Oct"
+    assert mod.day_runs([d(10, 30), d(11, 2)]) == "Fri 30 Oct, Mon 2 Nov"
+    assert mod.day_runs([]) == ""
+
+
+def test_waiting_text(mod):
+    assert mod.waiting_text({}) == ""
+    assert mod.waiting_text({"waiting": {"on": "me", "who": "Ana", "what": "send the IP"}}) == \
+        "next step with me: send the IP (Ana)"
+    assert mod.waiting_text({"waiting": {"on": "other", "who": "Ana", "what": "confirm",
+                                         "since": "2026-09-08T10:00:00Z"}}) == "waiting on Ana: confirm since 8 Sep"
+    assert mod.waiting_text({"waiting_history": [{"until": "2026-09-09T10:00:00Z"}]}) == "settled 9 Sep"
+
+
+def test_next_version_never_overwrites(mod, tmp_path):
+    p = tmp_path / "r.md"
+    assert mod.next_version(str(p)) == str(p)
+    p.write_text("x")
+    (tmp_path / "r-v2.md").write_text("x")
+    assert mod.next_version(str(p)) == str(tmp_path / "r-v3.md")
+
+
+def test_report_draft_sections_status_and_evidence(mod, world, monkeypatch, capsys):
+    monkeypatch.setattr(mod, "USER_NAME", "Ana Lima")
+    monkeypatch.setattr(mod, "REPORT_TO", "boss@x.com")
+    perm = world.root / "2026" / "09" / "07" / "10-00-00_storage-access" / ".session.json"
+    meta = json.loads(perm.read_text())
+    meta["waiting"] = {"on": "other", "who": "Ana", "what": "approve the grant", "since": "2026-09-08T12:00:00Z"}
+    perm.write_text(json.dumps(meta))
+    (perm.parent / "thread.md").write_text("# x\n\n## 2026-09-08 12:00 · waiting\n\nAsked Ana to approve.\n")
+    run(mod, "--report", "2026-09-09", "--csv")
+    out = capsys.readouterr().out
+    assert "Wed 02 Sep to Tue 08 Sep 2026" in out and "Wed 09 Sep 2026" in out.split("Due:")[1].splitlines()[0]
+    assert "Subject: Weekly Report - Ana Lima" in out and "To:      boss@x.com" in out
+    draft = (world.audit_dir / "weekly-email" / "weekly-report_2026-09-09_draft.md").read_text()
+    lines = draft.splitlines()
+    # a job error is an Issue, with its Jira status; access work is support, with its flag
+    issues, support = lines.index("- Issues"), lines.index("- Support & requests")
+    pipe = next(i for i, l in enumerate(lines) if "(DATA-1)" in l)
+    assert issues < pipe < support and "Jira: DATA-1 In Progress" in lines[pipe] and "Worked Mon 7 Sep" in lines[pipe]
+    grant = next(l for l in lines[support:] if "storage access" in l.lower())
+    assert "waiting on Ana: approve the grant since 8 Sep" in grant and "Worked Tue 8 Sep" in grant
+    assert "stand-up" not in draft.lower()
+    assert "recurring meeting(s)" in out
+    with open(world.audit_dir / "weekly-email" / "weekly-report_2026-09-09_evidence.csv") as fh:
+        ev = list(csv.DictReader(fh))
+    assert any(r["last_note"] == "2026-09-08 12:00 · waiting Asked Ana to approve." for r in ev)
+    # a second run keeps the first draft
+    run(mod, "--report", "2026-09-09")
+    assert (world.audit_dir / "weekly-email" / "weekly-report_2026-09-09_draft-v2.md").exists()
+
+
+def test_report_leave_and_missing_days(mod, world, capsys):
+    run(mod, "--report", "2026-09-16")
+    out = capsys.readouterr().out
+    assert "- Leave: Thu 10–Fri 11 Sep" in out
+    assert "no Teams/calendar/mail data" in out and "set CWS_USER_NAME" in out
+
+
+def test_report_whole_window_on_leave(mod, world, capsys):
+    act = world.audit_dir / "activity" / (WEEK + ".json")
+    data = json.loads(act.read_text())
+    data["events"].append({"source": "leave", "start": "2026-09-02T00:00:00", "end": "2026-09-09T00:00:00",
+                           "title": "Holiday"})
+    act.write_text(json.dumps(data))
+    run(mod, "--report", "2026-09-09")
+    assert "no report is due" in capsys.readouterr().out
+
+
+def test_report_is_a_view_of_its_own(mod, world):
+    for extra in (["--detail"], ["--week"], ["--from", "2026-09-07"]):
+        with pytest.raises(SystemExit):
+            run(mod, "--report", "2026-09-09", *extra)
+
+
+def test_report_copy_renders_through_md_email(mod, world, monkeypatch, capsys):
+    calls = []
+    monkeypatch.setattr(mod.subprocess, "call", lambda cmd: calls.append(cmd) or 0)
+    run(mod, "--report", "2026-09-09", "--copy")
+    assert calls and calls[0][0].endswith("claude-md-email") and calls[0][1].endswith("_draft.md")
+    assert "draft copied" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------- Friday reports
+
+def test_friday_window_is_monday_to_friday(mod):
+    assert mod.friday_window(dt.date(2026, 9, 9)) == (dt.date(2026, 9, 7), dt.date(2026, 9, 11))
+    assert mod.friday_window(dt.date(2026, 9, 13)) == (dt.date(2026, 9, 7), dt.date(2026, 9, 11))
+
+
+def test_outside_guess(mod):
+    row = lambda **kw: dict({"subject": "s", "section": "Projects", "tickets": "DATA-1", "sessions": 1,
+                             "meetings": 0}, **kw)
+    assert mod.outside_guess(row(), {}) == (False, "project ticket DATA-1", False)
+    assert mod.outside_guess(row(tickets=""), {})[:2] == (True, "no project ticket")
+    assert mod.outside_guess(row(section="Support & requests", sessions=0), {})[:2] == \
+        (True, "section Support & requests; mail/chat only")
+    assert mod.outside_guess(row(section="Issues"), {"s": False}) == (False, "your decision", True)
+
+
+def test_pending_adrs_reads_the_register_table(mod, tmp_path):
+    reg = tmp_path / "adr.md"
+    reg.write_text("# ADRs\n\n| # | Title | Status | Date |\n|---|---|---|---|\n"
+                   "| ADR-0001 | Use X | Proposed | 2026-10-05 |\n"
+                   "| ADR-0002 | Use Y | Accepted (2026-10-19) | 2026-10-19 |\n"
+                   "| ADR-0003 | Use Z | Draft | not a date |\n")
+    got = mod.pending_adrs(dt.date(2026, 11, 1), str(reg))
+    assert [(a["adr"], a["status"], a["age"]) for a in got] == [("ADR-0001", "Proposed", 27), ("ADR-0003", "Draft", None)]
+    assert mod.pending_adrs(dt.date(2026, 11, 1), str(tmp_path / "none.md")) == []
+
+
+def test_gaps_markdown_sections(mod):
+    md = mod.gaps_markdown([{"task": "BI Migration", "missing": ["HLD", "LLD"]}],
+                           [{"adr": "ADR-0001", "title": "Use X", "status": "Proposed", "since": "2026-10-05", "age": 27}],
+                           [{"request": "Access", "who": "Ana", "what": "confirm", "since": "2026-10-21"}],
+                           [{"key": "DATA-5", "summary": "Design the feed", "status": "To Do"}])
+    assert "    - BI Migration: no HLD, LLD." in md
+    assert "    - ADR-0001 Use X - Proposed since 2026-10-05 (27 days)." in md
+    assert "    - Access - Ana: confirm, since 2026-10-21." in md
+    assert "    - DATA-5 Design the feed - To Do." in md
+    assert mod.gaps_markdown([], [], [], []) == ""
+
+
+def test_friday_drafts_guesses_decisions_and_gaps(mod, world, monkeypatch, capsys):
+    meta = world.root / "2026" / "09" / "07" / "10-00-00_storage-access" / ".session.json"
+    d = json.loads(meta.read_text())
+    d["waiting"] = {"on": "me", "who": "Ana", "what": "send the grant list", "since": "2026-09-08T10:00:00Z"}
+    meta.write_text(json.dumps(d))
+    monkeypatch.setattr(mod, "load_jira", lambda path=None: [
+        {"key": "DATA-5", "summary": "Design the vendor feed", "status": "To Do", "mine": True},
+        {"key": "DATA-6", "summary": "Design done", "status": "Done", "mine": True},
+        {"key": "DATA-7", "summary": "Somebody's design", "status": "To Do", "mine": False}])
+    run(mod, "--friday", "2026-09-11", "--csv")
+    out = capsys.readouterr().out
+    assert "Friday reports · Mon 07 Sep to Fri 11 Sep 2026" in out
+    mail = world.audit_dir / "weekly-email"
+    outside = (mail / "outside-projects_2026-09-11_draft.md").read_text()
+    gaps = (mail / "architect-gaps_2026-09-11_draft.md").read_text()
+    assert outside.startswith("- Outside projects\n") and "storage access" in outside.lower()
+    assert "- Replies I owe\n" in gaps and " - Ana: send the grant list, since 2026-09-08." in gaps
+    assert "- Architecture phases with no activity in the last 4 weeks\n" in gaps
+    assert "DATA-5 Design the vendor feed - To Do." in gaps and "DATA-6" not in gaps and "DATA-7" not in gaps
+    with open(mail / "friday_2026-09-11_evidence.csv") as fh:
+        ev = list(csv.DictReader(fh))
+    grant = next(r for r in ev if "storage access" in r["subject"].lower())
+    assert grant["outside"] == "yes" and grant["decided"] == "guess"
+    # the user's answer is recorded and wins next time; drafts are never overwritten
+    decisions = world.audit_dir / "review" / "friday.json"
+    decisions.write_text(json.dumps({"outside": [{"subject": grant["subject"], "outside": False}]}))
+    run(mod, "--apply", str(decisions))
+    assert json.loads(world.ledger.read_text())["outside"] == {grant["subject"]: False}
+    run(mod, "--friday", "2026-09-11")
+    assert "storage access" not in (mail / "outside-projects_2026-09-11_draft-v2.md").read_text().lower()
+
+
+def test_phase_gaps_only_for_ticketed_project_tasks(mod):
+    item = lambda title: {"source": "claude", "title": title, "_clean": title, "_folder": "/r/x"}
+    acts = [
+        {"source": "claude", "task": "BI Migration", "ticket": "DATA-9", "date": "2026-09-08",
+         "_item": item("Write the HLD for the reports")},
+        {"source": "claude", "task": "Default", "ticket": "Other", "date": "2026-09-08", "_item": item("x")},
+        {"source": "claude", "task": "Security", "ticket": "", "date": "2026-09-08", "_item": item("x")},
+        {"source": "leave", "task": "Leave", "ticket": "", "date": "2026-09-08", "_item": item("x")},
+    ]
+    gaps = mod.phase_gaps(acts, {"default_task": "Default"}, dt.date(2026, 9, 7), dt.date(2026, 9, 11))
+    assert [g["task"] for g in gaps] == ["BI Migration"] and "HLD" not in gaps[0]["missing"]
+
+
+def test_friday_is_a_view_of_its_own(mod, world):
+    with pytest.raises(SystemExit):
+        run(mod, "--friday", "2026-09-11", "--detail")
+    with pytest.raises(SystemExit):
+        run(mod, "--friday", "2026-09-11", "--week", "2026-09-07")

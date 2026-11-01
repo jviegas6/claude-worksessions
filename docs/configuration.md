@@ -25,6 +25,12 @@ just as well — re-run `install.sh` afterwards so the skills and `CLAUDE.md` ca
 | `CWS_USER_ROLE` | — | skills' wording ("a data/platform engineer at …") |
 | `CWS_TIMEZONE` | `UTC` | IANA zone the recap normalises to |
 | `CWS_TIMEZONE_WINDOWS` | `UTC` | the same zone as Outlook names it (e.g. `GMT Standard Time`) |
+| `CWS_USER_NAME` | — | the weekly report's subject, `Weekly Report - <name>` |
+| `CWS_REPORT_TO` | — | who the weekly report goes to, shown with the draft |
+| `CWS_REPORT_DAY` | `Wed` | `claude-audit --report` covers the seven days before this weekday (Wed: Wednesday to Tuesday) |
+| `CWS_REPORT_DUE` | — | the deadline shown with the draft (e.g. `18:00 CET`) |
+| `CWS_ARCH_LOOKBACK_WEEKS` | `4` | `claude-audit --friday`: how far back a tracker phase counts as evidence for an active project |
+| `CWS_ADR_REGISTER` | `_config/adr-register.md` | the Markdown table of ADRs (with a Status column) whose undecided rows are "decisions pending" |
 | `CWS_TICKET_EXAMPLE` | `PROJ-123` | prompts and help text; any `PREFIX-123` or `Other` is accepted |
 | `CWS_JIRA_CLOUD_ID` | — | the weekly review's Jira query (Atlassian MCP `getAccessibleAtlassianResources` gives it) |
 | `CWS_PROFILES` | `personal work` | Claude profiles; each is `~/.claude-<name>`, picked with `-p <name>` in `claude-new` / `claude-resume` |

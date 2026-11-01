@@ -154,7 +154,7 @@ def test_json_output(sessions, home, monkeypatch, capsys):
     req = root / "2026" / "09" / "22" / "10-00-00_demo"
     req.mkdir(parents=True)
     (req / ".session.json").write_text(json.dumps({
-        "name": "demo work", "profile": "work", "ticket": "BTPA-1", "task_type": "security",
+        "name": "demo work", "profile": "work", "ticket": "DATA-1", "task_type": "security",
         "session_types": {"b": "permissions"}}))
     bare = root / "2026" / "09" / "21" / "09-00-00_bare"
     bare.mkdir(parents=True)
@@ -177,7 +177,7 @@ def test_json_output(sessions, home, monkeypatch, capsys):
         assert (x["request"].pop("files"), x["request"].pop("files_truncated"), x["request"].pop("size")) == ([], False, 0)
         x["request"].pop("started")
     assert (a["id"], a["title"], a["first_prompt"], a["last_prompt"]) == ("a", "Title A", "first", "last A")
-    assert a["request"] == {"path": str(req), "name": "demo work", "ticket": "BTPA-1",
+    assert a["request"] == {"path": str(req), "name": "demo work", "ticket": "DATA-1",
                             "task_type": "security", "profile": "work", "waiting": None}
     assert b["request"]["task_type"] == "permissions"          # per-session override
     assert c["first_prompt"] is None
@@ -324,7 +324,7 @@ def test_json_lists_request_folders_with_no_session(sessions, home, monkeypatch,
     for name in ("busy", "opened", "idle", "bare"):
         d = folders[name] = day / ("10-00-00_" + name)
         d.mkdir(parents=True)
-        (d / ".session.json").write_text(json.dumps({"name": name, "ticket": "BTPA-9",
+        (d / ".session.json").write_text(json.dumps({"name": name, "ticket": "DATA-9",
                                                      "started_at": "2026-09-23T09:00:00Z"}))
     (day / "11-00-00_not-a-request").mkdir()                              # no .session.json
     (folders["idle"] / "draft.md").write_text("x")
@@ -338,7 +338,7 @@ def test_json_lists_request_folders_with_no_session(sessions, home, monkeypatch,
     assert sorted(reqs) == ["10-00-00_bare", "10-00-00_idle", "10-00-00_opened"]
     idle = reqs["10-00-00_idle"]
     assert (idle["name"], idle["ticket"], idle["files"], idle["files_truncated"]) == (
-        "idle", "BTPA-9", ["draft.md", "gone.md"], False)
+        "idle", "DATA-9", ["draft.md", "gone.md"], False)
     assert idle["size"] == (folders["idle"] / "draft.md").stat().st_size   # the dangling link counts 0
     assert idle["mtime"] == 5_000_000_000 and idle["started"] == sessions.iso_epoch("2026-09-23T09:00:00Z")
     assert reqs["10-00-00_bare"]["files"] == [] and reqs["10-00-00_bare"]["mtime"] > 0

@@ -77,7 +77,7 @@ def test_terms_stems_and_drops_noise(search):
 
 
 def test_ticket_keys_dedupes_uppercases_and_denies(search):
-    assert search.ticket_keys("btpa-7959 and BTPA-7959, UTF-8, ABC-1") == ["ABC-1", "BTPA-7959"]
+    assert search.ticket_keys("data-7959 and DATA-7959, UTF-8, ABC-1") == ["ABC-1", "DATA-7959"]
     assert search.ticket_keys(None) == []
 
 
@@ -91,7 +91,7 @@ def test_extract_reads_fields_and_skips_noise(search, home):
     p = write_transcript(home, "sid-1", [
         "not json",
         rec("user", "2026-09-21T09:00:00Z", "sidechain words", isSidechain=True, cwd="/elsewhere"),
-        rec("user", "2026-09-21T09:00:05Z", "Fix firewall for BTPA-12", cwd=moved_old + "/sub", promptId="p1"),
+        rec("user", "2026-09-21T09:00:05Z", "Fix firewall for DATA-12", cwd=moved_old + "/sub", promptId="p1"),
         rec("user", "2026-09-21T09:00:06Z", "<command>ignored</command>"),
         rec("user", "2026-09-21T09:00:07Z", "meta text", isMeta=True),
         rec("user", "2026-09-21T09:01:00Z", [
@@ -114,10 +114,10 @@ def test_extract_reads_fields_and_skips_noise(search, home):
     assert doc["session_id"] == "sid-1"
     assert doc["title"] == "Firewall egress for Databricks"
     assert doc["cwd"] == moved_new + "/sub"
-    assert doc["snip"]["prompts"] == "Fix firewall for BTPA-12\ncheck subnet routing"
+    assert doc["snip"]["prompts"] == "Fix firewall for DATA-12\ncheck subnet routing"
     assert "sidechain" not in doc["snip"]["prompts"] and "meta" not in doc["snip"]["prompts"]
     assert doc["snip"]["assistant"] == "The NSG blocks egress\n"
-    assert doc["keys"]["prompts"] == ["BTPA-12"]
+    assert doc["keys"]["prompts"] == ["DATA-12"]
     assert "list" in doc["tf"]["tools"] and "nsg" in doc["tf"]["tools"]
     assert doc["tf"]["folder"] == {"sub": 1}          # "new" is a stopword
     assert doc["start"].startswith("2026-09-21") and doc["worked"] > 0
@@ -196,10 +196,10 @@ def test_booking(search):
     ledger["assign"]["s1"] = {"subject": "Network"}
     ledger["subjects"][CA.stable_id("sub_", "Network")] = {"task": "Infra", "ticket": ""}
     assert search.booking(doc, ledger, {}) == ("Network", "Infra", "Other")
-    tasks = {"Infra": {"default_ticket": "BTPA-1"}}
-    assert search.booking(doc, ledger, tasks) == ("Network", "Infra", "BTPA-1")
-    ledger["subjects"][CA.stable_id("sub_", "Network")]["ticket"] = "BTPA-9"
-    assert search.booking(doc, ledger, tasks) == ("Network", "Infra", "BTPA-9")
+    tasks = {"Infra": {"default_ticket": "DATA-1"}}
+    assert search.booking(doc, ledger, tasks) == ("Network", "Infra", "DATA-1")
+    ledger["subjects"][CA.stable_id("sub_", "Network")]["ticket"] = "DATA-9"
+    assert search.booking(doc, ledger, tasks) == ("Network", "Infra", "DATA-9")
 
 
 def test_snippet(search):
@@ -250,12 +250,12 @@ def test_search_levels_possible(search):
 
 def test_search_ticket_tiers(search, home):
     CA = search.CA
-    declared = session_dir(home, "decl", ticket="btpa-7", profile="work")
+    declared = session_dir(home, "decl", ticket="data-7", profile="work")
     docs = [
         make_doc(search, "declared", title="Something", cwd=str(declared)),
         make_doc(search, "booked", title="Booked thing"),
-        make_doc(search, "mentioned", prompts="working on BTPA-7 now"),
-        make_doc(search, "passing", assistant="see BTPA-7 later"),
+        make_doc(search, "mentioned", prompts="working on DATA-7 now"),
+        make_doc(search, "passing", assistant="see DATA-7 later"),
         make_doc(search, "linked", title="Network work"),
         make_doc(search, "summary-words", title="Databricks egress design"),
         make_doc(search, "nothing", title="Unrelated"),
@@ -263,21 +263,21 @@ def test_search_ticket_tiers(search, home):
     ledger = CA.empty_ledger()
     ledger["tasks"] = [{"task": "Infra"}]
     ledger["assign"]["booked"] = {"subject": "Booked"}
-    ledger["subjects"][CA.stable_id("sub_", "Booked")] = {"task": "Infra", "ticket": "BTPA-7"}
+    ledger["subjects"][CA.stable_id("sub_", "Booked")] = {"task": "Infra", "ticket": "DATA-7"}
     ledger["assign"]["linked"] = {"subject": "Network"}
-    linked = {"Network": [("meeting Egress sync", "egress chat about BTPA-7 Egress sync"),
+    linked = {"Network": [("meeting Egress sync", "egress chat about DATA-7 Egress sync"),
                           ("email Other", "nothing here")]}
-    jira = {"BTPA-7": {"key": "BTPA-7", "summary": "Databricks egress"}}
-    results, keys = search.search("btpa-7", docs, ledger, jira, linked)
-    assert keys == {"BTPA-7"}
+    jira = {"DATA-7": {"key": "DATA-7", "summary": "Databricks egress"}}
+    results, keys = search.search("data-7", docs, ledger, jira, linked)
+    assert keys == {"DATA-7"}
     by = {r["doc"]["session_id"]: r for r in results}
     assert "nothing" not in by
     assert by["declared"]["level"] == "on ticket"
-    assert by["declared"]["why"][0] == "declared BTPA-7 with claude-new"
+    assert by["declared"]["why"][0] == "declared DATA-7 with claude-new"
     assert by["declared"]["profile"] == "work"
-    assert by["booked"]["why"][0] == "booked to BTPA-7 in the weekly review"
+    assert by["booked"]["why"][0] == "booked to DATA-7 in the weekly review"
     assert by["booked"]["doc"]["_task"] == "Infra"
-    assert by["mentioned"]["why"][0] == "you mention BTPA-7"
+    assert by["mentioned"]["why"][0] == "you mention DATA-7"
     assert by["passing"]["level"] == "mentioned"
     assert by["linked"]["level"] == "mentioned"
     assert "linked: meeting Egress sync" in by["linked"]["why"]
@@ -424,7 +424,7 @@ def test_pick_and_resume_execs_claude(search, monkeypatch, capsys, home, profile
 @pytest.fixture
 def corpus(search, home):
     """Two indexed sessions in claude-new folders, plus a jira cache."""
-    fw = session_dir(home, "10-00-00_firewall", ticket="BTPA-7", profile="work")
+    fw = session_dir(home, "10-00-00_firewall", ticket="DATA-7", profile="work")
     cost = session_dir(home, "11-00-00_cost", profile="personal")
     write_transcript(home, "fw1", [
         rec("user", "2026-09-10T09:00:00Z", "open the firewall for databricks", cwd=str(fw), promptId="1"),
@@ -437,7 +437,7 @@ def corpus(search, home):
     ])
     review = home / "work_sessions" / "_audit" / "review"
     review.mkdir(parents=True)
-    (review / "jira.json").write_text(json.dumps([{"key": "BTPA-7", "summary": "Egress firewall"}]))
+    (review / "jira.json").write_text(json.dumps([{"key": "DATA-7", "summary": "Egress firewall"}]))
     return home
 
 
@@ -459,21 +459,21 @@ def test_snippet_for_synonym_word(search):
 
 
 def test_main_ticket_search_shows_jira_title(search, corpus, monkeypatch, capsys):
-    run_main(search, monkeypatch, "BTPA-7", "--no-pick")
+    run_main(search, monkeypatch, "DATA-7", "--no-pick")
     out = capsys.readouterr().out
-    assert out.startswith('claude-search "BTPA-7" (Egress firewall) · 1 of 2 sessions')
-    assert "on ticket" in out and "declared BTPA-7 with claude-new" in out
+    assert out.startswith('claude-search "DATA-7" (Egress firewall) · 1 of 2 sessions')
+    assert "on ticket" in out and "declared DATA-7 with claude-new" in out
 
 
 def test_main_multi_day_span_and_booked(search, corpus, monkeypatch, capsys):
     CA = search.CA
     ledger = CA.empty_ledger()
     ledger["assign"]["cost1"] = {"subject": "Costs"}
-    ledger["subjects"][CA.stable_id("sub_", "Costs")] = {"task": "FinOps", "ticket": "BTPA-3"}
+    ledger["subjects"][CA.stable_id("sub_", "Costs")] = {"task": "FinOps", "ticket": "DATA-3"}
     CA.save_ledger(CA.LEDGER_PATH, ledger)
     run_main(search, monkeypatch, "cost", "--no-pick")
     out = capsys.readouterr().out
-    assert "FinOps / BTPA-3" in out
+    assert "FinOps / DATA-3" in out
     assert "-16 Sep" in out                     # end on another day shows its date
     assert "snippet" not in out
 

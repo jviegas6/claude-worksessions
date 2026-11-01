@@ -1,5 +1,32 @@
 # Changelog
 
+## [2.30.0] — 2026-11-01
+
+- **Friday drafts** (`claude-audit --friday [DATE]`): two Markdown drafts for Monday to Friday,
+  for you to send yourself:
+  - **outside projects**: ad-hoc requests by mail or Teams, support, questions, operational
+    issues. Each subject is classified by a guess with its reason until your answer is in the
+    ledger (`--apply` with `{"outside": [...]}`), so the next week starts from it;
+  - **architect gaps**: tracker phases (Ref Arch, Func Spec, HLD, LLD) with no evidence on an
+    active project in the last `CWS_ARCH_LOOKBACK_WEEKS` (4) weeks, ADRs not yet accepted in
+    `CWS_ADR_REGISTER`, requests waiting on you, and your open design tickets with no activity
+    that week.
+  `--csv` writes the classification evidence. A skill of your own can review the guesses with
+  you and turn the drafts into final wording.
+
+## [2.29.0] — 2026-11-01
+
+- **Weekly report email**: `claude-audit --report [DATE]` exports the same evidence as the
+  tracker in the format the manager asked for on 2026-10-28: the seven days before the
+  report day (`CWS_REPORT_DAY`, Wednesday; so Wednesday to Tuesday), subject `Weekly Report - <CWS_USER_NAME>`,
+  bullets under Projects, Issues, Support & requests and Leave, one per unit of work, each
+  with the days it was worked and its status (Jira status, the claude-wait flag). It writes
+  a Markdown draft under `_audit/weekly-email/` (never overwritten: reruns add `-v2`);
+  `--csv` adds the evidence per bullet, `--copy` copies it formatted through
+  `claude-md-email`. Recurring meetings and items under 10 minutes are left out. The
+  weekly-review skill's step 7 turns the draft into the final wording.
+- Tests and the sidebar's search hint use a neutral ticket prefix.
+
 ## [2.28.0] — 2026-11-01
 
 - **`claude-new --t3 --prompt TEXT`** starts the thread itself, on the right profile: the

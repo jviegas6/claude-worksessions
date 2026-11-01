@@ -541,8 +541,8 @@ async function pickSession(bar, placeHolder) {
 async function searchSessions(bar, query, ai = false) {
   query = query || await vscode.window.showInputBox({
     prompt: ai ? "Search sessions — Claude reads the best candidates and keeps the relevant ones"
-               : "Search sessions: a ticket (BTPA-123) and/or any words",
-    placeHolder: "BTPA-7959 firewall" });
+               : "Search sessions: a ticket (PROJ-123) and/or any words",
+    placeHolder: "PROJ-123 firewall" });
   if (!query) return;
   const args = [...query.split(/\s+/).filter(Boolean), "--csv", "-", "--no-pick", "--limit", "25"];
   if (ai) args.push("--ai");

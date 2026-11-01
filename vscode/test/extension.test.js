@@ -128,7 +128,7 @@ function allItems(provider) {
 test("activates, renders every grouping and opens sessions in tabs", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cws-ext-"));
   const root = path.join(dir, "ws");
-  const A = { path: path.join(root, "2026/09/22/10-00-00_a"), name: "demo", ticket: "BTPA-1",
+  const A = { path: path.join(root, "2026/09/22/10-00-00_a"), name: "demo", ticket: "DATA-1",
               task_type: "security", profile: "work" };
   fs.mkdirSync(A.path, { recursive: true });
   const now = Date.now() / 1000;
@@ -155,13 +155,13 @@ test("activates, renders every grouping and opens sessions in tabs", async () =>
                                   "Work root — no request folder", "in the root"]);
   const [, s1] = items.find(([c]) => c.session && c.session.id === "s1");
   assert.match(s1.tooltip.value, /Fix \*the\* job/);
-  assert.match(s1.tooltip.value, /BTPA-1 · security · work · 1m ago/);
+  assert.match(s1.tooltip.value, /DATA-1 · security · work · 1m ago/);
 
   // open → a terminal tab running claude-resume with the profile; opening again reuses it
   await fake.commands.get("claudeWorksessions.open")(items.find(([c]) => c.session?.id === "s1")[0]);
   assert.strictEqual(fake.terminals.length, 1);
   const t = fake.terminals[0];
-  assert.strictEqual(t.name, "BTPA-1 · Fix *the* job");
+  assert.strictEqual(t.name, "DATA-1 · Fix *the* job");
   assert.strictEqual(t.location, 2);
   assert.deepStrictEqual(t.sent, ["claude-resume -p 'work' --resume 's1'"]);
   await fake.commands.get("claudeWorksessions.open")(items.find(([c]) => c.session?.id === "s1")[0]);
@@ -194,22 +194,22 @@ test("activates, renders every grouping and opens sessions in tabs", async () =>
   fake.answers.push(undefined);
   await fake.commands.get("claudeWorksessions.sort")();                      // cancelled: unchanged
   assert.strictEqual(p.sort, "name");
-  assert.deepStrictEqual(allItems(p).map(([, it]) => it.label)[0], "BTPA-1");
+  assert.deepStrictEqual(allItems(p).map(([, it]) => it.label)[0], "DATA-1");
   p.grouping = "recent";
-  assert.match(allItems(p)[0][1].description, /^BTPA-1 · demo · 1m$/);
+  assert.match(allItems(p)[0][1].description, /^DATA-1 · demo · 1m$/);
 
   // new session in the request: pending until its transcript appears, then linked and renamed
   const reqEl = { kind: "request", request: { ...A, sessions: [] } };
   await fake.commands.get("claudeWorksessions.addSession")(reqEl);
   const nt = fake.terminals[2];
   assert.deepStrictEqual(nt.sent, ['CLAUDE_CONFIG_DIR="$HOME/.claude-work" claude']);
-  assert.strictEqual(nt.name, "BTPA-1 · demo");
+  assert.strictEqual(nt.name, "DATA-1 · demo");
   data.sessions.push({ id: "s2", mtime: Date.now() / 1000, cwd: A.path, in_work_root: true,
                        title: "New work", first_prompt: "go", last_prompt: "go", request: A });
   fs.writeFileSync(json, JSON.stringify(data));
   await fake.commands.get("claudeWorksessions.refresh")();
-  assert.strictEqual(nt.name, "BTPA-1 · New work");
-  assert.strictEqual(ctx.workspaceState.get("tabs")["BTPA-1 · New work"], "s2");
+  assert.strictEqual(nt.name, "DATA-1 · New work");
+  assert.strictEqual(ctx.workspaceState.get("tabs")["DATA-1 · New work"], "s2");
 
   // new request tab runs claude-new in the work root
   await fake.commands.get("claudeWorksessions.newRequest")();
@@ -233,9 +233,9 @@ test("tabs are relinked by name after a reload, and a failing claude-sessions sh
   const bad = path.join(dir, "claude-sessions");
   fs.writeFileSync(bad, "#!/bin/sh\necho boom >&2\nexit 1\n", { mode: 0o755 });
   const fake = fakeVscode({ sessionsCommand: bad });
-  fake.terminals.push({ name: "BTPA-1 · old" });
+  fake.terminals.push({ name: "DATA-1 · old" });
   const ctx = context();
-  await ctx.workspaceState.update("tabs", { "BTPA-1 · old": "s9" });
+  await ctx.workspaceState.update("tabs", { "DATA-1 · old": "s9" });
   load(fake).activate(ctx);
   await settle(ctx);
   const view = ctx.subscriptions[0];
@@ -248,7 +248,7 @@ test("tabs are relinked by name after a reload, and a failing claude-sessions sh
 async function world(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cws-cmd-"));
   const root = path.join(dir, "ws"), bin = path.join(dir, "bin");
-  const A = { path: path.join(root, "2026/09/22/10-00-00_a"), name: "demo", ticket: "BTPA-1",
+  const A = { path: path.join(root, "2026/09/22/10-00-00_a"), name: "demo", ticket: "DATA-1",
               task_type: "security", profile: "work" };
   fs.mkdirSync(A.path, { recursive: true });
   fs.mkdirSync(bin);
@@ -264,7 +264,7 @@ async function world(t) {
   fs.writeFileSync(path.join(bin, "claude-sessions"), `#!/bin/sh\ncat "${dir}/data.json"\n`, { mode: 0o755 });
   fs.writeFileSync(path.join(dir, "search.csv"),
     'rank,level,score,session_id,start,end,worked,task,ticket,title,folder,why,snippet,resume\n' +
-    `1,strong,9,s1,2026-09-22T10:00,,,,BTPA-1,Fix the firewall,${A.path},"title: firewall","you: ""open port"""` +
+    `1,strong,9,s1,2026-09-22T10:00,,,,DATA-1,Fix the firewall,${A.path},"title: firewall","you: ""open port"""` +
     `,cd x && claude-resume -p work --resume s1\n` +
     `2,likely,3,zz-outside,2026-09-01T10:00,,,,,Elsewhere,/repo,why,snip,cd /repo && claude-resume --resume zz-outside\n`);
   fs.writeFileSync(path.join(bin, "claude-search"),
@@ -420,7 +420,7 @@ test("recent sessions, go to request, skills, resume by id, new window", async t
   const w = await world(t);
   w.fake.answers.push(items => {
     assert.deepStrictEqual(items.map(i => i.label), ["Fix the firewall", "Root chat"]);
-    assert.match(items[0].description, /^BTPA-1 · demo · 1m$/);
+    assert.match(items[0].description, /^DATA-1 · demo · 1m$/);
     assert.strictEqual(items[0].detail, "last: open port 443");
     assert.strictEqual(items[1].description.split(" · ")[0], "work root");
     return items[0];
@@ -479,7 +479,7 @@ test("run skill with no skills installed says so", async t => {
 test("files: a Files node per request, folders, opening, reveal, copy, and what a session wrote", async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cws-files-"));
   const root = path.join(dir, "ws");
-  const A = { path: path.join(root, "2026/09/22/10-00-00_a"), name: "demo", ticket: "BTPA-1", task_type: "",
+  const A = { path: path.join(root, "2026/09/22/10-00-00_a"), name: "demo", ticket: "DATA-1", task_type: "",
               profile: "", files: ["notes.md", "out/report.csv", "out/brainlabs.csv"], files_truncated: true };
   const B = { path: path.join(root, "2026/09/22/11-00-00_b"), name: "empty", ticket: "", task_type: "",
               profile: "", files: [], files_truncated: false };
@@ -551,7 +551,7 @@ test("request folders with no session show, with their files (#23)", async t => 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cws-idle-"));
   const root = path.join(dir, "ws");
   const now = Date.now() / 1000;
-  const C = { path: path.join(root, "2026/09/23/08-00-00_c"), name: "new request", ticket: "BTPA-9", task_type: "",
+  const C = { path: path.join(root, "2026/09/23/08-00-00_c"), name: "new request", ticket: "DATA-9", task_type: "",
               profile: "", started: now - 300, mtime: now - 100, files: ["draft.md"], files_truncated: false };
   const D = { path: path.join(root, "2026/09/23/09-00-00_d"), name: "untouched", ticket: "", task_type: "",
               profile: "", started: now - 200, mtime: now - 200, files: [], files_truncated: false };
@@ -622,7 +622,7 @@ test("copy for email: from the sidebar, a menu URI, the editor or a preview; sav
 test("pins: Pin puts a session or request in a Pinned group on top; Unpin takes it out", async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cws-pinx-"));
   const root = path.join(dir, "ws");
-  const A = { path: path.join(root, "2026/09/22/10-00-00_a"), name: "demo", ticket: "BTPA-1", task_type: "",
+  const A = { path: path.join(root, "2026/09/22/10-00-00_a"), name: "demo", ticket: "DATA-1", task_type: "",
               profile: "", files: ["notes.md"], files_truncated: false };
   const B = { path: path.join(root, "2026/09/21/10-00-00_b"), name: "older", ticket: "", task_type: "",
               profile: "", files: [], files_truncated: false };
@@ -825,7 +825,7 @@ test("deleted sessions: a Deleted group at the bottom; restore, delete for good,
 test("filters: the Filter menu sets day, tickets and artifacts; remembered; shown; cleared", async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cws-filt-"));
   const root = path.join(dir, "ws");
-  const A = { path: path.join(root, "2026/09/23/10-00-00_a"), name: "demo", ticket: "BTPA-1", task_type: "", profile: "",
+  const A = { path: path.join(root, "2026/09/23/10-00-00_a"), name: "demo", ticket: "DATA-1", task_type: "", profile: "",
               files: [], files_truncated: false };
   const B = { path: path.join(root, "2026/09/01/10-00-00_b"), name: "old", ticket: "", task_type: "", profile: "",
               files: [], files_truncated: false };
@@ -849,22 +849,22 @@ test("filters: the Filter menu sets day, tickets and artifacts; remembered; show
   assert.deepStrictEqual(sessions(), ["fresh", "stale"]);
   assert.strictEqual(p.getChildren(undefined).at(-1).kind, "deleted");
 
-  // Day → Today; Ticket → BTPA-1; Artifacts → With; then Esc
+  // Day → Today; Ticket → DATA-1; Artifacts → With; then Esc
   fake.answers.push(pick("day"), items => items.find(i => i.k === "today"),
                     items => { assert.deepStrictEqual(items.map(i => i.description).slice(0, 2), ["Today", "Any ticket"]); return pick("ticket")(items); },
-                    items => { assert.deepStrictEqual(items.map(i => i.label), ["BTPA-1", "(no ticket)"]); return [items[0]]; },
+                    items => { assert.deepStrictEqual(items.map(i => i.label), ["DATA-1", "(no ticket)"]); return [items[0]]; },
                     pick("artifacts"), items => items.find(i => i.k === "with"),
                     undefined);
   await fake.commands.get("claudeWorksessions.filter")();
-  assert.deepStrictEqual(ctx.globalState.get("filters"), { day: { preset: "today" }, tickets: ["BTPA-1"], artifacts: "with" });
-  assert.strictEqual(view.description, "By day · Last activity · only today · BTPA-1 · with artifacts");
+  assert.deepStrictEqual(ctx.globalState.get("filters"), { day: { preset: "today" }, tickets: ["DATA-1"], artifacts: "with" });
+  assert.strictEqual(view.description, "By day · Last activity · only today · DATA-1 · with artifacts");
   assert.ok(fake.executed.some(e => e[0] === "setContext" && e[1] === "claudeWorksessions.filtered"));
   assert.deepStrictEqual(sessions(), ["fresh"]);
   assert.notStrictEqual(p.getChildren(undefined).at(-1).kind, "deleted");                       // bin hidden while filtering
 
   // the menu shows current values and offers Clear; a date; cancelled sub-pickers change nothing
   fake.answers.push(items => {
-    assert.deepStrictEqual(items.map(i => i.description), ["Today", "BTPA-1", "With artifacts", undefined]);
+    assert.deepStrictEqual(items.map(i => i.description), ["Today", "DATA-1", "With artifacts", undefined]);
     return pick("day")(items);
   }, items => items.find(i => i.k === "date"), "2026-09-01",
   pick("ticket"), undefined,                     // cancel ticket picker
@@ -883,7 +883,7 @@ test("filters: the Filter menu sets day, tickets and artifacts; remembered; show
   await fake.commands.get("claudeWorksessions.filter")();
   assert.deepStrictEqual(ctx.globalState.get("filters"), { day: { preset: "any" }, tickets: [], artifacts: "any" });
   assert.strictEqual(view.description, "By day · Last activity");
-  p.setFilters({ day: { preset: "any" }, tickets: ["BTPA-1"], artifacts: "any" });
+  p.setFilters({ day: { preset: "any" }, tickets: ["DATA-1"], artifacts: "any" });
   await fake.commands.get("claudeWorksessions.clearFilters")();
   assert.deepStrictEqual(sessions(), ["fresh", "stale"]);
   fs.rmSync(path.join(binDir, "x"), { recursive: true });

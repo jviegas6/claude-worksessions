@@ -12,9 +12,9 @@ const req = (p, extra = {}) => ({ path: `${ROOT}/${p}`, name: p.split("/").pop()
 const ses = (id, mtime, request, extra = {}) => ({ id, mtime, cwd: request ? request.path : ROOT,
   in_work_root: true, title: "t-" + id, first_prompt: "f", last_prompt: "l", request, ...extra });
 
-const A = req("2026/09/22/10-00-00_a", { ticket: "BTPA-1", profile: "work" });
+const A = req("2026/09/22/10-00-00_a", { ticket: "DATA-1", profile: "work" });
 const B = req("2026/09/22/11-00-00_b", { ticket: "Other" });
-const C = req("2026/09/21/09-00-00_c", { ticket: "BTPA-1" });
+const C = req("2026/09/21/09-00-00_c", { ticket: "DATA-1" });
 const data = {
   work_root: ROOT,
   sessions: [
@@ -48,7 +48,7 @@ test("grouping by day", () => {
 test("grouping by ticket", () => {
   const g = M.tree(data, "ticket");
   assert.deepStrictEqual(g.map(x => [x.key, x.requests.map(r => r.name)]),
-    [["BTPA-1", ["10-00-00_a", "09-00-00_c"]], [M.ROOT_KEY, ["Work root — no request folder"]], ["Other", ["11-00-00_b"]]]);
+    [["DATA-1", ["10-00-00_a", "09-00-00_c"]], [M.ROOT_KEY, ["Work root — no request folder"]], ["Other", ["11-00-00_b"]]]);
   const none = { work_root: ROOT, sessions: [ses("x", 1, req("2026/01/01/x"))] };
   assert.strictEqual(M.tree(none, "ticket")[0].key, "(no ticket)");
 });
@@ -69,7 +69,7 @@ test("labels and tab names", () => {
   assert.strictEqual(M.sessionLabel({ id: "abcdefghij", first_prompt: "F" }), "F");
   assert.strictEqual(M.sessionLabel({ id: "abcdefghij", last_prompt: "L" }), "L");
   assert.strictEqual(M.sessionLabel({ id: "abcdefghij" }), "abcdefgh");
-  assert.strictEqual(M.tabName({ ticket: "BTPA-1" }, "x"), "BTPA-1 · x");
+  assert.strictEqual(M.tabName({ ticket: "DATA-1" }, "x"), "DATA-1 · x");
   assert.strictEqual(M.tabName({ ticket: "Other" }, "x"), "x");
   assert.strictEqual(M.tabName(null, "x"), "x");
 });
@@ -106,7 +106,7 @@ test("the search box matches every word anywhere in a session or its request", (
   const s = ses("abc123", 1, A, { title: "Fix the firewall", last_prompt: "open port 443" });
   assert.ok(M.matches(s, ""));
   assert.ok(M.matches(s, "FIREWALL 443"));
-  assert.ok(M.matches(s, "btpa-1 work"));            // ticket and profile
+  assert.ok(M.matches(s, "data-1 work"));            // ticket and profile
   assert.ok(M.matches(s, "10-00-00_a abc1"));         // folder and id
   assert.ok(!M.matches(s, "firewall 80"));
   assert.deepStrictEqual(M.visible(data, { filter: "t-a" }).map(x => x.id), ["a1", "a2"]);
@@ -278,14 +278,14 @@ test("the deleted-sessions bin: where it is, and what is in it", () => {
   assert.deepStrictEqual(M.readDeleted(path.join(dir, "missing")), []);
   const put = (name, m) => { fs.mkdirSync(path.join(dir, name)); if (m !== undefined) fs.writeFileSync(path.join(dir, name, "manifest.json"), typeof m === "string" ? m : JSON.stringify(m)); };
   put("a", { id: "s-old", title: "Old test", request: "demo", deleted_at: 100 });
-  put("b", { id: "s-new", title: "Newer", ticket: "BTPA-1", deleted_at: 200 });
+  put("b", { id: "s-new", title: "Newer", ticket: "DATA-1", deleted_at: 200 });
   put("c", { id: "s-none", title: "No date" });
   put("d", "{bad"); put("e", { title: "no id" }); put("f");
   const all = M.readDeleted(dir);
   assert.deepStrictEqual(all.map(m => m.id), ["s-new", "s-old", "s-none"]);
   assert.strictEqual(all[0].dir, path.join(dir, "b"));
   assert.deepStrictEqual(M.readDeleted(dir, "demo old").map(m => m.id), ["s-old"]);
-  assert.deepStrictEqual(M.readDeleted(dir, "btpa-1").map(m => m.id), ["s-new"]);
+  assert.deepStrictEqual(M.readDeleted(dir, "data-1").map(m => m.id), ["s-new"]);
 });
 
 test("filters: day ranges, tickets, artifacts, and how they combine", () => {
@@ -305,7 +305,7 @@ test("filters: day ranges, tickets, artifacts, and how they combine", () => {
   assert.deepStrictEqual(M.dayRange({ preset: "thisweek" }, T(2026, 9, 27, 9))[0], T(2026, 9, 21));   // Sunday: same week
   assert.ok(Array.isArray(M.dayRange({ preset: "today" })));                                       // defaults to now
 
-  const R = req("2026/09/22/10-00-00_r", { ticket: "BTPA-1" });
+  const R = req("2026/09/22/10-00-00_r", { ticket: "DATA-1" });
   const d = { work_root: ROOT, sessions: [
     ses("span", T(2026, 9, 23, 9), R, { started: T(2026, 9, 22, 17), artifacts: ["/x"] }),   // 22nd → 23rd
     ses("old", T(2026, 9, 2, 10), R, { started: T(2026, 9, 2, 9), artifacts: [] }),
@@ -317,11 +317,11 @@ test("filters: day ranges, tickets, artifacts, and how they combine", () => {
   assert.deepStrictEqual(ids({ day: { preset: "today" } }), ["span", "root"]);
   assert.deepStrictEqual(ids({ day: { preset: "yesterday" } }), ["span", "other"]);              // active on both days
   assert.deepStrictEqual(ids({ day: { preset: "date", date: "2026-09-02" } }), ["old"]);
-  assert.deepStrictEqual(ids({ tickets: ["BTPA-1"] }), ["span", "old"]);
+  assert.deepStrictEqual(ids({ tickets: ["DATA-1"] }), ["span", "old"]);
   assert.deepStrictEqual(ids({ tickets: [M.NO_TICKET, "Other"] }), ["root", "other"]);
   assert.deepStrictEqual(ids({ artifacts: "with" }), ["span", "root"]);
   assert.deepStrictEqual(ids({ artifacts: "without" }), ["old", "other"]);
-  assert.deepStrictEqual(ids({ day: { preset: "today" }, tickets: ["BTPA-1"], artifacts: "with" }), ["span"]);
+  assert.deepStrictEqual(ids({ day: { preset: "today" }, tickets: ["DATA-1"], artifacts: "with" }), ["span"]);
   assert.deepStrictEqual(ids({ tickets: [] }), ids(null));
 
   assert.ok(!M.filtersActive(null) && !M.filtersActive({ day: { preset: "any" }, tickets: [], artifacts: "any" }));
@@ -331,7 +331,7 @@ test("filters: day ranges, tickets, artifacts, and how they combine", () => {
                      "last week · A-1, B-2 · without artifacts");
   assert.strictEqual(M.describeFilters({ day: { preset: "date", date: "2026-09-02" }, tickets: ["A", "B", "C"] }),
                      "2026-09-02 · 3 tickets");
-  assert.deepStrictEqual(M.ticketsInUse(d), ["BTPA-1", "Other", M.NO_TICKET]);
+  assert.deepStrictEqual(M.ticketsInUse(d), ["DATA-1", "Other", M.NO_TICKET]);
   // pins and groups follow the filters
   assert.deepStrictEqual(M.tree(d, "day", { filters: { tickets: ["Other"] } }).map(g => g.key), ["2026-09-22"]);
 });
@@ -346,7 +346,7 @@ test("files: a request found by its name shows all its files (#24)", () => {
 });
 
 test("request folders with no session are requests too (#23)", () => {
-  const idle = { ...req("2026/09/23/08-00-00_new", { ticket: "BTPA-9", task_type: "tooling" }),
+  const idle = { ...req("2026/09/23/08-00-00_new", { ticket: "DATA-9", task_type: "tooling" }),
                  started: 1000, mtime: 2000, files: ["draft.md"], files_truncated: false };
   const bare = { ...req("2026/09/20/08-00-00_bare"), started: 10, mtime: 10, files: [] };
   const again = { ...B, started: 1, mtime: 1, files: [] };              // B has sessions: not twice
@@ -360,13 +360,13 @@ test("request folders with no session are requests too (#23)", () => {
   assert.ok(!M.requests(d).some(r => r.path === bare.path));
   // grouping, search, filters and ticket list apply to them
   assert.ok(M.tree(d, "day").some(g => g.key === "2026-09-23" && g.requests[0].path === idle.path));
-  assert.ok(M.tree(d, "ticket").some(g => g.key === "BTPA-9"));
+  assert.ok(M.tree(d, "ticket").some(g => g.key === "DATA-9"));
   assert.ok(M.requests(d, { filter: "draft" }).some(r => r.path === idle.path));
   assert.ok(!M.requests(d, { filter: "zzz-nothing" }).some(r => r.path === idle.path));
   assert.ok(M.requests(d, { filters: { artifacts: "with" } }).some(r => r.path === idle.path));
   assert.ok(!M.requests(d, { filters: { artifacts: "with" } }).some(r => r.path === bare.path));
   assert.ok(!M.requests(d, { filters: { tickets: ["Other"] } }).some(r => r.path === idle.path));
-  assert.ok(M.ticketsInUse(d).includes("BTPA-9"));
+  assert.ok(M.ticketsInUse(d).includes("DATA-9"));
   assert.ok(M.pinned(d, { sessions: {}, requests: { [M.requestKey(ROOT, idle.path)]: 1 } }).requests
     .some(r => r.path === idle.path));
   // no mtime at all: its start time

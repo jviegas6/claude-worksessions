@@ -410,10 +410,13 @@ PYEOF
 # Open a request folder where claude-new was asked to: VS Code (its Claude extension starts
 # Claude through claude-vscode) or T3 Code (claude-t3-sync adds it under its ticket and opens it).
 # Nothing waits for either, so ended_at stays empty. Returns 1 for cli: the caller runs Claude.
+# In T3, a prompt starts a thread with it on the profile's Claude instance.
 _cws_open_request() {
   case "$2" in
     code) code -n "$1" ;;
-    t3)   claude-t3-sync --open "$1" ;;
+    t3)   local -a first=()
+          [[ -n "$3" ]] && first=(--prompt "$3" --profile "$4")
+          claude-t3-sync --open "$1" "${first[@]}" ;;
     *)    return 1 ;;
   esac
   return 0
@@ -432,7 +435,7 @@ _claude_new_continue() {
   fi
   print -r -- "→ $profile  continuing in ${dir#$CLAUDE_WORK_ROOT/}"
   cd "$dir" || return 1
-  _cws_open_request "$dir" "$opener" && return
+  _cws_open_request "$dir" "$opener" "$prompt" "$profile" && return
   CLAUDE_CONFIG_DIR="$cfg" command claude ${prompt:+"$prompt"}
 }
 
@@ -499,9 +502,11 @@ print("{:<10} {:<14} {:<16} {:<9}".format("[" + (d.get("profile") or "?") + "]",
         print -r -- '    -c / --code opens the folder in VS Code instead; the Claude extension there'
         print -r -- '    picks up the profile through claude-vscode'
         print -r -- '    --t3 adds it to T3 Code as "TICKET · date · name" and opens it there; pick the'
-        print -r -- '    profile'"'"'s Claude instance in the thread. --cli starts Claude in this terminal.'
+        print -r -- '    profile'"'"'s Claude instance in the thread (with --prompt it starts the thread there).'
+        print -r -- '    --cli starts Claude in this terminal.'
         print -r -- "    Without any of them: CWS_OPEN (${CWS_OPEN:-cli})"
-        print -r -- '    --prompt TEXT starts Claude with TEXT as the first prompt, e.g. --prompt /weekly-review'
+        print -r -- '    --prompt TEXT starts Claude with TEXT as the first prompt, e.g. --prompt /weekly-review;'
+        print -r -- '    with --t3, as a thread on the profile'"'"'s T3 Claude instance. Not with -c'
         print -r -- "    TICKET is mandatory: PREFIX-123 (e.g. $CWS_TICKET_EXAMPLE), or Other"
         print -r -- '    -T / --type is the kind of work (permissions, job errors, ...); asked if omitted'
         print -r -- '    -g / --goal is what the session should deliver, --done how you will know it did;'
@@ -612,8 +617,8 @@ print("{:<10} {:<14} {:<16} {:<9}".format("[" + (d.get("profile") or "?") + "]",
     cli|code|t3) ;;
     *) print -u2 -- "claude-new: CWS_OPEN must be cli, code or t3 (not '$opener')"; return 1 ;;
   esac
-  if [[ "$opener" != cli && -n "$prompt" ]]; then
-    print -u2 -- "claude-new: --prompt needs Claude in the terminal (--cli): VS Code and T3 Code start Claude themselves"
+  if [[ "$opener" == code && -n "$prompt" ]]; then
+    print -u2 -- "claude-new: --prompt can't be used with -c: VS Code starts Claude itself"
     return 1
   fi
   if [[ "$opener" == code ]] && ! command -v code >/dev/null 2>&1; then
@@ -727,7 +732,7 @@ json.dump({
   print -r -- "→ $profile  $ticket  ${ttype:+[$ttype]  }${dir#$CLAUDE_WORK_ROOT/}${${audit:#1}:+  (no-audit)}"
   cd "$dir" || return 1
 
-  _cws_open_request "$dir" "$opener" && return
+  _cws_open_request "$dir" "$opener" "$prompt" "$profile" && return
 
   CLAUDE_CONFIG_DIR="$cfg" command claude ${prompt:+"$prompt"}
   local rc=$?

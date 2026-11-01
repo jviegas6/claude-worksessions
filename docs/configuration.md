@@ -41,6 +41,7 @@ just as well — re-run `install.sh` afterwards so the skills and `CLAUDE.md` ca
 | `CWS_GUARD_IGNORE_NAMES` | — | first parts of dotted names that are code, not data, in your commands (SDK objects), space-separated |
 | `CWS_OPEN` | `cli` | where `claude-new` opens a request: `cli` (Claude in the terminal), `code` (VS Code, as `-c`) or `t3` (T3 Code, as `--t3`) |
 | `CWS_T3_BIN` | `t3` on PATH, else `~/.t3/bin/t3` | T3 Code's command, for `claude-new --t3` and `claude-t3-sync` |
+| `CWS_T3_MODEL` | — | model for threads `claude-new --t3 --prompt` starts, when T3 has no thread on that instance yet to take it from |
 | `CWS_T3_IDLE_DAYS` | `14` | `claude-t3-sync` removes a request's T3 project after this many idle days, if it has no threads and isn't waiting on anyone |
 | `CWS_INSTALL_YAZI` | `1` | install yazi, glow, pandoc and the Markdown extras |
 

@@ -129,6 +129,16 @@ def test_t3_opens_the_request_in_t3_code(tmp_path, flags, env):
     assert json.loads(meta.read_text())["ended_at"] is None
 
 
+def test_t3_with_a_prompt_starts_a_thread_on_the_profile(tmp_path):
+    (tmp_path / ".claude-work").mkdir()
+    r = run_new(tmp_path, '--t3 -p work -t Other -T reporting --prompt "/weekly-review 2026-10-26" demo',
+                PATH=t3_stubs(tmp_path))
+    assert r.returncode == 0, r.stderr
+    meta = next(tmp_path.glob("[0-9]*/*/*/*/.session.json"))
+    assert (tmp_path / "t3-opened").read_text().strip() == \
+        "--open {} --prompt /weekly-review 2026-10-26 --profile work".format(meta.parent)
+
+
 def test_cli_flag_overrides_cws_open(tmp_path):
     (tmp_path / ".claude-work").mkdir()
     r = run_new(tmp_path, "--cli -p work -t Other -T tooling demo", PATH=t3_stubs(tmp_path), CWS_OPEN="t3")
@@ -138,7 +148,6 @@ def test_cli_flag_overrides_cws_open(tmp_path):
 
 
 @pytest.mark.parametrize("args, env, message", [
-    ("--t3 --prompt /x", {}, "--prompt needs Claude in the terminal"),
     ("", {"CWS_OPEN": "emacs"}, "CWS_OPEN must be cli, code or t3"),
 ])
 def test_t3_option_errors(tmp_path, args, env, message):
@@ -535,7 +544,7 @@ def test_claude_new_prompt_starts_claude_with_it(tmp_path):
 
 @pytest.mark.parametrize("args,err", [
     ("--prompt", "--prompt needs the text"),
-    ("-c --prompt /x -p personal -t Other -T tooling demo", "needs Claude in the terminal"),
+    ("-c --prompt /x -p personal -t Other -T tooling demo", "can't be used with -c"),
 ])
 def test_claude_new_prompt_errors(tmp_path, args, err):
     (tmp_path / ".claude-personal").mkdir()

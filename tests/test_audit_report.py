@@ -882,7 +882,7 @@ def test_report_draft_sections_status_and_evidence(mod, world, monkeypatch, caps
     (perm.parent / "thread.md").write_text("# x\n\n## 2026-09-08 12:00 · waiting\n\nAsked Ana to approve.\n")
     run(mod, "--report", "2026-09-09", "--csv")
     out = capsys.readouterr().out
-    assert "Wed 02 Sep to Tue 08 Sep 2026" in out
+    assert "Wed 02 Sep to Tue 08 Sep 2026" in out and "Wed 09 Sep 2026" in out.split("Due:")[1].splitlines()[0]
     assert "Subject: Weekly Report - Ana Lima" in out and "To:      boss@x.com" in out
     draft = (world.audit_dir / "weekly-email" / "weekly-report_2026-09-09_draft.md").read_text()
     lines = draft.splitlines()

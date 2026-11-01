@@ -2328,17 +2328,18 @@ def run_report(args, first, last, busy_cap, read_cap, today):
         notes.insert(0, "no Teams/calendar/mail data for {} -- those days show Claude sessions only; "
                         "ask Claude for a recap or the weekly review to gather them".format(describe_days(missing)))
 
+    send = last + dt.timedelta(days=1)          # the window ends the day before it goes out
     subject = "Weekly Report - " + (USER_NAME or "FirstName LastName")
-    due = "{} {}".format(last.strftime("%a %d %b %Y"), REPORT_DUE).strip()
+    due = "{} {}".format(send.strftime("%a %d %b %Y"), REPORT_DUE).strip()
     body = report_markdown(rows, leave)
-    path = next_version(os.path.join(REPORT_DIR, "weekly-report_{}_draft.md".format(last + dt.timedelta(days=1))))
+    path = next_version(os.path.join(REPORT_DIR, "weekly-report_{}_draft.md".format(send)))
     os.makedirs(REPORT_DIR, exist_ok=True)
     with open(path, "w") as fh:
         fh.write(body)
 
     say = (lambda *a: print(*a, file=sys.stderr)) if args.csv == "-" else print
     if args.csv is not None:
-        cpath = args.csv or os.path.join(REPORT_DIR, "weekly-report_{}_evidence.csv".format(last + dt.timedelta(days=1)))
+        cpath = args.csv or os.path.join(REPORT_DIR, "weekly-report_{}_evidence.csv".format(send))
         write_csv(cpath, rows, REPORT_COLUMNS)
         notes.append("evidence per bullet: " + cpath)
     say("Weekly report · {} to {}".format(first.strftime("%a %d %b"), last.strftime("%a %d %b %Y")))

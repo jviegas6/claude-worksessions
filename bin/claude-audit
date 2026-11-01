@@ -7,6 +7,7 @@
   claude-audit --month [YYYY-MM]        a month: the weeks that start in it
   claude-audit --from DATE --to DATE    a range: every week it touches
   claude-audit --report [DATE]          the weekly report email (Wednesday to Tuesday)
+  claude-audit --friday [DATE]          the Friday emails: outside projects, architect gaps
 
   --detail        every activity, one row each, with its task and ticket
   --copy          also copy the table, ready to paste
@@ -37,6 +38,7 @@ import csv
 import hashlib
 import math
 import datetime as dt
+import glob
 import json
 import os
 import re
@@ -1441,6 +1443,9 @@ def apply_decisions(path, ledger_path):
     for a in decisions.get("assign") or []:
         ledger["assign"][a["key"]] = {"subject": a["subject"].strip(), "status": "confirmed", "at": stamp}
         counts["items linked"] += 1
+    for o in decisions.get("outside") or []:
+        ledger.setdefault("outside", {})[o["subject"].strip()] = bool(o["outside"])
+        counts["subjects classified"] += 1
     for b in decisions.get("book_on") or []:
         dt.date.fromisoformat(b["date"])  # a bad date fails here, before the ledger is written
         ledger.setdefault("book_on", {})[b["key"]] = b["date"]
@@ -1564,10 +1569,10 @@ def parse_day(raw, today):
 
 def resolve_period(args, today):
     """(kind, first day, last day, label) for the options given; this week by default."""
-    if sum(1 for x in (args.day, args.week, args.month, args.report) if x) > 1:
+    if sum(1 for x in (args.day, args.week, args.month, args.report, args.friday) if x) > 1:
         sys.exit("claude-audit: pick one of --day, --week, --month or --report")
     if args.start or args.end:
-        if args.day or args.week or args.month or args.report:
+        if args.day or args.week or args.month or args.report or args.friday:
             sys.exit("claude-audit: use --day/--week/--month or --from/--to, not both")
         if not args.start:
             sys.exit("claude-audit: --to needs --from")
@@ -1578,6 +1583,9 @@ def resolve_period(args, today):
     if args.report:
         first, last = report_window(parse_day(args.report, today))
         return "report", first, last, "weekly-report-{}".format(last)
+    if args.friday:
+        first, last = friday_window(parse_day(args.friday, today))
+        return "friday", first, last, "friday-{}".format(last)
     if args.day:
         day = parse_day(args.day, today)
         return "day", day, day, str(day)
@@ -2360,6 +2368,215 @@ def run_report(args, first, last, busy_cap, read_cap, today):
     say(path)
 
 
+# --- Friday reports -------------------------------------------------------------------
+# Two drafts for Friday, in the weekly report's style, for Monday to Friday of the week:
+#   outside projects -- what was worked on that is not project work: ad-hoc requests by mail
+#     or Teams, support, questions. The script's classification is a guess with its reason;
+#     the user reviews it (a skill can ask) and the answers are recorded in the
+#     ledger's "outside" map, so the next week starts from them.
+#   architect gaps -- what an architect's evidence doesn't show: tracker phases (Ref Arch,
+#     Func Spec, HLD, LLD) with no activity on an active project over the last weeks,
+#     decisions still pending in the ADR register, replies owed (claude-wait me) and design
+#     tickets of the user's not worked on that week.
+
+ARCH_KEYS = ["ref_arch", "func_spec", "hld", "lld"]
+ARCH_NAMES = {"ref_arch": "Ref Arch", "func_spec": "Func Spec", "hld": "HLD", "lld": "LLD"}
+ARCH_LOOKBACK_WEEKS = int(CONFIG.get("CWS_ARCH_LOOKBACK_WEEKS") or 4)
+ADR_REGISTER = CONFIG.get("CWS_ADR_REGISTER") or os.path.join(DEFAULT_ROOT, "_config", "adr-register.md")
+ADR_SETTLED = re.compile(r"^\s*(accepted|superseded|rejected|deprecated|withdrawn)", re.I)
+DESIGN_WORDS = re.compile(r"\b(adr|architecture|architect|design|hld|lld|spec|specification|"
+                          r"solution|blueprint|data contract|tech spec)\b", re.I)
+JIRA_DONE = re.compile(r"^\s*(done|closed|resolved|cancel)", re.I)
+FRIDAY_COLUMNS = ["outside", "reason", "decided"] + REPORT_COLUMNS
+
+
+def friday_window(day):
+    """Monday to Friday of the week containing DAY."""
+    monday = day - dt.timedelta(days=day.weekday())
+    return monday, monday + dt.timedelta(days=4)
+
+
+def outside_guess(row, decided):
+    """(outside, reason, decided) for one report row. The user's answer wins; otherwise
+    project work is what carries a project ticket and was started as project work."""
+    if row["subject"] in decided:
+        return bool(decided[row["subject"]]), "your decision", True
+    comms = "mail/chat only" if not (row["sessions"] or row["meetings"]) else ""
+    if row["section"] != "Projects":
+        return True, "; ".join(x for x in ("section " + row["section"], comms) if x), False
+    if not row["tickets"]:
+        return True, "; ".join(x for x in ("no project ticket", comms) if x), False
+    return False, "project ticket " + row["tickets"], False
+
+
+def phase_gaps(acts, ledger, first, last):
+    """Per project task worked in the window: the architect phases with no evidence in the
+    last ARCH_LOOKBACK_WEEKS weeks. Default-task and ticketless work is not a project."""
+    default = ledger.get("default_task") or ""
+    since = (last - dt.timedelta(weeks=ARCH_LOOKBACK_WEEKS) + dt.timedelta(days=1)).isoformat()
+    lo, hi = first.isoformat(), last.isoformat()
+    active, items = set(), defaultdict(list)
+    for r in acts:
+        task, ticket = r.get("task") or "", r.get("ticket") or ""
+        if r["source"] in NOT_WORK or not task or task == default or task.startswith("("):
+            continue
+        if not ticket or ticket == "Other":
+            continue
+        if lo <= r["date"] <= hi:
+            active.add(task)
+        if since <= r["date"] <= hi:
+            items[task].append(r["_item"])
+    out = []
+    for task in sorted(active):
+        flags, _ = infer_flags(items[task])
+        missing = [ARCH_NAMES[k] for k in ARCH_KEYS if not flags.get(k)]
+        if missing:
+            out.append({"task": task, "missing": missing})
+    return out
+
+
+def pending_adrs(today, path=None):
+    """ADRs in the register (a Markdown table with a Status column) not yet decided."""
+    try:
+        with open(path or ADR_REGISTER) as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        return []
+    header, out = None, []
+    for line in lines:
+        if not line.lstrip().startswith("|"):
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if header is None:
+            if "status" in [c.lower() for c in cells]:
+                header = [c.lower() for c in cells]
+            continue
+        if not "".join(cells).strip("-: "):
+            continue
+        row = dict(zip(header, cells))
+        status = row.get("status", "")
+        if not status or ADR_SETTLED.match(status):
+            continue
+        try:
+            age = (today - dt.date.fromisoformat(row.get("date", "")[:10])).days
+        except ValueError:
+            age = None
+        out.append({"adr": row.get("#") or row.get("id") or "", "title": row.get("title", ""),
+                    "status": status, "since": row.get("date", "")[:10], "age": age})
+    return out
+
+
+def owed_replies():
+    """Request folders whose ball is with the user (claude-wait me)."""
+    out = []
+    for meta in sorted(glob.glob(os.path.join(DEFAULT_ROOT, "[0-9]" * 4, "[0-9][0-9]", "[0-9][0-9]", "*",
+                                              ".session.json"))):
+        try:
+            with open(meta) as fh:
+                d = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        w = d.get("waiting")
+        if isinstance(w, dict) and w.get("on") == "me":
+            out.append({"request": d.get("name") or os.path.basename(os.path.dirname(meta)),
+                        "who": w.get("who") or "", "what": w.get("what") or "",
+                        "since": (w.get("since") or "")[:10]})
+    return out
+
+
+def untouched_design_tickets(acts, first, last):
+    """The user's open tickets that read as design work and got no activity in the window."""
+    lo, hi = first.isoformat(), last.isoformat()
+    touched = {r.get("ticket") for r in acts if lo <= r["date"] <= hi}
+    out = []
+    for i in load_jira():
+        if (i.get("mine") and not JIRA_DONE.match(i.get("status") or "")
+                and DESIGN_WORDS.search(i.get("summary") or "") and i["key"] not in touched):
+            out.append({"key": i["key"], "summary": i.get("summary") or "", "status": i.get("status") or ""})
+    return out
+
+
+def bullet(r):
+    name = r["subject"] + (" ({})".format(r["tickets"]) if r["tickets"] else "")
+    return "    - {} - {}. Worked {}.".format(name, r["status"], r["days"])
+
+
+def gaps_markdown(phases, adrs, owed, design):
+    out = []
+    if phases:
+        out.append("- Architecture phases with no activity in the last {} weeks".format(ARCH_LOOKBACK_WEEKS))
+        out += ["    - {}: no {}.".format(p["task"], ", ".join(p["missing"])) for p in phases]
+    if adrs:
+        out.append("- Decisions pending")
+        out += ["    - {} {} - {}{}.".format(a["adr"], a["title"], a["status"],
+                                             " since {} ({} days)".format(a["since"], a["age"]) if a["age"] is not None else "")
+                for a in adrs]
+    if owed:
+        out.append("- Replies I owe")
+        out += ["    - {} - {}{}{}.".format(o["request"], o["who"] or "?", ": " + o["what"] if o["what"] else "",
+                                            ", since " + o["since"] if o["since"] else "") for o in owed]
+    if design:
+        out.append("- Design tickets not worked on this week")
+        out += ["    - {} {} - {}.".format(t["key"], t["summary"], t["status"]) for t in design]
+    return "\n".join(out) + "\n" if out else ""
+
+
+def run_friday(args, first, last, busy_cap, read_cap, today):
+    since = last - dt.timedelta(weeks=ARCH_LOOKBACK_WEEKS) + dt.timedelta(days=1)
+    weeks = summary_weeks("range", since, last)
+    items, ledger, idf, _ = gather(args, weeks[0][0], weeks[-1][1], busy_cap, read_cap)
+    acts = activity_view(items, ledger, idf, args, read_cap, weeks)
+    rows, leave, notes = report_view(acts, ledger, first, last, args, read_cap)
+    decided = ledger.get("outside") or {}
+    for r in rows:
+        r["outside"], r["reason"], r["decided"] = outside_guess(r, decided)
+    outside = [r for r in rows if r["outside"]]
+    phases = phase_gaps(acts, ledger, first, last)
+    adrs, owed = pending_adrs(today), owed_replies()
+    design = untouched_design_tickets(acts, first, last)
+    missing = missing_activity(args.activity, list(daterange(first, min(last, today))))
+    if missing:
+        notes.insert(0, "no Teams/calendar/mail data for {} -- gather it first (workday-recap)".format(
+            describe_days(missing)))
+    guesses = sum(1 for r in rows if not r["decided"])
+    if guesses:
+        notes.append("{} of {} subject(s) classified by guess -- confirm them and record the answers with --apply".format(
+            guesses, len(rows)))
+
+    os.makedirs(REPORT_DIR, exist_ok=True)
+    out_path = next_version(os.path.join(REPORT_DIR, "outside-projects_{}_draft.md".format(last)))
+    with open(out_path, "w") as fh:
+        fh.write(("- Outside projects\n" + "\n".join(bullet(r) for r in outside) + "\n") if outside else "")
+    gaps_path = next_version(os.path.join(REPORT_DIR, "architect-gaps_{}_draft.md".format(last)))
+    with open(gaps_path, "w") as fh:
+        fh.write(gaps_markdown(phases, adrs, owed, design))
+
+    say = (lambda *a: print(*a, file=sys.stderr)) if args.csv == "-" else print
+    if args.csv is not None:
+        cpath = args.csv or os.path.join(REPORT_DIR, "friday_{}_evidence.csv".format(last))
+        fh = sys.stdout if cpath == "-" else open(cpath, "w", newline="")
+        w = csv.DictWriter(fh, fieldnames=FRIDAY_COLUMNS, extrasaction="ignore")
+        w.writeheader()
+        for r in rows:
+            w.writerow(dict(r, outside="yes" if r["outside"] else "no", decided="yes" if r["decided"] else "guess"))
+        if fh is not sys.stdout:
+            fh.close()
+            say("evidence: " + cpath)
+    say("Friday reports · {} to {}".format(first.strftime("%a %d %b"), last.strftime("%a %d %b %Y")))
+    say("")
+    say("Outside projects: {} of {} subject(s)".format(len(outside), len(rows)))
+    for r in rows:
+        say("  {} {:<6} {}  ({})".format("x" if r["outside"] else " ", "" if r["decided"] else "guess",
+                                          r["subject"][:70], r["reason"]))
+    say("")
+    say("Architect gaps:")
+    say(gaps_markdown(phases, adrs, owed, design) or "  none found\n")
+    for note in notes:
+        say("  - " + note)
+    say(out_path)
+    say(gaps_path)
+
+
 def main():
     show_all = "--help-all" in sys.argv
     if show_all:
@@ -2382,6 +2599,11 @@ def main():
                              "(CWS_REPORT_DAY, default Wed) on or before DATE, as a Markdown draft "
                              "under _audit/weekly-email/; --copy copies it formatted, --csv writes "
                              "the evidence per bullet")
+    period.add_argument("--friday", nargs="?", const="today", metavar="DATE",
+                        help="the two Friday emails for Monday to Friday of DATE's week, as Markdown "
+                             "drafts under _audit/weekly-email/: work outside projects, and architect "
+                             "gaps (phases with no evidence, pending decisions, replies owed); --csv "
+                             "writes the classification evidence")
     view = ap.add_argument_group("view (default: the summary, i.e. the tracker rows)")
     view.add_argument("--detail", action="store_true",
                       help="every activity instead: sessions, meetings, emails and chats, one row "
@@ -2437,7 +2659,7 @@ def main():
         sys.exit("claude-audit: pick --detail or --reconcile, not both")
     if args.apply:
         apply_decisions(args.apply, args.ledger)
-        if not any((args.day, args.week, args.month, args.report, args.start, args.propose, args.detail, args.reconcile,
+        if not any((args.day, args.week, args.month, args.report, args.friday, args.start, args.propose, args.detail, args.reconcile,
                     args.sessions, args.by_type, args.copy, args.csv is not None)):
             return
 
@@ -2446,10 +2668,10 @@ def main():
     busy_cap, read_cap = args.busy_cap * 60, args.read_cap * 60
     say = (lambda *a: print(*a, file=sys.stderr)) if args.csv == "-" else print
 
-    if args.report:
+    if args.report or args.friday:
         if args.detail or args.reconcile or args.sessions or args.by_type or args.propose:
-            sys.exit("claude-audit: --report is a view of its own")
-        run_report(args, first, last, busy_cap, read_cap, today)
+            sys.exit("claude-audit: --{} is a view of its own".format("report" if args.report else "friday"))
+        (run_report if args.report else run_friday)(args, first, last, busy_cap, read_cap, today)
         return
 
     if args.propose:

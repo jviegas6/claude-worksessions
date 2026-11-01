@@ -205,11 +205,22 @@ claude-audit [--day [DATE] | --week [DATE] | --month [YYYY-MM] | --from DATE --t
 claude-audit --week DATE --propose        # weekly review: what needs deciding
 claude-audit --apply decisions.json       # weekly review: record decisions in the ledger
 claude-audit --schema                     # the activity-file format the skills write
+claude-audit --report [DATE]              # the weekly report email, Wednesday to Tuesday
+claude-audit --friday [DATE] [--csv]      # the two Friday emails, Monday to Friday
 ```
 
 A decisions file can also move a session to another day, e.g. work done on a bank holiday
 that should count in the week before: `{"book_on": [{"key": "<session id>", "date": "2026-10-04"}]}`.
 Hours stay the same; the detail title keeps the real date.
+
+`--friday [DATE]` writes two Markdown drafts under `_audit/weekly-email/` for Monday to Friday of
+DATE's week (never overwriting): **outside projects** (each subject's classification is a guess
+with its reason until the user's answer is recorded in the ledger's
+`outside` map through `--apply` with `{"outside": [{"subject": "...", "outside": true}]}`) and
+**architect gaps**: tracker phases (Ref Arch, Func Spec, HLD, LLD) with no evidence on an active
+project in the last `CWS_ARCH_LOOKBACK_WEEKS` weeks, ADRs not yet accepted in `CWS_ADR_REGISTER`,
+requests waiting on you (`claude-wait me`) and your open design tickets with no activity that
+week. `--csv` writes the classification evidence.
 
 `--by-type` groups the period's hours by task type (sessions without one show as
 `(no type)`). The weekly summary table and CSV carry a **Task Type** column; `--copy`

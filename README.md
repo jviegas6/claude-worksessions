@@ -23,7 +23,7 @@ across past sessions, and daily/weekly review skills — all driven by one confi
 | `claude-retro` | a retrospective on your prompts: where work stalled (a resource that didn't exist, corrections, interruptions, clarifying questions), whether the prompt caused it, and a better version — with a trend from week to week |
 | `claude-md-email` | a Markdown file onto the clipboard, formatted for email (black on white, Calibri, bordered tables) — also **Copy for email** in VS Code |
 | `ws` / `y` | fuzzy-jump to a request folder; browse it in yazi |
-| `weekly-review` skill | fills the weekly tracker, asking only about what's new |
+| `weekly-review` skill | fills the weekly tracker, asking only about what's new, and drafts the weekly report email |
 | `workday-recap` skill | reconstructs a day from Claude, Teams, calendar and sent mail |
 | yazi extras | rendered Markdown preview, `Enter` on a `.md` opens it as HTML for pasting into email |
 

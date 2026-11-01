@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.30.0] — 2026-11-01
+
+- **Friday drafts** (`claude-audit --friday [DATE]`): two Markdown drafts for Monday to Friday,
+  for you to send yourself:
+  - **outside projects**: ad-hoc requests by mail or Teams, support, questions, operational
+    issues. Each subject is classified by a guess with its reason until your answer is in the
+    ledger (`--apply` with `{"outside": [...]}`), so the next week starts from it;
+  - **architect gaps**: tracker phases (Ref Arch, Func Spec, HLD, LLD) with no evidence on an
+    active project in the last `CWS_ARCH_LOOKBACK_WEEKS` (4) weeks, ADRs not yet accepted in
+    `CWS_ADR_REGISTER`, requests waiting on you, and your open design tickets with no activity
+    that week.
+  `--csv` writes the classification evidence. A skill of your own can review the guesses with
+  you and turn the drafts into final wording.
+
 ## [2.29.0] — 2026-11-01
 
 - **Weekly report email**: `claude-audit --report [DATE]` exports the same evidence as the

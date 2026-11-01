@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.29.0] — 2026-11-01
+
+- **Weekly report email**: `claude-audit --report [DATE]` exports the same evidence as the
+  tracker in the format the manager asked for on 2026-10-28: the seven days before the
+  report day (`CWS_REPORT_DAY`, Wednesday; so Wednesday to Tuesday), subject `Weekly Report - <CWS_USER_NAME>`,
+  bullets under Projects, Issues, Support & requests and Leave, one per unit of work, each
+  with the days it was worked and its status (Jira status, the claude-wait flag). It writes
+  a Markdown draft under `_audit/weekly-email/` (never overwritten: reruns add `-v2`);
+  `--csv` adds the evidence per bullet, `--copy` copies it formatted through
+  `claude-md-email`. Recurring meetings and items under 10 minutes are left out. The
+  weekly-review skill's step 7 turns the draft into the final wording.
+- Tests and the sidebar's search hint use a neutral ticket prefix.
+
 ## [2.28.0] — 2026-11-01
 
 - **`claude-new --t3 --prompt TEXT`** starts the thread itself, on the right profile: the

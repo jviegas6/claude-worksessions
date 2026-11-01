@@ -1,6 +1,6 @@
 ---
 name: weekly-review
-description: Fill in the weekly functional-review tracker (Week, Task, Jira Ticket, Comments, phase flags, Leave, Meetings & Interactions, Utilization %) from Claude sessions, Teams chats, meetings, sent email, out-of-office and Jira, with a curated confirmation of which sessions belong with which meetings and emails, and which task each piece of work is. Use when the user asks for their weekly review, functional review, weekly tracker, utilisation for the week, or to "fill in my week".
+description: Fill in the weekly functional-review tracker (Week, Task, Jira Ticket, Comments, phase flags, Leave, Meetings & Interactions, Utilization %) from Claude sessions, Teams chats, meetings, sent email, out-of-office and Jira, with a curated confirmation of which sessions belong with which meetings and emails, and which task each piece of work is. Also writes the weekly report email (bullets with dates and statuses, Wednesday to Tuesday, "Weekly Report - FirstName LastName"). Use when the user asks for their weekly review, functional review, weekly tracker, utilisation for the week, to "fill in my week", or for the weekly report / weekly email to their manager.
 ---
 
 # Weekly functional review
@@ -167,6 +167,34 @@ column, `--month`); read it rather than relying on memory. What is yours to judg
 - `--detail` ends with a reconciliation line. "does NOT reconcile" is a bug: report it.
 - When the user is about to paste, suggest `--copy`. It overwrites their clipboard, so
   it is theirs to run, or yours when asked.
+
+## 7 — The weekly report email
+
+A second export of the same evidence, for the manager's weekly email: one email every
+`CWS_REPORT_DAY` (Wednesday) by `CWS_REPORT_DUE` (18:00 CET), covering the seven days
+before it (Wednesday to Tuesday), subject `Weekly Report - <CWS_USER_NAME>`,
+bullet points on what was worked on — specific, each with dates and a status. Not
+due when the user is on leave or sick the whole window.
+
+1. **Evidence for every weekday of the window**: day files as in step 1 (meetings and
+   mail matter: much of the week is there), and refresh `jira.json` as in step 2. No
+   ledger curation is needed: the report is per subject, not per task.
+2. `claude-audit --report --csv` writes `_audit/weekly-email/weekly-report_<wed>_draft.md`
+   (never overwrites: a rerun writes `-v2`, `-v3`) and `..._evidence.csv`: per bullet its
+   tickets, Jira status, claude-wait flag, days, hours, counterparties, request folders
+   and the last `thread.md` note.
+3. **Write each bullet yourself** from the draft and its evidence — read the folder's
+   `thread.md` and, where the status is still `in progress`, the end of the session.
+   Shape: `<Work item> (<ticket>) - <what was done, the outcome>. <Status>.` The status
+   is one of: done on <date> · in progress, next <step> by <date> · waiting on <person>
+   for <what> since <date> · blocked by <what> · paused. Every future step has a date.
+   Merge bullets that are the same request or ticket; keep the sections (Projects,
+   Issues, Support & requests, Leave). Leave out generic items — dailies, "calls",
+   "emails", tooling for yourself — and anything that names no outcome. No hours.
+4. Save it as `_audit/weekly-email/weekly-report_<wed>.md` (a change is a new
+   `-v2` file) and show it with To and Subject. On the user's go,
+   `claude-md-email <file>` copies it formatted for the email body. The user creates
+   and sends the email; never draft or send in Outlook.
 
 ## Rules
 

@@ -169,7 +169,7 @@ def run(mod, *argv):
 
 
 def args_for(mod, **kw):
-    base = dict(day=None, week=None, month=None, report=None, start=None, end=None, min_subject=10.0,
+    base = dict(day=None, week=None, month=None, report=None, friday=None, start=None, end=None, min_subject=10.0,
                 util_step=10, round_to=30.0, ledger=None, activity=mod.ACTIVITY_DIR)
     base.update(kw)
     return types.SimpleNamespace(**base)
@@ -931,3 +931,95 @@ def test_report_copy_renders_through_md_email(mod, world, monkeypatch, capsys):
     run(mod, "--report", "2026-09-09", "--copy")
     assert calls and calls[0][0].endswith("claude-md-email") and calls[0][1].endswith("_draft.md")
     assert "draft copied" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------- Friday reports
+
+def test_friday_window_is_monday_to_friday(mod):
+    assert mod.friday_window(dt.date(2026, 9, 9)) == (dt.date(2026, 9, 7), dt.date(2026, 9, 11))
+    assert mod.friday_window(dt.date(2026, 9, 13)) == (dt.date(2026, 9, 7), dt.date(2026, 9, 11))
+
+
+def test_outside_guess(mod):
+    row = lambda **kw: dict({"subject": "s", "section": "Projects", "tickets": "DATA-1", "sessions": 1,
+                             "meetings": 0}, **kw)
+    assert mod.outside_guess(row(), {}) == (False, "project ticket DATA-1", False)
+    assert mod.outside_guess(row(tickets=""), {})[:2] == (True, "no project ticket")
+    assert mod.outside_guess(row(section="Support & requests", sessions=0), {})[:2] == \
+        (True, "section Support & requests; mail/chat only")
+    assert mod.outside_guess(row(section="Issues"), {"s": False}) == (False, "your decision", True)
+
+
+def test_pending_adrs_reads_the_register_table(mod, tmp_path):
+    reg = tmp_path / "adr.md"
+    reg.write_text("# ADRs\n\n| # | Title | Status | Date |\n|---|---|---|---|\n"
+                   "| ADR-0001 | Use X | Proposed | 2026-10-05 |\n"
+                   "| ADR-0002 | Use Y | Accepted (2026-10-19) | 2026-10-19 |\n"
+                   "| ADR-0003 | Use Z | Draft | not a date |\n")
+    got = mod.pending_adrs(dt.date(2026, 11, 1), str(reg))
+    assert [(a["adr"], a["status"], a["age"]) for a in got] == [("ADR-0001", "Proposed", 27), ("ADR-0003", "Draft", None)]
+    assert mod.pending_adrs(dt.date(2026, 11, 1), str(tmp_path / "none.md")) == []
+
+
+def test_gaps_markdown_sections(mod):
+    md = mod.gaps_markdown([{"task": "BI Migration", "missing": ["HLD", "LLD"]}],
+                           [{"adr": "ADR-0001", "title": "Use X", "status": "Proposed", "since": "2026-10-05", "age": 27}],
+                           [{"request": "Access", "who": "Ana", "what": "confirm", "since": "2026-10-21"}],
+                           [{"key": "DATA-5", "summary": "Design the feed", "status": "To Do"}])
+    assert "    - BI Migration: no HLD, LLD." in md
+    assert "    - ADR-0001 Use X - Proposed since 2026-10-05 (27 days)." in md
+    assert "    - Access - Ana: confirm, since 2026-10-21." in md
+    assert "    - DATA-5 Design the feed - To Do." in md
+    assert mod.gaps_markdown([], [], [], []) == ""
+
+
+def test_friday_drafts_guesses_decisions_and_gaps(mod, world, monkeypatch, capsys):
+    meta = world.root / "2026" / "09" / "07" / "10-00-00_storage-access" / ".session.json"
+    d = json.loads(meta.read_text())
+    d["waiting"] = {"on": "me", "who": "Ana", "what": "send the grant list", "since": "2026-09-08T10:00:00Z"}
+    meta.write_text(json.dumps(d))
+    monkeypatch.setattr(mod, "load_jira", lambda path=None: [
+        {"key": "DATA-5", "summary": "Design the vendor feed", "status": "To Do", "mine": True},
+        {"key": "DATA-6", "summary": "Design done", "status": "Done", "mine": True},
+        {"key": "DATA-7", "summary": "Somebody's design", "status": "To Do", "mine": False}])
+    run(mod, "--friday", "2026-09-11", "--csv")
+    out = capsys.readouterr().out
+    assert "Friday reports · Mon 07 Sep to Fri 11 Sep 2026" in out
+    mail = world.audit_dir / "weekly-email"
+    outside = (mail / "outside-projects_2026-09-11_draft.md").read_text()
+    gaps = (mail / "architect-gaps_2026-09-11_draft.md").read_text()
+    assert outside.startswith("- Outside projects\n") and "storage access" in outside.lower()
+    assert "- Replies I owe\n" in gaps and " - Ana: send the grant list, since 2026-09-08." in gaps
+    assert "- Architecture phases with no activity in the last 4 weeks\n" in gaps
+    assert "DATA-5 Design the vendor feed - To Do." in gaps and "DATA-6" not in gaps and "DATA-7" not in gaps
+    with open(mail / "friday_2026-09-11_evidence.csv") as fh:
+        ev = list(csv.DictReader(fh))
+    grant = next(r for r in ev if "storage access" in r["subject"].lower())
+    assert grant["outside"] == "yes" and grant["decided"] == "guess"
+    # the user's answer is recorded and wins next time; drafts are never overwritten
+    decisions = world.audit_dir / "review" / "friday.json"
+    decisions.write_text(json.dumps({"outside": [{"subject": grant["subject"], "outside": False}]}))
+    run(mod, "--apply", str(decisions))
+    assert json.loads(world.ledger.read_text())["outside"] == {grant["subject"]: False}
+    run(mod, "--friday", "2026-09-11")
+    assert "storage access" not in (mail / "outside-projects_2026-09-11_draft-v2.md").read_text().lower()
+
+
+def test_phase_gaps_only_for_ticketed_project_tasks(mod):
+    item = lambda title: {"source": "claude", "title": title, "_clean": title, "_folder": "/r/x"}
+    acts = [
+        {"source": "claude", "task": "BI Migration", "ticket": "DATA-9", "date": "2026-09-08",
+         "_item": item("Write the HLD for the reports")},
+        {"source": "claude", "task": "Default", "ticket": "Other", "date": "2026-09-08", "_item": item("x")},
+        {"source": "claude", "task": "Security", "ticket": "", "date": "2026-09-08", "_item": item("x")},
+        {"source": "leave", "task": "Leave", "ticket": "", "date": "2026-09-08", "_item": item("x")},
+    ]
+    gaps = mod.phase_gaps(acts, {"default_task": "Default"}, dt.date(2026, 9, 7), dt.date(2026, 9, 11))
+    assert [g["task"] for g in gaps] == ["BI Migration"] and "HLD" not in gaps[0]["missing"]
+
+
+def test_friday_is_a_view_of_its_own(mod, world):
+    with pytest.raises(SystemExit):
+        run(mod, "--friday", "2026-09-11", "--detail")
+    with pytest.raises(SystemExit):
+        run(mod, "--friday", "2026-09-11", "--week", "2026-09-07")

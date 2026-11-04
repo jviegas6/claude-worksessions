@@ -47,9 +47,12 @@ that profile. `ended_at` is filled in when Claude exits.
   since nothing waits for VS Code to close.
 - `--t3` adds the new folder to [T3 Code](https://github.com/pingdotgg/t3code) as a project
   titled `TICKET · YYYY-MM-DD · name` and opens it in the running app (through
-  [`claude-t3-sync --open`](#claude-t3-sync)). Start a thread there and pick the Claude instance
-  of the profile you chose: T3 Code picks the profile per thread. With `--prompt`, `claude-new`
-  starts that thread itself, on the profile's instance (see `claude-t3-sync --prompt`). Hooks,
+  [`claude-t3-sync --open`](#claude-t3-sync)). It also starts the request's first thread there,
+  on the profile's T3 Claude instance, with a short kickoff from `.session.json` (ticket, type,
+  goal, done-when; Claude reads `thread.md` if there is one, confirms the goal in one line and
+  waits): `t3` can't create a thread without a message, and a thread left unsent in the app is
+  lost. A folder whose project already has a thread just opens. With `--prompt`, that prompt
+  is the first message instead (see `claude-t3-sync --prompt`). Hooks,
   the guard and the audit work as in the terminal, since they read the folder's `.session.json`.
 - `--cli` starts Claude in the terminal. With none of `-c`, `--t3`, `--cli`, `CWS_OPEN` in
   `config.env` decides (`cli`, `code` or `t3`; default `cli`). Continuing in a recent folder
@@ -100,7 +103,8 @@ the URL it opens carries it. Its log is `~/.cache/claude-worksessions/plan-serve
 claude-t3-sync                 show what a sync would change
 claude-t3-sync --apply         make the changes; an undo file goes to _audit/t3/
 claude-t3-sync --undo FILE     put back what that run changed
-claude-t3-sync --open DIR      add DIR to T3 Code under its title, or retitle it, and open it
+claude-t3-sync --open DIR      add DIR to T3 Code under its title, or retitle it, and open it;
+                               a request folder with no thread yet gets one, with a kickoff
                [--prompt TEXT --profile NAME]   start a thread with TEXT instead, and open it
 claude-t3-sync --thread ID [--fallback DIR]
                                open the T3 thread that ran Claude session ID, in the T3 app

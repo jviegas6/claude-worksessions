@@ -124,7 +124,7 @@ def test_t3_opens_the_request_in_t3_code(tmp_path, flags, env):
     r = run_new(tmp_path, flags + " -p work -t PROJ-1 -T tooling demo", PATH=t3_stubs(tmp_path), **env)
     assert r.returncode == 0, r.stderr
     meta = next(tmp_path.glob("[0-9]*/*/*/*/.session.json"))
-    assert (tmp_path / "t3-opened").read_text().split() == ["--open", str(meta.parent)]
+    assert (tmp_path / "t3-opened").read_text().split() == ["--open", str(meta.parent), "--profile", "work"]
     assert not (tmp_path / "launched").exists()
     assert json.loads(meta.read_text())["ended_at"] is None
 
@@ -136,7 +136,7 @@ def test_t3_with_a_prompt_starts_a_thread_on_the_profile(tmp_path):
     assert r.returncode == 0, r.stderr
     meta = next(tmp_path.glob("[0-9]*/*/*/*/.session.json"))
     assert (tmp_path / "t3-opened").read_text().strip() == \
-        "--open {} --prompt /weekly-review 2026-10-26 --profile work".format(meta.parent)
+        "--open {} --profile work --prompt /weekly-review 2026-10-26".format(meta.parent)
 
 
 def test_cli_flag_overrides_cws_open(tmp_path):
@@ -807,7 +807,7 @@ def test_continuing_in_a_recent_folder_opens_it_in_t3(tmp_path):
     (stub / "claude-t3-sync").chmod(0o755)
     r = run_new_tty(tmp_path, "--t3 -t PROJ-1 -T tooling -a second look", "\n")
     assert r.returncode == 0, r.stderr
-    assert (tmp_path / "t3-opened").read_text().split() == ["--open", str(d)]
+    assert (tmp_path / "t3-opened").read_text().split() == ["--open", str(d), "--profile", "personal"]
 
 
 def test_recent_folder_age_counts_calendar_days(tmp_path):

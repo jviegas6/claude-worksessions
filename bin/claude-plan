@@ -84,9 +84,12 @@ def request_dir(path):
 
 
 def mtime(d):
-    """plan.json's modification time in ns, or None when there is no plan yet."""
+    """plan.json's modification time in ns as a string, or None when there is no plan yet.
+
+    A string because the editor is JavaScript: ns times are past 2**53, a JSON number would come
+    back rounded and never match again, so every save would be refused as a conflict."""
     try:
-        return os.stat(os.path.join(d, PLAN)).st_mtime_ns
+        return str(os.stat(os.path.join(d, PLAN)).st_mtime_ns)
     except FileNotFoundError:
         return None
 

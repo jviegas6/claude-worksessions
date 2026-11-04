@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.31.3] — 2026-11-03
+
+- Plans: saving in the editor works again. Every save of an existing `plan.json` was refused as
+  "changed on disk", because the file's time (in nanoseconds) came back rounded from the browser
+  and never matched; the server now sends it as text.
+
 ## [2.31.2] — 2026-11-01
 
 - Plans: the deadline is a date (`YYYY-MM-DD`), picked with a date field like each step's date,

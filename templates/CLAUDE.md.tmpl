@@ -29,12 +29,10 @@ else, run `claude-type "<type>"` and say so in one line.
 
 ## Who is the ball with?
 
-When a session ends with someone else owing an answer, run
-`claude-wait them "<who>" "<what for>" --where teams|mail|jira [--link URL] --note "<where things stand>"`
-in the folder and say so in one line; `claude-wait me ...` when the user owes the reply;
-`claude-wait none` when it is settled. The note is for someone who was not here: what was
-asked, what was answered and where, what is open and by when. It goes to the folder's
-`thread.md`. **If a folder has a `thread.md`, read it before doing anything else there.**
+Tracked in Todoist (the `todoist-work` integration). `claude-wait` is still installed but
+**disabled** (2026-11-04): don't run it and don't offer it. Waiting flags already in
+`.session.json` are frozen history, not current state.
+**If a folder has a `thread.md`, read it before doing anything else there.**
 
 ## Finding and reviewing
 

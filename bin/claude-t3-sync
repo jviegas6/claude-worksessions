@@ -4,7 +4,9 @@
   claude-t3-sync                 show what a sync would change (nothing is changed)
   claude-t3-sync --apply         make those changes; an undo file goes to _audit/t3/
   claude-t3-sync --undo FILE     put back what that run changed
-  claude-t3-sync --open DIR      add DIR to T3 under its title (or retitle it) and open it there
+  claude-t3-sync --open DIR      add DIR to T3 under its title (or retitle it) and open it there;
+                                 a request folder with no thread yet gets one, started with a
+                                 short kickoff from its .session.json (t3 needs a message)
                  [--prompt TEXT --profile NAME]
                                  start a thread there instead, with TEXT, on the T3 Claude
                                  instance whose config dir is ~/.claude-NAME, and open it
@@ -289,9 +291,31 @@ def undo(path):
     return failed
 
 
-def open_in_t3(path, prompt=None, profile=None):
+def thread_count(path):
+    """Live threads in the T3 project(s) of that folder."""
+    real = os.path.realpath(path)
+    return sum(n for _, _, folder, n in projects() if folder and os.path.realpath(folder) == real)
+
+
+def kickoff_prompt(path):
+    """The first message of a request's thread, from its .session.json."""
+    d = meta(path)
+    head = " · ".join(p for p in ("Ticket: " + (d.get("ticket") or "?"),
+                                  "Type: " + d["task_type"] if d.get("task_type") else "") if p)
+    lines = ["New request opened by claude-new.", head,
+             "Goal: " + (d.get("goal") or d.get("name") or os.path.basename(path).split("_", 1)[-1])]
+    if (d.get("done_when") or "").strip():
+        lines.append("Done when: " + d["done_when"].strip())
+    lines.append("Read .session.json, and thread.md if there is one. Reply in one line with the goal as "
+                 "you understand it and anything unclear about it, then wait for my instructions.")
+    return "\n".join(lines)
+
+
+def open_in_t3(path, prompt=None, profile=None, kickoff=False):
     """Add the folder to T3 under its title, or retitle the project it already is; open it.
-    With a prompt, start a thread there on the profile's instance instead and open that."""
+    With a prompt, start a thread there on the profile's instance instead and open that. With
+    kickoff, a request folder whose project has no thread yet gets one, started with a kickoff
+    message (kickoff_prompt), so the session is registered in T3 even before you write to it."""
     path = os.path.realpath(path)
     name = title(path) if request_rel(path) else os.path.basename(path)
     ok, err = t3("project", "add", path, "--title", name)
@@ -299,10 +323,23 @@ def open_in_t3(path, prompt=None, profile=None):
         ok, err = t3("project", "rename", path, name)
     if not ok:
         raise SystemExit("claude-t3-sync: T3 Code could not add {}: {}".format(path, err))
+    kickoff = kickoff and not prompt and request_rel(path) is not None and thread_count(path) == 0
+    if kickoff:
+        # t3 can't start a thread without a message, and a thread left unsent in the app is lost.
+        prompt, profile = kickoff_prompt(path), profile or meta(path).get("profile")
     if prompt:
         args = ["thread", "start", path, prompt, "--title", name]
         if profile:
-            instance = instance_for(profile)
+            try:
+                instance = instance_for(profile)
+            except SystemExit as e:
+                if not kickoff:
+                    raise
+                print("{}; T3 uses the project's default instance.".format(str(e).split(" (add one")[0]))
+                instance = None
+        else:
+            instance = None
+        if instance:
             model = model_for(instance)
             if model:                     # t3 ignores --provider without --model
                 args += ["--provider", instance, "--model", model]
@@ -338,7 +375,7 @@ def main(argv=None):
         open_thread(a.thread, a.fallback)
         return 0
     if a.open:
-        open_in_t3(a.open, a.prompt, a.profile)
+        open_in_t3(a.open, a.prompt, a.profile, kickoff=True)
         return 0
     if a.undo:
         return 1 if undo(a.undo) else 0

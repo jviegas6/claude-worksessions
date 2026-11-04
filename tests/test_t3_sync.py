@@ -191,6 +191,7 @@ def test_limit_and_failures(t3, sync, capsys):
 
 def test_open_adds_with_title_then_opens(t3, sync):
     d = t3.request("2026/10/30/11-00-00_new", {"ticket": "PROJ-2", "name": "New"})
+    t3.project(d, "PROJ-2 · 2026-10-30 · New", threads=1)
     sync.main(["--open", str(d)])
     real = os.path.realpath(str(d))
     assert t3.calls() == ["project add {} --title PROJ-2 · 2026-10-30 · New".format(real),
@@ -199,6 +200,7 @@ def test_open_adds_with_title_then_opens(t3, sync):
 
 def test_open_retitles_an_existing_project(t3, sync):
     d = t3.request("2026/10/30/11-00-00_old", {"ticket": "PROJ-3", "name": "Old"})
+    t3.project(d, "old title", threads=2)
     t3.already_exists()
     sync.main(["--open", str(d)])
     real = os.path.realpath(str(d))
@@ -239,9 +241,12 @@ def test_unreadable_session_json_still_gets_a_title(t3, sync):
     assert sync.title(str(d)) == "? · 2026-10-30 · broken"
 
 
-@pytest.mark.parametrize("fail_on, message", [("project add", "could not add"), ("app", "could not open")])
+@pytest.mark.parametrize("fail_on, message", [("project add", "could not add"), ("app", "could not open"),
+                                               ("thread start", "could not start a thread")])
 def test_open_reports_what_failed(t3, sync, home, fail_on, message):
     d = t3.request("2026/10/30/13-00-00_x", {"ticket": "Other", "name": "x"})
+    if fail_on != "thread start":
+        t3.project(d, "Other · 2026-10-30 · x", threads=1)
     stub = home / "t3"
     stub.write_text('#!/bin/sh\ncase "$*" in "{}"*) echo "ERROR (#2): Boom" >&2; exit 1;; esac\nexit 0\n'.format(fail_on))
     with pytest.raises(SystemExit) as e:
@@ -343,3 +348,69 @@ def test_prompt_needs_an_instance_for_the_profile(t3, sync):
     t3.instances(work_i="~/.claude-work")
     with pytest.raises(SystemExit, match="no T3 Claude instance uses ~/.claude-personal"):
         sync.open_in_t3(str(d), "hi", "personal")
+
+
+def _no_open(sync, monkeypatch):
+    real_run = sync.subprocess.run
+    opened = []
+    monkeypatch.setattr(sync.subprocess, "run",
+                        lambda cmd, **kw: opened.append(cmd) if cmd[0] in ("open", "xdg-open") else real_run(cmd, **kw))
+    return opened
+
+
+def test_open_starts_a_kickoff_thread_when_the_request_has_none(t3, sync, monkeypatch, capsys):
+    d = t3.request("2026/11/04/17-21-38_ben", {"ticket": "BS-1", "name": "Ben", "task_type": "data quality",
+                                               "goal": "the MD file", "done_when": "  sent  ", "profile": "personal"})
+    t3.server()
+    t3.instances(personal_i="~/.claude-personal")
+    t3.used("personal_i", "opus")
+    opened = _no_open(sync, monkeypatch)
+    sync.main(["--open", str(d)])
+    real = os.path.realpath(str(d))
+    log = "\n".join(t3.calls())
+    start = log[log.index("thread start"):]
+    assert start.startswith("thread start {} New request opened by claude-new.\nTicket: BS-1 · Type: data quality\n"
+                            "Goal: the MD file\nDone when: sent\nRead .session.json, and thread.md".format(real))
+    assert start.endswith("--title BS-1 · 2026-11-04 · Ben --provider personal_i --model opus")
+    assert not any(c.startswith("app ") for c in t3.calls())
+    assert opened == [[("open" if sys.platform == "darwin" else "xdg-open"), "t3code://threads/env-1/th-new"]]
+    assert "thread started" in capsys.readouterr().out
+    t3.project(d, "BS-1 · 2026-11-04 · Ben", threads=1)          # reopening: no second thread
+    before = len(t3.calls())
+    sync.main(["--open", str(d)])
+    assert t3.calls()[before + 1] == "app {}".format(real)
+
+
+def test_kickoff_without_goal_type_or_done_when(t3, sync):
+    d = t3.request("2026/11/04/09-00-00_bare", {"name": "Bare"})
+    text = sync.kickoff_prompt(str(d))
+    assert text.splitlines()[1:3] == ["Ticket: ?", "Goal: Bare"]
+    assert "Done when" not in text
+    (d / ".session.json").write_text("{}")
+    assert "Goal: bare" in sync.kickoff_prompt(str(d))
+
+
+def test_kickoff_falls_back_to_t3s_default_instance(t3, sync, monkeypatch, capsys):
+    d = t3.request("2026/11/04/10-00-00_x", {"ticket": "Other", "name": "x", "profile": "personal"})
+    t3.server()
+    t3.instances(work_i="~/.claude-work")
+    _no_open(sync, monkeypatch)
+    sync.open_in_t3(str(d), kickoff=True)
+    assert t3.calls()[-1].endswith("--title Other · 2026-11-04 · x")
+    assert "no T3 Claude instance uses ~/.claude-personal; T3 uses the project's default" in capsys.readouterr().out
+
+
+def test_kickoff_without_a_profile_leaves_the_instance_to_t3(t3, sync, monkeypatch):
+    d = t3.request("2026/11/04/11-00-00_y", {"ticket": "Other", "name": "y"})
+    t3.server()
+    _no_open(sync, monkeypatch)
+    sync.open_in_t3(str(d), kickoff=True)
+    assert t3.calls()[-1].endswith("--title Other · 2026-11-04 · y")
+
+
+def test_no_kickoff_outside_request_folders(t3, sync, home):
+    repo = home / "Repos" / "thing"
+    repo.mkdir(parents=True)
+    sync.open_in_t3(str(repo), kickoff=True)
+    assert t3.calls() == ["project add {} --title thing".format(os.path.realpath(str(repo))),
+                          "app {}".format(os.path.realpath(str(repo)))]

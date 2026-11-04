@@ -186,6 +186,7 @@ def test_server_routes(cp, req, server, monkeypatch):
     status, o = call(server + "/plan" + q, "POST", {"base": None, "plan": plan_doc()})
     assert status == 200 and o["backup"] is None
     assert call(server + "/mtime" + q)[1]["mtime"] == o["mtime"]
+    assert isinstance(o["mtime"], str)  # a JSON number past 2**53 comes back rounded from JavaScript
     assert call(server + "/plan" + q, "POST", {"base": None, "plan": plan_doc()})[0] == 409
     assert call(server + "/plan" + q, "POST", {"base": o["mtime"], "plan": {}})[0] == 400
 

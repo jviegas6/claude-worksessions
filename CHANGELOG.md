@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.32.1] — 2026-11-04
+
+- The work root's `CLAUDE.md` no longer tells sessions to run `claude-wait`: who the ball is
+  with is tracked in Todoist. `claude-wait` stays installed; flags already in `.session.json`
+  are history. Sessions still read a folder's `thread.md` first.
+
 ## [2.32.0] — 2026-11-04
 
 - `claude-new --t3` starts the request's first T3 thread itself, so T3 registers the session

@@ -410,12 +410,13 @@ PYEOF
 # Open a request folder where claude-new was asked to: VS Code (its Claude extension starts
 # Claude through claude-vscode) or T3 Code (claude-t3-sync adds it under its ticket and opens it).
 # Nothing waits for either, so ended_at stays empty. Returns 1 for cli: the caller runs Claude.
-# In T3, a prompt starts a thread with it on the profile's Claude instance.
+# In T3, a prompt starts a thread with it on the profile's Claude instance; without one, a request
+# with no thread yet gets one started with a kickoff message, so T3 registers it.
 _cws_open_request() {
   case "$2" in
     code) code -n "$1" ;;
-    t3)   local -a first=()
-          [[ -n "$3" ]] && first=(--prompt "$3" --profile "$4")
+    t3)   local -a first=(--profile "$4")
+          [[ -n "$3" ]] && first+=(--prompt "$3")
           claude-t3-sync --open "$1" "${first[@]}" ;;
     *)    return 1 ;;
   esac
@@ -501,8 +502,8 @@ print("{:<10} {:<14} {:<16} {:<9}".format("[" + (d.get("profile") or "?") + "]",
         print -r -- '    create a YYYY/MM/DD/HH-mm-ss_slug folder and start Claude in it'
         print -r -- '    -c / --code opens the folder in VS Code instead; the Claude extension there'
         print -r -- '    picks up the profile through claude-vscode'
-        print -r -- '    --t3 adds it to T3 Code as "TICKET · date · name" and opens it there; pick the'
-        print -r -- '    profile'"'"'s Claude instance in the thread (with --prompt it starts the thread there).'
+        print -r -- '    --t3 adds it to T3 Code as "TICKET · date · name" and starts its first thread there,'
+        print -r -- '    on the profile'"'"'s Claude instance, with a kickoff from .session.json (or --prompt)'
         print -r -- '    --cli starts Claude in this terminal.'
         print -r -- "    Without any of them: CWS_OPEN (${CWS_OPEN:-cli})"
         print -r -- '    --prompt TEXT starts Claude with TEXT as the first prompt, e.g. --prompt /weekly-review;'

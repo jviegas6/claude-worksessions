@@ -1,5 +1,22 @@
 # Changelog
 
+## [2.32.1] — 2026-11-04
+
+- The work root's `CLAUDE.md` no longer tells sessions to run `claude-wait`: who the ball is
+  with is tracked in Todoist. `claude-wait` stays installed; flags already in `.session.json`
+  are history. Sessions still read a folder's `thread.md` first.
+
+## [2.32.0] — 2026-11-04
+
+- `claude-new --t3` starts the request's first T3 thread itself, so T3 registers the session
+  straight away: a thread opened in the app and never sent is lost, and the folder was left
+  with no thread. `t3` can't create a thread without a message, so it starts with a short
+  kickoff from `.session.json` (ticket, type, goal, done-when); Claude reads `thread.md` if
+  there is one, confirms the goal in one line and waits. It runs on the profile's T3 Claude
+  instance, or T3's default if the profile has none. A folder whose project already has a
+  thread (continuing a request) just opens, and `claude-search`'s fallback to a folder never
+  starts one.
+
 ## [2.31.3] — 2026-11-03
 
 - Plans: saving in the editor works again. Every save of an existing `plan.json` was refused as

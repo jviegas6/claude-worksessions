@@ -48,6 +48,10 @@ just as well — re-run `install.sh` afterwards so the skills and `CLAUDE.md` ca
 | `CWS_OPEN` | `cli` | where `claude-new` opens a request: `cli` (Claude in the terminal), `code` (VS Code, as `-c`) or `t3` (T3 Code, as `--t3`) |
 | `CWS_T3_BIN` | `t3` on PATH, else `~/.t3/bin/t3` | T3 Code's command, for `claude-new --t3` and `claude-t3-sync` |
 | `CWS_T3_MODEL` | — | model for threads `claude-new --t3 --prompt` starts, when T3 has no thread on that instance yet to take it from |
+| `CWS_AREAS` | empty (off) | the groups for T3's sidebar, e.g. `contact360 ingestion tooling`; see [`claude-area`](commands.md#claude-area) |
+| `CWS_AREAS_DIR` | `~/.local/share/claude-worksessions/areas` | where the areas' git data lives; keep it outside the synced work root |
+| `CWS_AREA_MODEL` | `haiku` | the model `claude-area --pick` asks |
+| `CWS_AREA_TIMEOUT` | `20` | seconds to wait for it; after that the request stays ungrouped |
 | `CWS_T3_IDLE_DAYS` | `14` | `claude-t3-sync` removes a request's T3 project after this many idle days, if it has no threads and isn't waiting on anyone |
 | `CWS_INSTALL_YAZI` | `1` | install yazi, glow, pandoc and the Markdown extras |
 

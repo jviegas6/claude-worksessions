@@ -34,6 +34,19 @@ Tracked in Todoist (the `todoist-work` integration). `claude-wait` is still inst
 `.session.json` are frozen history, not current state.
 **If a folder has a `thread.md`, read it before doing anything else there.**
 
+## Thread status and area
+
+In T3 a thread is **working**, **pending** or **done**, and only the user decides the last two.
+
+- Never settle or snooze a thread on your own. Finishing a task does not make it done.
+- When the user says the work is done, settle the thread.
+- When they say it's pending on someone until a date, snooze the thread to that date. No date: ask.
+
+The area is the request's group in T3's sidebar. `claude-new` chooses it; when the user wants it
+changed, run `claude-area <area>` in the request folder. It shows in T3 within 15 minutes, and a
+running thread is not affected. The `.git` file in a request folder is what does this: it isn't
+a repository to work in, so don't commit there or remove it.
+
 ## Finding and reviewing
 
 - `claude-search QUERY [--ai]` finds past sessions on a ticket or topic. Use it when the user

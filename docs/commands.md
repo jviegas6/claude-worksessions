@@ -5,7 +5,7 @@ The flag-by-flag reference. For how to use them together see the [user guide](us
 ## claude-new
 
 ```
-claude-new [-p PROFILE] [-n|-a] [-c|--t3|--cli] [-t TICKET] [-T TYPE] [-g GOAL] [--done TEXT] [--path DIR]... [--prompt TEXT] [--new] [name]
+claude-new [-p PROFILE] [-n|-a] [-c|--t3|--cli] [-t TICKET] [-T TYPE] [-A AREA] [-g GOAL] [--done TEXT] [--path DIR]... [--prompt TEXT] [--new] [name]
 claude-new -l
 claude-new -L
 ```
@@ -64,6 +64,43 @@ that profile. `ended_at` is filled in when Claude exits.
 - `-L` / `--profiles` lists the configured profiles: which is the default and which is
   shared, the description, the gateway URL if any, and a warning if `~/.claude-<name>`
   is missing.
+
+## claude-area
+
+```
+claude-area                 this request's area, and the areas you can use
+claude-area AREA            put this request in AREA; a thread running here carries on
+claude-area none            take it out: T3 shows the project on its own again
+claude-area --pick          choose the area from the ticket, name and goal
+claude-area --gc            compact the areas' snapshot data and show its size
+claude-area --dir DIR ...   act on DIR instead of the current folder
+```
+
+T3 Code groups projects that share a git remote, so an area is one git directory under
+`CWS_AREAS_DIR`, outside the synced work root, with a placeholder remote on `.invalid` that
+can't be pushed to. A request's `.git` is a one-line file pointing at it, and `.session.json`
+records the `area`. Nothing else changes and the folder doesn't move: moving one breaks a thread
+running in it, and every tool here finds requests by their date path.
+
+`claude-new` runs `--pick` before T3 first sees the folder, so a new project lands in its group
+at once. It takes the area of the ticket's latest request (from `tickets.json` in
+`CWS_AREAS_DIR`, because reading `.session.json` through OneDrive took over a minute), else asks
+a small model about the name and goal. No clear answer means `other`: no `.git`, so the project
+stays on its own in the sidebar. It never stops `claude-new`, and does nothing unless `CWS_AREAS`
+is set. `claude-new -A AREA` sets it directly.
+
+After a change T3 can take up to 15 minutes to show the new group, because it caches a project's
+repository. The thread keeps its context and later turns snapshot to the new area; snapshots
+from before the change stay in the old area's data. A folder with its own repository, or a
+`.git` pointing elsewhere, is left alone.
+
+T3 snapshots the folder into that git directory on every turn. `info/exclude` keeps out the
+guard's files and large or binary exports (CSV, Parquet, Office, PDF, images, archives); other
+files stay in. `--gc` shows what it uses. Deleting an area's `.git` directory loses only T3's
+diffs: run `claude-area AREA` in a request to recreate it.
+
+**To undo:** remove `CWS_AREAS` from the config. New requests are no longer grouped. For one
+that is, delete its `.git` file (or run `claude-area none`).
 
 ## claude-plan
 

@@ -1,0 +1,291 @@
+#!/usr/bin/env python3
+"""claude-area: group a request's T3 Code project under an area.
+
+  claude-area                    show this request's area and the areas you can use
+  claude-area AREA               put this request in AREA (a thread running here carries on)
+  claude-area none               take it out of its area: T3 shows the project on its own
+  claude-area --pick             choose the area from its ticket, name and goal (claude-new does this)
+  claude-area --gc               compact the areas' snapshot data and show its size
+  claude-area --dir DIR ...      act on DIR instead of the current folder
+
+An area is a line in CWS_AREAS. T3 groups the projects that share a git remote, so each area
+is one git directory outside the synced work root, with a placeholder remote that is never
+pushed to, and a request's `.git` is a one-line file pointing at it. That file is all that
+changes: the folder stays where it is, so transcripts, the audit and a running thread are not
+touched. T3 caches a project's repository for up to 15 minutes, so a change shows up in its
+sidebar by then.
+"""
+
+import argparse
+import glob
+import importlib.machinery
+import importlib.util
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+
+
+def load_audit():
+    """claude-audit, for the configuration."""
+    path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "claude-audit")
+    if not os.path.isfile(path):
+        path = os.path.join(os.path.expanduser("~"), ".local", "bin", "claude-audit")
+    loader = importlib.machinery.SourceFileLoader("claude_audit", path)
+    spec = importlib.util.spec_from_loader("claude_audit", loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+CA = load_audit()
+HOME = os.path.expanduser("~")
+ROOT = os.path.realpath(CA.DEFAULT_ROOT)
+OTHER = "other"     # no fitting area: the request keeps its own place in the sidebar
+REMOTE = "https://sessions.invalid/sessions/{}.git"     # .invalid never resolves, so it can't be pushed to
+# T3 snapshots the folder on every turn. These change constantly or are large and binary, and
+# T3's diffs add nothing for them; everything else stays in the snapshots.
+EXCLUDE = """.quality.jsonl
+.scope.json
+.DS_Store
+*.zip
+*.gz
+*.parquet
+*.csv
+*.tsv
+*.pbix
+*.pbit
+*.pdf
+*.png
+*.jpg
+*.mp4
+*.mov
+*.xlsx
+*.pptx
+*.docx
+"""
+WHY = ("Pick the one area this work request belongs to. Answer {} when none clearly fits: a request "
+       "left outside the areas is better than one in the wrong area.").format(OTHER)
+
+
+def areas():
+    return [a for a in re.split(r"[,\s]+", CA.CONFIG.get("CWS_AREAS") or "") if a]
+
+
+def store():
+    return CA.CONFIG.get("CWS_AREAS_DIR") or os.path.join(HOME, ".local", "share", "claude-worksessions", "areas")
+
+
+def gitdir(area):
+    return os.path.join(store(), area + ".git")
+
+
+def git(*args):
+    r = subprocess.run(["git"] + list(args), capture_output=True, text=True)
+    if r.returncode:
+        raise SystemExit("claude-area: git {} failed: {}".format(args[-1], r.stderr.strip()[:200]))
+    return r.stdout.strip()
+
+
+def ensure_gitdir(area):
+    """The area's git directory, created the first time it's used."""
+    g = gitdir(area)
+    if os.path.isdir(g):
+        return g
+    git("init", "-q", "--bare", g)
+    # Bare only so that no worktree is needed to make it: requests are worktrees of it.
+    git("--git-dir", g, "config", "core.bare", "false")
+    git("--git-dir", g, "remote", "add", "origin", REMOTE.format(area))
+    info = os.path.join(g, "info")
+    os.makedirs(info, exist_ok=True)
+    with open(os.path.join(info, "exclude"), "w", encoding="utf-8") as fh:
+        fh.write(EXCLUDE)
+    return g
+
+
+def request_dir(start):
+    """The request folder start is in: the nearest one with a .session.json inside the work root."""
+    d = os.path.realpath(start)
+    while d == ROOT or d.startswith(ROOT + os.sep):
+        if os.path.isfile(os.path.join(d, ".session.json")):
+            return d
+        if d == ROOT:
+            break
+        d = os.path.dirname(d)
+    raise SystemExit("claude-area: {} is not inside a request folder".format(start))
+
+
+def read_meta(path):
+    try:
+        with open(os.path.join(path, ".session.json"), encoding="utf-8") as fh:
+            d = json.load(fh)
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def write_meta(path, area):
+    d = read_meta(path)
+    d["area"] = area
+    tmp = os.path.join(path, ".session.json.tmp")
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(d, fh, indent=2)
+    os.replace(tmp, os.path.join(path, ".session.json"))
+
+
+def pointer_of(path):
+    """What the folder's .git points at: None if there's no .git; raises if it isn't one of ours."""
+    p = os.path.join(path, ".git")
+    if not os.path.lexists(p):
+        return None
+    if os.path.isfile(p) and not os.path.islink(p):
+        with open(p, encoding="utf-8") as fh:
+            text = fh.read().strip()
+        target = text[len("gitdir:"):].strip() if text.startswith("gitdir:") else ""
+        if os.path.dirname(target) == store():
+            return target
+    raise SystemExit("claude-area: {} has its own .git; it stays as it is".format(path))
+
+
+def set_area(path, area):
+    """Put the request in area, or take it out with none/other. Keeps a running thread working:
+    only the .git file and the area in .session.json change."""
+    pointer_of(path)
+    p = os.path.join(path, ".git")
+    if area in ("none", OTHER):
+        if os.path.exists(p):
+            os.remove(p)
+        write_meta(path, OTHER)
+        return OTHER
+    if area not in areas():
+        raise SystemExit("claude-area: no area {!r}. Areas: {}".format(area, ", ".join(areas()) or "(none set in CWS_AREAS)"))
+    g = ensure_gitdir(area)
+    tmp = p + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write("gitdir: {}\n".format(g))
+    os.replace(tmp, p)
+    write_meta(path, area)
+    remember(read_meta(path).get("ticket"), area)
+    return area
+
+
+def ticket_index():
+    return os.path.join(store(), "tickets.json")
+
+
+def read_index():
+    try:
+        with open(ticket_index(), encoding="utf-8") as fh:
+            d = json.load(fh)
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def remember(ticket, area):
+    """Note a ticket's latest area. Local, because reading every .session.json through OneDrive
+    takes over a minute and claude-new waits for the answer."""
+    if not re.match(r"^[A-Z][A-Z0-9]+-\d+$", ticket or ""):
+        return
+    d = read_index()
+    d[ticket] = area
+    os.makedirs(store(), exist_ok=True)
+    tmp = ticket_index() + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(d, fh, indent=2)
+    os.replace(tmp, ticket_index())
+
+
+def from_ticket(ticket):
+    """The area of the latest request on this ticket."""
+    area = read_index().get(ticket or "")
+    return area if area in areas() else ""
+
+
+def from_model(meta):
+    """Ask a small model. Anything but a clear answer means no area: claude-new must not stall."""
+    names = areas() + [OTHER]
+    schema = {"type": "object", "properties": {"area": {"enum": names}}, "required": ["area"],
+              "additionalProperties": False}
+    msg = "Areas: {}\nRequest name: {}\nGoal: {}\nTask type: {}\nTicket: {}".format(
+        ", ".join(names), meta.get("name") or "", meta.get("goal") or "", meta.get("task_type") or "",
+        meta.get("ticket") or "")
+    cmd = ["claude", "-p", "--settings", json.dumps({"disableAllHooks": True}), "--strict-mcp-config",
+           "--model", CA.CONFIG.get("CWS_AREA_MODEL") or "haiku", "--tools", "", "--no-session-persistence",
+           "--system-prompt", WHY, "--output-format", "json", "--json-schema", json.dumps(schema), msg]
+    env = dict(os.environ)
+    if meta.get("profile"):
+        env["CLAUDE_CONFIG_DIR"] = os.path.join(HOME, ".claude-" + meta["profile"])
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, env=env, cwd=tempfile.gettempdir(),
+                           stdin=subprocess.DEVNULL,
+                           timeout=float(CA.CONFIG.get("CWS_AREA_TIMEOUT") or 20))
+        answer = (json.loads(r.stdout or "{}").get("structured_output") or {}).get("area")
+    except (subprocess.TimeoutExpired, OSError, ValueError, AttributeError):
+        return ""
+    return answer if answer in names else ""
+
+
+def pick(path):
+    """Choose and set the area of a new request. Silent when no areas are configured; an area
+    already set is kept. Never fails: claude-new carries on with the request ungrouped."""
+    meta = read_meta(path)
+    if not areas() or meta.get("area"):
+        return
+    area = from_ticket(meta.get("ticket"))
+    how = "same as this ticket's earlier sessions"
+    if not area:
+        area, how = from_model(meta), "from the name and goal"
+    area = area or OTHER
+    try:
+        set_area(path, area)
+    except SystemExit as e:
+        print(e, file=sys.stderr)
+        return
+    print("Area: {}{}".format(area, " ({})".format(how) if area != OTHER else ""))
+
+
+def size(path):
+    return sum(os.path.getsize(os.path.join(d, f)) for d, _, files in os.walk(path) for f in files)
+
+
+def compact():
+    found = sorted(glob.glob(os.path.join(store(), "*.git")))
+    for g in found:
+        git("--git-dir", g, "gc", "--quiet")
+        print("{:<24} {:>8.1f} MB".format(os.path.basename(g)[:-4], size(g) / 1e6))
+    if not found:
+        print("No area has any data yet.")
+
+
+def show(start):
+    print("Areas: " + (", ".join(areas()) or "(none set in CWS_AREAS)"))
+    try:
+        path = request_dir(start)
+    except SystemExit:
+        return
+    print("This request: " + (read_meta(path).get("area") or "(none)"))
+
+
+def main(argv=None):
+    p = argparse.ArgumentParser(prog="claude-area", description=__doc__.split("\n")[0])
+    p.add_argument("area", nargs="?", help="the area to put this request in, or none")
+    p.add_argument("--dir", default=".", help="the request folder (default: the current one)")
+    p.add_argument("--pick", action="store_true", help="choose the area from the request's context")
+    p.add_argument("--gc", action="store_true", help="compact the areas' snapshot data and show its size")
+    a = p.parse_args(argv)
+    if a.gc:
+        compact()
+    elif a.pick:
+        pick(request_dir(a.dir))
+    elif a.area:
+        print("Area: " + set_area(request_dir(a.dir), a.area))
+        print("T3's sidebar shows it within 15 minutes.")
+    else:
+        show(a.dir)
+
+
+if __name__ == "__main__":
+    main()

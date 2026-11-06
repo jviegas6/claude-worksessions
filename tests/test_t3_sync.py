@@ -414,3 +414,8 @@ def test_no_kickoff_outside_request_folders(t3, sync, home):
     sync.open_in_t3(str(repo), kickoff=True)
     assert t3.calls() == ["project add {} --title thing".format(os.path.realpath(str(repo))),
                           "app {}".format(os.path.realpath(str(repo)))]
+
+
+def test_kickoff_names_the_area(t3, sync):
+    d = t3.request("2026/11/04/09-00-00_bare", {"name": "Bare", "ticket": "BS-1", "area": "ingestion"})
+    assert sync.kickoff_prompt(str(d)).splitlines()[1] == "Ticket: BS-1 · Area: ingestion"

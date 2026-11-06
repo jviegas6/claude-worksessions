@@ -445,7 +445,7 @@ claude-new() {
   setopt local_options no_nomatch
 
   local profile="" name="" ticket="" canon="" dir slug cfg started ended audit=1 ask_audit=1 ttype="" opener="${CWS_OPEN:-cli}" prompt="" fresh=0
-  local goal="" done_when="" goal_set=0
+  local goal="" done_when="" goal_set=0 area=""
   local -a paths=()
   local -a profiles=(${=CWS_PROFILES})
 
@@ -473,6 +473,7 @@ claude-new() {
         prompt="$2"; shift 2 ;;
       --new) fresh=1; shift ;;
       -T|--type)     ttype="$2";       shift 2 ;;
+      -A|--area)     area="$2";        shift 2 ;;
       -g|--goal)     goal="$2"; goal_set=1; shift 2 ;;
       --done)        done_when="$2";   shift 2 ;;
       --path)
@@ -498,7 +499,7 @@ print("{:<10} {:<14} {:<16} {:<9}".format("[" + (d.get("profile") or "?") + "]",
         done
         return 0 ;;
       -h|--help)
-        print -r -- 'claude-new [-p PROFILE] [-n|-a] [-c|--t3|--cli] [-t TICKET] [-T TYPE] [-g GOAL] [--done TEXT] [--path DIR]... [--prompt TEXT] [name]'
+        print -r -- 'claude-new [-p PROFILE] [-n|-a] [-c|--t3|--cli] [-t TICKET] [-T TYPE] [-A AREA] [-g GOAL] [--done TEXT] [--path DIR]... [--prompt TEXT] [name]'
         print -r -- '    create a YYYY/MM/DD/HH-mm-ss_slug folder and start Claude in it'
         print -r -- '    -c / --code opens the folder in VS Code instead; the Claude extension there'
         print -r -- '    picks up the profile through claude-vscode'
@@ -510,6 +511,7 @@ print("{:<10} {:<14} {:<16} {:<9}".format("[" + (d.get("profile") or "?") + "]",
         print -r -- '    with --t3, as a thread on the profile'"'"'s T3 Claude instance. Not with -c'
         print -r -- "    TICKET is mandatory: PREFIX-123 (e.g. $CWS_TICKET_EXAMPLE), or Other"
         print -r -- '    -T / --type is the kind of work (permissions, job errors, ...); asked if omitted'
+        print -r -- '    -A / --area is the T3 sidebar group (CWS_AREAS); chosen from the context if omitted'
         print -r -- '    -g / --goal is what the session should deliver, --done how you will know it did;'
         print -r -- '    both asked if omitted (Enter: the name / nothing). claude-guard keeps work on them'
         print -r -- '    --path DIR (repeatable): a folder or repo outside the request that is part of the work'
@@ -732,6 +734,13 @@ json.dump({
 
   print -r -- "→ $profile  $ticket  ${ttype:+[$ttype]  }${dir#$CLAUDE_WORK_ROOT/}${${audit:#1}:+  (no-audit)}"
   cd "$dir" || return 1
+
+  # The area, before T3 first sees the folder: it caches a project's repository for 15 minutes.
+  if [[ -n "$area" ]]; then
+    claude-area --dir "$dir" "$area" | head -1 || true
+  elif command -v claude-area >/dev/null 2>&1; then
+    claude-area --dir "$dir" --pick || true
+  fi
 
   _cws_open_request "$dir" "$opener" "$prompt" "$profile" && return
 

@@ -301,7 +301,8 @@ def kickoff_prompt(path):
     """The first message of a request's thread, from its .session.json."""
     d = meta(path)
     head = " · ".join(p for p in ("Ticket: " + (d.get("ticket") or "?"),
-                                  "Type: " + d["task_type"] if d.get("task_type") else "") if p)
+                                  "Type: " + d["task_type"] if d.get("task_type") else "",
+                                  "Area: " + d["area"] if d.get("area") else "") if p)
     lines = ["New request opened by claude-new.", head,
              "Goal: " + (d.get("goal") or d.get("name") or os.path.basename(path).split("_", 1)[-1])]
     if (d.get("done_when") or "").strip():

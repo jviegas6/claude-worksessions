@@ -10,6 +10,7 @@ across past sessions, and daily/weekly review skills — all driven by one confi
 | `claude-new -c` | the same, then opens the folder in VS Code, where the Claude extension uses the session's profile |
 | `claude-new --t3` | the same, then adds the folder to [T3 Code](https://github.com/pingdotgg/t3code) as `TICKET · date · name` and opens it there; `CWS_OPEN` makes any of these the default |
 | `claude-t3-sync` | titles every request folder's T3 Code project by its ticket, and removes empty, idle ones; shows the changes first, `--apply` makes them, `--undo` puts them back |
+| `claude-area` | the request's group in T3 Code's sidebar: `claude-new` chooses it from the ticket, name and goal, and `claude-area <area>` changes it without touching the folder or a running thread |
 | `claude-plan` | the request's plan as a DAG of steps (who, date, what has to happen, what can go wrong, check, rollback, order), edited in the browser; ✨ asks Claude for a suggestion, read-only. Also `/plan` in a session and **Open plan** in VS Code |
 | VS Code sidebar | requests and their sessions by day or ticket, each session opened as a tab in its own folder and profile |
 | `claude-wait` | who the ball is with, per request: a flag in `.session.json` and notes in `thread.md`; `/pending` checks Teams and mail against it |

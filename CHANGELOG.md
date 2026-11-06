@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.33.0] — 2026-11-06
+
+- **`claude-area`** groups requests in T3 Code's sidebar by area. T3 groups projects that share
+  a git remote, so each area is a git directory outside the synced root, and a request's `.git`
+  is a one-line file pointing at it. Folders stay at `YYYY/MM/DD/...`: moving one breaks a thread
+  running in it. `claude-area AREA` changes the group on a live thread, which keeps its context;
+  T3 shows it within 15 minutes. Off unless `CWS_AREAS` is set.
+- `claude-new` picks the area before T3 sees the folder: the ticket's latest area, else a small
+  model call on the name and goal, else `other` (ungrouped). `-A AREA` sets it directly, and the
+  kickoff message names it.
+- The work root's `CLAUDE.md` gets the thread states: working, pending (snoozed to a date) and
+  done (settled). Agents never settle or snooze a thread unless the user says so.
+
 ## [2.32.1] — 2026-11-04
 
 - The work root's `CLAUDE.md` no longer tells sessions to run `claude-wait`: who the ball is

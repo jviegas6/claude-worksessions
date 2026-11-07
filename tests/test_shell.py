@@ -870,3 +870,39 @@ def test_claude_new_project_and_type_flags_pass_through(tmp_path):
     r = run_new(tmp_path, '-p personal -n --new -t Other -T tooling -g goal -A contact360 -F data --t3 "x"', PATH=path)
     assert r.returncode == 0, r.stderr
     assert log.read_text().splitlines()[0].endswith(" --pick contact360 --type data")
+
+
+def type_session(root):
+    d = root / "2026" / "11" / "07" / "13-39-18_pilot"
+    d.mkdir(parents=True)
+    (d / ".session.json").write_text(json.dumps({"name": "pilot", "task_type": "permissions"}))
+    return d
+
+
+def run_type(root, d, value, request_types="data networking access"):
+    env = dict(os.environ, CLAUDE_WORK_ROOT=str(root), CWS_TASK_TYPES="permissions, support",
+               CWS_TYPES=request_types, CWS_CONFIG=os.devnull, ZDOTDIR=str(root))
+    src = 'source "{}/shell/worksessions.zsh"\ncd "{}"\nclaude-type --folder "{}"'.format(REPO, d, value)
+    return subprocess.run(["zsh", "-fc", src], env=env, capture_output=True, text=True)
+
+
+def test_claude_type_points_a_request_type_to_claude_area(tmp_path):
+    d = type_session(tmp_path)
+    r = run_type(tmp_path, d, "networking")
+    assert r.returncode == 1
+    assert "not a task type" in r.stderr and "claude-area --type networking" in r.stderr
+    assert json.loads((d / ".session.json").read_text())["task_type"] == "permissions"
+
+
+def test_claude_type_rejects_an_unknown_type(tmp_path):
+    d = type_session(tmp_path)
+    r = run_type(tmp_path, d, "banana")
+    assert r.returncode == 1 and "claude-area" not in r.stderr
+
+
+@pytest.mark.parametrize("value", ["support", "Support", "permissions"])
+def test_claude_type_accepts_seeded_and_used_types(tmp_path, value):
+    d = type_session(tmp_path)
+    r = run_type(tmp_path, d, value)
+    assert r.returncode == 0, r.stderr
+    assert json.loads((d / ".session.json").read_text())["task_type"] == value

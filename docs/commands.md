@@ -255,6 +255,9 @@ that session is relabelled. The session is identified by its transcript in
 `~/.claude-<profile>/projects/`; outside a running session there is nothing to identify,
 so `claude-type` sets the folder default and says so.
 
+The value must be a task type already used in a request folder or listed in `CWS_TASK_TYPES`.
+A request type (`CWS_TYPES`, the T3 heading) is refused with a pointer to `claude-area --type`.
+
 One caveat: a resumed session keeps one id across days, so its type covers the whole
 session, not just today's part of it.
 

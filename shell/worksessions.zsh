@@ -182,9 +182,19 @@ json.dump(d, open(p, "w"), indent=2)' "$f"
   local sid=""
   [[ "$scope" == session ]] && sid="$(_cws_session_id "${meta:h}")"
 
-  WS_SID="$sid" WS_SCOPE="$scope" WS_TYPE="${(j: :)@}" WS_SET="$#" "$CWS_PYTHON" - "$meta" <<'PYEOF'
+  WS_SID="$sid" WS_SCOPE="$scope" WS_TYPE="${(j: :)@}" WS_SET="$#" \
+    WS_TASK_TYPES="$(_cws_task_types)" WS_REQUEST_TYPES="${CWS_TYPES:-}" "$CWS_PYTHON" - "$meta" <<'PYEOF'
 import json, os, sys
 p = sys.argv[1]
+if os.environ["WS_SET"] != "0":
+    new = os.environ["WS_TYPE"].strip()
+    known = [t.strip() for t in os.environ["WS_TASK_TYPES"].splitlines() if t.strip()]
+    if known and new.lower() not in [k.lower() for k in known]:
+        msg = "claude-type: '{}' is not a task type ({})".format(new, ", ".join(known))
+        if new.lower() in os.environ["WS_REQUEST_TYPES"].lower().split():
+            msg += "\n  '{}' is a request type: run claude-area --type {}".format(new, new.lower())
+        print(msg, file=sys.stderr)
+        raise SystemExit(1)
 d = json.load(open(p))
 sid, scope = os.environ["WS_SID"], os.environ["WS_SCOPE"]
 per = d.setdefault("session_types", {}) if isinstance(d.get("session_types", {}), dict) else {}

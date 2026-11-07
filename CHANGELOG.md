@@ -1,10 +1,16 @@
 # Changelog
 
-## [2.33.1] — 2026-11-07
+## [2.34.0] — 2026-11-07
 
-- Every area keeps its heading in T3's sidebar, even with one session: T3 shows a group's name
-  only with two projects, so `claude-area` adds an empty anchor project per area, which T3
-  hides. `claude-area --anchors` adds them all at once.
+- Requests are placed by **project and type** instead of an area. `CWS_PROJECTS` get one heading
+  each, `sessions/PROJECT`, with `[type]` starting their thread titles; anything else is `ad-hoc`,
+  with a heading per type. `CWS_AREAS` is replaced by `CWS_PROJECTS` and `CWS_TYPES`, and
+  `claude-new -A`, now the project, gains `-F` for the type.
+- Every heading stays in T3's sidebar with a single session: T3 shows a group's name only with two
+  projects, so each heading has an empty anchor project, which T3 hides. `claude-area --anchors`
+  adds them all.
+- `claude-area --backfill` groups older requests from a reviewed list, and `--undo` takes it back.
+- When an investigation finds work to do, Claude offers to spin it off as a new request.
 
 ## [2.33.0] — 2026-11-06
 

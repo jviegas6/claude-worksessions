@@ -1,27 +1,36 @@
 #!/usr/bin/env python3
-"""claude-area: group a request's T3 Code project under an area.
+"""claude-area: where a request sits in T3 Code's sidebar: its project and its type.
 
-  claude-area                    show this request's area and the areas you can use
-  claude-area AREA               put this request in AREA (a thread running here carries on)
-  claude-area none               take it out of its area: T3 shows the project on its own
-  claude-area --pick             choose the area from its ticket, name and goal (claude-new does this)
-  claude-area --anchors          make sure every area shows its heading in T3
-  claude-area --gc               compact the areas' snapshot data and show its size
-  claude-area --dir DIR ...      act on DIR instead of the current folder
+  claude-area                       this request's project and type, and the ones you can use
+  claude-area PROJECT               move it to PROJECT (a thread running here carries on)
+  claude-area --type TYPE           change its type
+  claude-area none                  take it out: T3 shows the project on its own
+  claude-area --pick [PROJECT] [--type TYPE]
+                                    choose what isn't given from the ticket, name and goal
+  claude-area --anchors             make sure every heading shows in T3
+  claude-area --gc                  compact the snapshot data and show its size
+  claude-area --backfill CSV [--apply]
+                                    group older requests from a reviewed list (project,type,folder)
+  claude-area --undo LOG            take back what a backfill did
+  claude-area --dir DIR ...         act on DIR instead of the current folder
 
-An area is a line in CWS_AREAS. T3 groups the projects that share a git remote, so each area
-is one git directory outside the synced work root, with a placeholder remote that is never
-pushed to, and a request's `.git` is a one-line file pointing at it. That file is all that
-changes: the folder stays where it is, so transcripts, the audit and a running thread are not
-touched. T3 caches a project's repository for up to 15 minutes, so a change shows up in its
-sidebar by then.
+T3's sidebar has two levels, a heading and its threads. A project in CWS_PROJECTS is one heading,
+sessions/PROJECT, and its threads start with [type]. Anything else is ad-hoc and gets a heading
+per type, ad-hoc/TYPE. CWS_TYPES lists the types; the last is the fallback.
 
-T3 shows a group's heading only when it has two projects, so each area also has an anchor: an
-empty project outside the work root that T3 hides. It keeps the heading there from the first
-session on.
+T3 groups the projects that share a git remote, so each heading is one git directory outside the
+synced work root, with a placeholder remote that is never pushed to, and a request's `.git` is a
+one-line file pointing at it. That file is all that changes: the folder stays where it is, so
+transcripts, the audit and a running thread are not touched. T3 caches a project's repository for
+up to 15 minutes, so a change shows up in its sidebar by then.
+
+T3 shows a heading only when it has two projects, so each one also has an anchor: an empty project
+outside the work root that T3 hides. It keeps the heading there from the first session on.
 """
 
 import argparse
+import csv
+import datetime as dt
 import glob
 import importlib.machinery
 import importlib.util
@@ -49,8 +58,8 @@ def load_audit():
 CA = load_audit()
 HOME = os.path.expanduser("~")
 ROOT = os.path.realpath(CA.DEFAULT_ROOT)
-OTHER = "other"     # no fitting area: the request keeps its own place in the sidebar
-REMOTE = "https://sessions.invalid/sessions/{}.git"     # .invalid never resolves, so it can't be pushed to
+ADHOC = "ad-hoc"
+REMOTE = "https://sessions.invalid/{}.git"      # .invalid never resolves, so it can't be pushed to
 # T3 snapshots the folder on every turn. These change constantly or are large and binary, and
 # T3's diffs add nothing for them; everything else stays in the snapshots.
 EXCLUDE = """.quality.jsonl
@@ -72,20 +81,37 @@ EXCLUDE = """.quality.jsonl
 *.pptx
 *.docx
 """
-WHY = ("Pick the one area this work request belongs to. Answer {} when none clearly fits: a request "
-       "left outside the areas is better than one in the wrong area.").format(OTHER)
+WHY = """Place a work request. Project: one of the listed projects if the request clearly belongs to
+it, else {adhoc}. Type: data (new or changed data, pipelines, ingestion), networking (connectivity,
+private endpoints, DNS, firewalls), resources (new cloud or platform resources, capacity, cost),
+access (permissions, groups, service principals, secrets), report (dashboards, KPIs, reports,
+emails about them), tool (the user's own tooling and automation), investigation (looking into
+something when the work to do isn't clear yet).""".format(adhoc=ADHOC)
 
 
-def areas():
-    return [a for a in re.split(r"[,\s]+", CA.CONFIG.get("CWS_AREAS") or "") if a]
+def names(key):
+    return [a for a in re.split(r"[,\s]+", CA.CONFIG.get(key) or "") if a]
+
+
+def projects():
+    return names("CWS_PROJECTS")
+
+
+def types_():
+    return names("CWS_TYPES")
 
 
 def store():
     return CA.CONFIG.get("CWS_AREAS_DIR") or os.path.join(HOME, ".local", "share", "claude-worksessions", "areas")
 
 
-def gitdir(area):
-    return os.path.join(store(), area + ".git")
+def group_of(project, front):
+    """The heading a request sits under."""
+    return "{}/{}".format(ADHOC, front) if project == ADHOC else "sessions/" + project
+
+
+def gitdir(group):
+    return os.path.join(store(), group.replace("/", "--") + ".git")
 
 
 def git(*args):
@@ -95,15 +121,15 @@ def git(*args):
     return r.stdout.strip()
 
 
-def ensure_gitdir(area):
-    """The area's git directory, created the first time it's used."""
-    g = gitdir(area)
+def ensure_gitdir(group):
+    """The heading's git directory, created the first time it's used."""
+    g = gitdir(group)
     if os.path.isdir(g):
         return g
     git("init", "-q", "--bare", g)
     # Bare only so that no worktree is needed to make it: requests are worktrees of it.
     git("--git-dir", g, "config", "core.bare", "false")
-    git("--git-dir", g, "remote", "add", "origin", REMOTE.format(area))
+    git("--git-dir", g, "remote", "add", "origin", REMOTE.format(group))
     info = os.path.join(g, "info")
     os.makedirs(info, exist_ok=True)
     with open(os.path.join(info, "exclude"), "w", encoding="utf-8") as fh:
@@ -116,18 +142,18 @@ def t3_command():
             os.path.join(HOME, ".t3", "bin", "t3"))
 
 
-def ensure_anchor(area):
-    """Add the area's empty project to T3, once. Without T3 running it says so and tries again
-    next time: the area works either way, it just has no heading yet."""
-    folder = os.path.join(store(), "anchors", area)
+def ensure_anchor(group):
+    """Add the heading's empty project to T3, once. Without T3 running it says so and tries again
+    next time: grouping works either way, the heading just waits for a second project."""
+    folder = os.path.join(store(), "anchors", group.replace("/", "--"))
     done = os.path.join(folder, ".t3-added")
     if os.path.exists(done):
         return
     os.makedirs(folder, exist_ok=True)
     with open(os.path.join(folder, ".git"), "w", encoding="utf-8") as fh:
-        fh.write("gitdir: {}\n".format(gitdir(area)))
+        fh.write("gitdir: {}\n".format(gitdir(group)))
     try:
-        r = subprocess.run([t3_command(), "project", "add", folder, "--title", area], capture_output=True,
+        r = subprocess.run([t3_command(), "project", "add", folder, "--title", group], capture_output=True,
                            text=True, stdin=subprocess.DEVNULL, timeout=20)
         ok, err = r.returncode == 0 or "AlreadyExists" in r.stderr, r.stderr.strip()
     except (OSError, subprocess.TimeoutExpired) as e:
@@ -135,7 +161,7 @@ def ensure_anchor(area):
     if ok:
         open(done, "w").close()
     else:
-        print("claude-area: {} has no T3 heading yet: {}".format(area, err[:160]), file=sys.stderr)
+        print("claude-area: {} has no T3 heading yet: {}".format(group, err[:160]), file=sys.stderr)
 
 
 def request_dir(start):
@@ -159,9 +185,15 @@ def read_meta(path):
         return {}
 
 
-def write_meta(path, area):
+def write_meta(path, **values):
+    """Set keys in .session.json; a value of None removes the key."""
     d = read_meta(path)
-    d["area"] = area
+    d.pop("area", None)
+    for k, v in values.items():
+        if v is None:
+            d.pop(k, None)
+        else:
+            d[k] = v
     tmp = os.path.join(path, ".session.json.tmp")
     with open(tmp, "w", encoding="utf-8") as fh:
         json.dump(d, fh, indent=2)
@@ -182,27 +214,42 @@ def pointer_of(path):
     raise SystemExit("claude-area: {} has its own .git; it stays as it is".format(path))
 
 
-def set_area(path, area):
-    """Put the request in area, or take it out with none/other. Keeps a running thread working:
-    only the .git file and the area in .session.json change."""
+def clear(path):
+    """Take the request out of the sidebar groups."""
     pointer_of(path)
     p = os.path.join(path, ".git")
-    if area in ("none", OTHER):
-        if os.path.exists(p):
-            os.remove(p)
-        write_meta(path, OTHER)
-        return OTHER
-    if area not in areas():
-        raise SystemExit("claude-area: no area {!r}. Areas: {}".format(area, ", ".join(areas()) or "(none set in CWS_AREAS)"))
-    g = ensure_gitdir(area)
-    ensure_anchor(area)
+    if os.path.exists(p):
+        os.remove(p)
+    write_meta(path, project=None, front=None)
+
+
+def place(path, project=None, front=None):
+    """Put the request under project and type, keeping whichever isn't given. A running thread
+    keeps working: only the .git file and two keys in .session.json change."""
+    pointer_of(path)
+    meta = read_meta(path)
+    project = project or meta.get("project") or ADHOC
+    front = front or meta.get("front") or fallback_type()
+    if project not in projects() + [ADHOC]:
+        raise SystemExit("claude-area: no project {!r}. Projects: {}".format(project, ", ".join(projects() + [ADHOC])))
+    if front not in types_():
+        raise SystemExit("claude-area: no type {!r}. Types: {}".format(front, ", ".join(types_()) or "(none set in CWS_TYPES)"))
+    group = group_of(project, front)
+    g = ensure_gitdir(group)
+    ensure_anchor(group)
+    p = os.path.join(path, ".git")
     tmp = p + ".tmp"
     with open(tmp, "w", encoding="utf-8") as fh:
         fh.write("gitdir: {}\n".format(g))
     os.replace(tmp, p)
-    write_meta(path, area)
-    remember(read_meta(path).get("ticket"), area)
-    return area
+    write_meta(path, project=project, front=front)
+    if project != ADHOC:
+        remember(meta.get("ticket"), project)
+    return group
+
+
+def fallback_type():
+    return types_()[-1] if types_() else ""
 
 
 def ticket_index():
@@ -233,19 +280,20 @@ def remember(ticket, area):
 
 
 def from_ticket(ticket):
-    """The area of the latest request on this ticket."""
-    area = read_index().get(ticket or "")
-    return area if area in areas() else ""
+    """The project of the latest request on this ticket."""
+    project = read_index().get(ticket or "")
+    return project if project in projects() else ""
 
 
 def from_model(meta):
-    """Ask a small model. Anything but a clear answer means no area: claude-new must not stall."""
-    names = areas() + [OTHER]
-    schema = {"type": "object", "properties": {"area": {"enum": names}}, "required": ["area"],
-              "additionalProperties": False}
-    msg = "Areas: {}\nRequest name: {}\nGoal: {}\nTask type: {}\nTicket: {}".format(
-        ", ".join(names), meta.get("name") or "", meta.get("goal") or "", meta.get("task_type") or "",
-        meta.get("ticket") or "")
+    """Ask a small model. Returns (project, type), empty where there's no clear answer: claude-new
+    must not stall on it."""
+    project_names, type_names = projects() + [ADHOC], types_()
+    schema = {"type": "object", "properties": {"project": {"enum": project_names}, "type": {"enum": type_names}},
+              "required": ["project", "type"], "additionalProperties": False}
+    msg = "Projects: {}\nTypes: {}\nRequest name: {}\nGoal: {}\nTask type: {}\nTicket: {}".format(
+        ", ".join(project_names), ", ".join(type_names), meta.get("name") or "", meta.get("goal") or "",
+        meta.get("task_type") or "", meta.get("ticket") or "")
     cmd = ["claude", "-p", "--settings", json.dumps({"disableAllHooks": True}), "--strict-mcp-config",
            "--model", CA.CONFIG.get("CWS_AREA_MODEL") or "haiku", "--tools", "", "--no-session-persistence",
            "--system-prompt", WHY, "--output-format", "json", "--json-schema", json.dumps(schema), msg]
@@ -254,31 +302,69 @@ def from_model(meta):
         env["CLAUDE_CONFIG_DIR"] = os.path.join(HOME, ".claude-" + meta["profile"])
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, env=env, cwd=tempfile.gettempdir(),
-                           stdin=subprocess.DEVNULL,
-                           timeout=float(CA.CONFIG.get("CWS_AREA_TIMEOUT") or 20))
-        answer = (json.loads(r.stdout or "{}").get("structured_output") or {}).get("area")
+                           stdin=subprocess.DEVNULL, timeout=float(CA.CONFIG.get("CWS_AREA_TIMEOUT") or 20))
+        answer = json.loads(r.stdout or "{}").get("structured_output") or {}
+        project, front = answer.get("project"), answer.get("type")
     except (subprocess.TimeoutExpired, OSError, ValueError, AttributeError):
-        return ""
-    return answer if answer in names else ""
+        return "", ""
+    return (project if project in project_names else "", front if front in type_names else "")
 
 
-def pick(path):
-    """Choose and set the area of a new request. Silent when no areas are configured; an area
-    already set is kept. Never fails: claude-new carries on with the request ungrouped."""
+def pick(path, project=None, front=None):
+    """Choose what isn't given and place a new request. Silent when no types are configured; a
+    request already placed is kept. Never fails: claude-new carries on with it ungrouped."""
     meta = read_meta(path)
-    if not areas() or meta.get("area"):
+    if not types_() or (meta.get("project") and meta.get("front") and not (project or front)):
         return
-    area = from_ticket(meta.get("ticket"))
-    how = "same as this ticket's earlier sessions"
-    if not area:
-        area, how = from_model(meta), "from the name and goal"
-    area = area or OTHER
+    project = project or from_ticket(meta.get("ticket"))
+    if not (project and front):
+        guess_project, guess_front = from_model(meta)
+        project, front = project or guess_project, front or guess_front
     try:
-        set_area(path, area)
+        print("Group: " + place(path, project or ADHOC, front or fallback_type()))
     except SystemExit as e:
         print(e, file=sys.stderr)
+
+
+def backfill(path_csv, apply):
+    """Place older requests from a reviewed list. Without --apply it only counts."""
+    with open(path_csv, newline="", encoding="utf-8") as fh:
+        rows = [r for r in csv.DictReader(fh) if r.get("project") and r.get("folder")]
+    groups = {}
+    for r in rows:
+        name = group_of(r["project"], r.get("type"))
+        groups[name] = groups.get(name, 0) + 1
+    for name in sorted(groups):
+        print("{:<32} {:>4}".format(name, groups[name]))
+    if not apply:
+        print("{} requests. Nothing changed: add --apply.".format(len(rows)))
         return
-    print("Area: {}{}".format(area, " ({})".format(how) if area != OTHER else ""))
+    log = os.path.join(ROOT, "_audit", "areas", "backfill-{:%Y%m%d-%H%M%S}.jsonl".format(dt.datetime.now()))
+    os.makedirs(os.path.dirname(log), exist_ok=True)
+    done = 0
+    with open(log, "a", encoding="utf-8") as out:
+        for r in rows:
+            path = r["folder"]
+            before = read_meta(path)
+            if not before or before.get("project"):     # gone, or placed since the list was made
+                continue
+            try:
+                place(path, r["project"], r.get("type"))
+            except SystemExit as e:
+                print(e, file=sys.stderr)
+                continue
+            out.write(json.dumps({"folder": path, "group": group_of(r["project"], r.get("type"))}) + "\n")
+            done += 1
+    print("Placed {} of {}. Undo: claude-area --undo {}".format(done, len(rows), log))
+
+
+def undo(log):
+    count = 0
+    with open(log, encoding="utf-8") as fh:
+        for line in fh:
+            clear(json.loads(line)["folder"])
+            count += 1
+    print("Took {} requests out of their groups.".format(count))
 
 
 def size(path):
@@ -289,39 +375,60 @@ def compact():
     found = sorted(glob.glob(os.path.join(store(), "*.git")))
     for g in found:
         git("--git-dir", g, "gc", "--quiet")
-        print("{:<24} {:>8.1f} MB".format(os.path.basename(g)[:-4], size(g) / 1e6))
+        print("{:<32} {:>8.1f} MB".format(os.path.basename(g)[:-4].replace("--", "/"), size(g) / 1e6))
     if not found:
-        print("No area has any data yet.")
+        print("Nothing stored yet.")
 
 
 def show(start):
-    print("Areas: " + (", ".join(areas()) or "(none set in CWS_AREAS)"))
+    print("Projects: " + ", ".join(projects() + [ADHOC]))
+    print("Types: " + (", ".join(types_()) or "(none set in CWS_TYPES)"))
     try:
         path = request_dir(start)
     except SystemExit:
         return
-    print("This request: " + (read_meta(path).get("area") or "(none)"))
+    d = read_meta(path)
+    print("This request: " + (group_of(d["project"], d.get("front")) if d.get("project") else "(ungrouped)"))
+
+
+def report(path):
+    d = read_meta(path)
+    print("Group: " + group_of(d["project"], d["front"]))
+    print("Thread title: " + CA.thread_title(d))
+    print("T3's sidebar shows it within 15 minutes.")
 
 
 def main(argv=None):
     p = argparse.ArgumentParser(prog="claude-area", description=__doc__.split("\n")[0])
-    p.add_argument("area", nargs="?", help="the area to put this request in, or none")
+    p.add_argument("project", nargs="?", help="the project to put this request in, ad-hoc, or none")
+    p.add_argument("--type", dest="front", help="the type of request")
     p.add_argument("--dir", default=".", help="the request folder (default: the current one)")
-    p.add_argument("--pick", action="store_true", help="choose the area from the request's context")
-    p.add_argument("--anchors", action="store_true", help="make sure every area shows its heading in T3")
-    p.add_argument("--gc", action="store_true", help="compact the areas' snapshot data and show its size")
+    p.add_argument("--pick", action="store_true", help="choose what isn't given from the request's context")
+    p.add_argument("--anchors", action="store_true", help="make sure every heading shows in T3")
+    p.add_argument("--gc", action="store_true", help="compact the snapshot data and show its size")
+    p.add_argument("--backfill", metavar="CSV", help="group older requests from a reviewed list")
+    p.add_argument("--apply", action="store_true", help="with --backfill: make the changes")
+    p.add_argument("--undo", metavar="LOG", help="take back what a backfill did")
     a = p.parse_args(argv)
     if a.anchors:
-        for name in areas():
+        for name in ["sessions/" + x for x in projects()] + [group_of(ADHOC, x) for x in types_()]:
             ensure_gitdir(name)
             ensure_anchor(name)
     elif a.gc:
         compact()
+    elif a.backfill:
+        backfill(a.backfill, a.apply)
+    elif a.undo:
+        undo(a.undo)
     elif a.pick:
-        pick(request_dir(a.dir))
-    elif a.area:
-        print("Area: " + set_area(request_dir(a.dir), a.area))
-        print("T3's sidebar shows it within 15 minutes.")
+        pick(request_dir(a.dir), a.project, a.front)
+    elif a.project == "none":
+        clear(request_dir(a.dir))
+        print("Taken out of its group.")
+    elif a.project or a.front:
+        path = request_dir(a.dir)
+        place(path, a.project, a.front)
+        report(path)
     else:
         show(a.dir)
 

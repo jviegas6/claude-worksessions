@@ -7,8 +7,8 @@
 │   ├── .session.json              name, profile, ticket, task_type (folder default),
 │   │                               session_types (per session), goal, done_when, times,
 │   │                               waiting (who the ball is with: claude-wait),
-│   │                               area (T3 sidebar group: claude-area)
-│   ├── .git                       one-line pointer to the area's git data; only if it has an area
+│   │                               project, front (place in T3: claude-area)
+│   ├── .git                       one-line pointer to its heading's git data; only if it's placed
 │   ├── thread.md                  the exchange so far: claude-wait's changes and notes
 │   ├── .scope.json                claude-guard: each session's current scope and targets
 │   └── .quality.jsonl             claude-guard: one line per decision

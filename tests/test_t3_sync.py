@@ -416,6 +416,18 @@ def test_no_kickoff_outside_request_folders(t3, sync, home):
                           "app {}".format(os.path.realpath(str(repo)))]
 
 
-def test_kickoff_names_the_area(t3, sync):
-    d = t3.request("2026/11/04/09-00-00_bare", {"name": "Bare", "ticket": "BS-1", "area": "ingestion"})
-    assert sync.kickoff_prompt(str(d)).splitlines()[1] == "Ticket: BS-1 · Area: ingestion"
+def test_kickoff_names_the_project_and_type(t3, sync):
+    d = t3.request("2026/11/04/09-00-00_bare", {"name": "Bare", "ticket": "BS-1", "project": "contact360", "front": "data"})
+    assert sync.kickoff_prompt(str(d)).splitlines()[1] == "Ticket: BS-1 · Project: contact360 · Request type: data"
+
+
+@pytest.mark.parametrize("extra,want", [({"project": "contact360", "front": "data", "ticket": "BS-1"}, "[data] BS-1 · Ben"),
+                                        ({"project": "contact360", "front": "data", "ticket": "Other"}, "[data] Ben"),
+                                        ({"project": "ad-hoc", "front": "data", "ticket": "BS-1"}, "BS-1 · Ben"),
+                                        ({"project": "ad-hoc", "front": "data", "ticket": "Other"}, "Ben")])
+def test_placed_request_titles_its_thread(t3, sync, monkeypatch, extra, want):
+    d = t3.request("2026/11/04/17-21-38_ben", dict({"name": "Ben"}, **extra))
+    t3.server()
+    _no_open(sync, monkeypatch)
+    sync.main(["--open", str(d)])
+    assert "--title {}".format(want) in "\n".join(t3.calls())

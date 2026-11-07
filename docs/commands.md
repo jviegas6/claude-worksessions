@@ -5,7 +5,7 @@ The flag-by-flag reference. For how to use them together see the [user guide](us
 ## claude-new
 
 ```
-claude-new [-p PROFILE] [-n|-a] [-c|--t3|--cli] [-t TICKET] [-T TYPE] [-A AREA] [-g GOAL] [--done TEXT] [--path DIR]... [--prompt TEXT] [--new] [name]
+claude-new [-p PROFILE] [-n|-a] [-c|--t3|--cli] [-t TICKET] [-T TYPE] [-A PROJECT] [-F TYPE] [-g GOAL] [--done TEXT] [--path DIR]... [--prompt TEXT] [--new] [name]
 claude-new -l
 claude-new -L
 ```
@@ -68,46 +68,58 @@ that profile. `ended_at` is filled in when Claude exits.
 ## claude-area
 
 ```
-claude-area                 this request's area, and the areas you can use
-claude-area AREA            put this request in AREA; a thread running here carries on
+claude-area                 this request's project and type, and the ones you can use
+claude-area PROJECT         move it to PROJECT, or ad-hoc; a thread running here carries on
+claude-area --type TYPE     change its type
 claude-area none            take it out: T3 shows the project on its own again
-claude-area --pick          choose the area from the ticket, name and goal
-claude-area --anchors       make sure every area shows its heading in T3
-claude-area --gc            compact the areas' snapshot data and show its size
+claude-area --pick [PROJECT] [--type TYPE]
+                            choose what isn't given from the ticket, name and goal
+claude-area --anchors       make sure every heading shows in T3
+claude-area --gc            compact the snapshot data and show its size
+claude-area --backfill CSV [--apply]
+                            group older requests from a reviewed list (project,type,folder)
+claude-area --undo LOG      take back what a backfill did
 claude-area --dir DIR ...   act on DIR instead of the current folder
 ```
 
-T3 Code groups projects that share a git remote, so an area is one git directory under
-`CWS_AREAS_DIR`, outside the synced work root, with a placeholder remote on `.invalid` that
-can't be pushed to. A request's `.git` is a one-line file pointing at it, and `.session.json`
-records the `area`. Nothing else changes and the folder doesn't move: moving one breaks a thread
+T3's sidebar has two levels, a heading and its threads. A project in `CWS_PROJECTS` is one
+heading, `sessions/PROJECT`, and its threads start with `[type]`, so a project stays in one view.
+Anything else is `ad-hoc`, with a heading per type, `ad-hoc/TYPE`. T3 can't sort headings by name,
+which is why a project isn't split into `project/type` headings. The last of `CWS_TYPES` is the
+fallback.
+
+T3 groups projects that share a git remote, so a heading is one git directory under
+`CWS_AREAS_DIR`, outside the synced work root, with a placeholder remote on `.invalid` that can't
+be pushed to. A request's `.git` is a one-line file pointing at it, and `.session.json` records
+`project` and `front`. Nothing else changes and the folder doesn't move: moving one breaks a thread
 running in it, and every tool here finds requests by their date path.
 
-`claude-new` runs `--pick` before T3 first sees the folder, so a new project lands in its group
-at once. It takes the area of the ticket's latest request (from `tickets.json` in
-`CWS_AREAS_DIR`, because reading `.session.json` through OneDrive took over a minute), else asks
-a small model about the name and goal. No clear answer means `other`: no `.git`, so the project
-stays on its own in the sidebar. It never stops `claude-new`, and does nothing unless `CWS_AREAS`
-is set. `claude-new -A AREA` sets it directly.
+`claude-new` runs `--pick` before T3 first sees the folder, so a new project lands under its heading
+at once. The project comes from the ticket's latest request (`tickets.json` in `CWS_AREAS_DIR`,
+because reading `.session.json` through OneDrive took over a minute), else a small model call on
+the name and goal, which also gives the type. No clear answer means `ad-hoc` and the fallback type.
+It never stops `claude-new`, and does nothing unless `CWS_TYPES` is set. `claude-new -A PROJECT -F TYPE`
+sets them directly.
 
-After a change T3 can take up to 15 minutes to show the new group, because it caches a project's
-repository. The thread keeps its context and later turns snapshot to the new area; snapshots
-from before the change stay in the old area's data. A folder with its own repository, or a
-`.git` pointing elsewhere, is left alone.
+After a change T3 can take up to 15 minutes to show the new heading, because it caches a project's
+repository. The thread keeps its context and later turns snapshot to the new heading; snapshots
+from before the change stay in the old one's data. `claude-area` prints the new thread title, which
+Claude renames the thread to. A folder with its own repository, or a `.git` pointing elsewhere, is
+left alone.
 
-T3 shows a group's heading only when it has two projects; a group of one shows the project's
-title. So each area also has an anchor: an empty project under `CWS_AREAS_DIR/anchors`, added
-to T3 the first time the area is used, which T3 hides. If T3 isn't running it warns and tries
-again next time. Use **New Project**, not a heading's new-thread button, to start work: that
-button may start the thread in the anchor, outside any request folder.
+T3 shows a heading only when it has two projects; a group of one shows the project's title. So each
+heading also has an anchor: an empty project under `CWS_AREAS_DIR/anchors`, added to T3 the first
+time it's used, which T3 hides. If T3 isn't running it warns and tries again next time. Start work
+with **New Project**, not a heading's new-thread button: that button may start the thread in the
+anchor, outside any request folder.
 
-T3 snapshots the folder into that git directory on every turn. `info/exclude` keeps out the
-guard's files and large or binary exports (CSV, Parquet, Office, PDF, images, archives); other
-files stay in. `--gc` shows what it uses. Deleting an area's `.git` directory loses only T3's
-diffs: run `claude-area AREA` in a request to recreate it.
+T3 snapshots the folder into that git directory on every turn. `info/exclude` keeps out the guard's
+files and large or binary exports (CSV, Parquet, Office, PDF, images, archives); other files stay
+in. `--gc` shows what it uses. Deleting a heading's `.git` directory loses only T3's diffs: run
+`claude-area PROJECT` in a request to recreate it.
 
-**To undo:** remove `CWS_AREAS` from the config. New requests are no longer grouped. For one
-that is, delete its `.git` file (or run `claude-area none`).
+**To undo:** remove `CWS_TYPES` from the config. New requests are no longer grouped. For one that
+is, run `claude-area none`. For a backfill, `claude-area --undo` with the log it printed.
 
 ## claude-plan
 

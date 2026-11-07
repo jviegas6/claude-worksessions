@@ -124,6 +124,17 @@ def transcript_files():
 _meta_cache = {}
 
 
+def thread_title(d):
+    """A request's T3 thread title from its .session.json, or "" if it isn't placed. A project's
+    threads start with the type; under ad-hoc the heading already says it."""
+    if not d.get("project"):
+        return ""
+    ticket = (d.get("ticket") or "").strip()
+    parts = [ticket if re.match(r"^[A-Z][A-Z0-9]+-\d+$", ticket) else "", (d.get("name") or "").strip()[:60]]
+    text = " · ".join(p for p in parts if p)
+    return text if d["project"] == "ad-hoc" else "[{}] {}".format(d.get("front") or "?", text)
+
+
 def session_meta(cwd):
     """Profile, Jira ticket and task type recorded by `claude-new` in the session folder."""
     if not cwd:

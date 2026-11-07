@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.33.1] — 2026-11-07
+
+- Every area keeps its heading in T3's sidebar, even with one session: T3 shows a group's name
+  only with two projects, so `claude-area` adds an empty anchor project per area, which T3
+  hides. `claude-area --anchors` adds them all at once.
+
 ## [2.33.0] — 2026-11-06
 
 - **`claude-area`** groups requests in T3 Code's sidebar by area. T3 groups projects that share

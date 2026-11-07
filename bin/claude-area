@@ -5,6 +5,7 @@
   claude-area AREA               put this request in AREA (a thread running here carries on)
   claude-area none               take it out of its area: T3 shows the project on its own
   claude-area --pick             choose the area from its ticket, name and goal (claude-new does this)
+  claude-area --anchors          make sure every area shows its heading in T3
   claude-area --gc               compact the areas' snapshot data and show its size
   claude-area --dir DIR ...      act on DIR instead of the current folder
 
@@ -14,6 +15,10 @@ pushed to, and a request's `.git` is a one-line file pointing at it. That file i
 changes: the folder stays where it is, so transcripts, the audit and a running thread are not
 touched. T3 caches a project's repository for up to 15 minutes, so a change shows up in its
 sidebar by then.
+
+T3 shows a group's heading only when it has two projects, so each area also has an anchor: an
+empty project outside the work root that T3 hides. It keeps the heading there from the first
+session on.
 """
 
 import argparse
@@ -23,6 +28,7 @@ import importlib.util
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -105,6 +111,33 @@ def ensure_gitdir(area):
     return g
 
 
+def t3_command():
+    return (CA.CONFIG.get("CWS_T3_BIN") or shutil.which("t3") or
+            os.path.join(HOME, ".t3", "bin", "t3"))
+
+
+def ensure_anchor(area):
+    """Add the area's empty project to T3, once. Without T3 running it says so and tries again
+    next time: the area works either way, it just has no heading yet."""
+    folder = os.path.join(store(), "anchors", area)
+    done = os.path.join(folder, ".t3-added")
+    if os.path.exists(done):
+        return
+    os.makedirs(folder, exist_ok=True)
+    with open(os.path.join(folder, ".git"), "w", encoding="utf-8") as fh:
+        fh.write("gitdir: {}\n".format(gitdir(area)))
+    try:
+        r = subprocess.run([t3_command(), "project", "add", folder, "--title", area], capture_output=True,
+                           text=True, stdin=subprocess.DEVNULL, timeout=20)
+        ok, err = r.returncode == 0 or "AlreadyExists" in r.stderr, r.stderr.strip()
+    except (OSError, subprocess.TimeoutExpired) as e:
+        ok, err = False, str(e)
+    if ok:
+        open(done, "w").close()
+    else:
+        print("claude-area: {} has no T3 heading yet: {}".format(area, err[:160]), file=sys.stderr)
+
+
 def request_dir(start):
     """The request folder start is in: the nearest one with a .session.json inside the work root."""
     d = os.path.realpath(start)
@@ -162,6 +195,7 @@ def set_area(path, area):
     if area not in areas():
         raise SystemExit("claude-area: no area {!r}. Areas: {}".format(area, ", ".join(areas()) or "(none set in CWS_AREAS)"))
     g = ensure_gitdir(area)
+    ensure_anchor(area)
     tmp = p + ".tmp"
     with open(tmp, "w", encoding="utf-8") as fh:
         fh.write("gitdir: {}\n".format(g))
@@ -274,9 +308,14 @@ def main(argv=None):
     p.add_argument("area", nargs="?", help="the area to put this request in, or none")
     p.add_argument("--dir", default=".", help="the request folder (default: the current one)")
     p.add_argument("--pick", action="store_true", help="choose the area from the request's context")
+    p.add_argument("--anchors", action="store_true", help="make sure every area shows its heading in T3")
     p.add_argument("--gc", action="store_true", help="compact the areas' snapshot data and show its size")
     a = p.parse_args(argv)
-    if a.gc:
+    if a.anchors:
+        for name in areas():
+            ensure_gitdir(name)
+            ensure_anchor(name)
+    elif a.gc:
         compact()
     elif a.pick:
         pick(request_dir(a.dir))

@@ -72,6 +72,7 @@ claude-area                 this request's area, and the areas you can use
 claude-area AREA            put this request in AREA; a thread running here carries on
 claude-area none            take it out: T3 shows the project on its own again
 claude-area --pick          choose the area from the ticket, name and goal
+claude-area --anchors       make sure every area shows its heading in T3
 claude-area --gc            compact the areas' snapshot data and show its size
 claude-area --dir DIR ...   act on DIR instead of the current folder
 ```
@@ -93,6 +94,12 @@ After a change T3 can take up to 15 minutes to show the new group, because it ca
 repository. The thread keeps its context and later turns snapshot to the new area; snapshots
 from before the change stay in the old area's data. A folder with its own repository, or a
 `.git` pointing elsewhere, is left alone.
+
+T3 shows a group's heading only when it has two projects; a group of one shows the project's
+title. So each area also has an anchor: an empty project under `CWS_AREAS_DIR/anchors`, added
+to T3 the first time the area is used, which T3 hides. If T3 isn't running it warns and tries
+again next time. Use **New Project**, not a heading's new-thread button, to start work: that
+button may start the thread in the anchor, outside any request folder.
 
 T3 snapshots the folder into that git directory on every turn. `info/exclude` keeps out the
 guard's files and large or binary exports (CSV, Parquet, Office, PDF, images, archives); other

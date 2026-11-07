@@ -13,7 +13,11 @@ from conftest import load_script
 @pytest.fixture
 def area(home):
     conf = home / ".config" / "claude-worksessions" / "config.env"
-    conf.write_text(conf.read_text() + 'CWS_AREAS="contact360, ingestion"\n')
+    stub = home / "t3-stub"
+    stub.write_text('#!/bin/sh\necho "$*" >> "{}"\n[ -e "{}" ] && {{ cat "{}" >&2; exit 1; }}\nexit 0\n'.format(
+        home / "t3.log", home / "t3-fail", home / "t3-fail"))
+    stub.chmod(0o755)
+    conf.write_text(conf.read_text() + 'CWS_AREAS="contact360, ingestion"\nCWS_T3_BIN="{}"\n'.format(stub))
     return load_script("claude-area")
 
 
@@ -241,3 +245,41 @@ def test_broken_ticket_index_is_ignored(home, area, text):
     with open(area.ticket_index(), "w") as fh:
         fh.write(text)
     assert area.read_index() == {}
+
+
+def test_first_use_adds_a_hidden_anchor_once(home, area):
+    area.set_area(str(request(home, "10-00-00_a")), "ingestion")
+    area.set_area(str(request(home, "10-05-00_b")), "ingestion")
+    calls = (home / "t3.log").read_text().splitlines()
+    folder = os.path.join(area.store(), "anchors", "ingestion")
+    assert calls == ["project add {} --title ingestion".format(folder)]
+    assert remote(folder) == remote(home / "work_sessions" / "2026" / "11" / "06" / "10-00-00_a")
+
+
+def test_anchors_covers_every_area_and_an_existing_project_counts(home, area):
+    (home / "t3-fail").write_text("ProjectAlreadyExistsError")
+    area.main(["--anchors"])
+    assert len((home / "t3.log").read_text().splitlines()) == 2
+    assert os.path.exists(os.path.join(area.store(), "anchors", "contact360", ".t3-added"))
+
+
+def test_t3_failure_does_not_stop_the_area_and_is_retried(home, area, capsys):
+    (home / "t3-fail").write_text("server down")
+    d = request(home)
+    area.set_area(str(d), "ingestion")
+    assert remote(d).endswith("/ingestion.git")
+    assert "no T3 heading yet: server down" in capsys.readouterr().err
+    (home / "t3-fail").unlink()
+    area.set_area(str(d), "ingestion")
+    assert len((home / "t3.log").read_text().splitlines()) == 2
+
+
+def test_t3_missing_is_only_a_warning(home, area, monkeypatch, capsys):
+    monkeypatch.setattr(area, "t3_command", lambda: "/nonexistent/t3")
+    area.ensure_anchor("ingestion")
+    assert "no T3 heading yet" in capsys.readouterr().err
+
+
+def test_t3_command_falls_back_to_its_home(home):
+    mod = load_script("claude-area")
+    assert mod.t3_command().endswith(os.path.join(".t3", "bin", "t3")) or mod.shutil.which("t3")

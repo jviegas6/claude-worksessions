@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.34.1] — 2026-11-07
+
+- "This is networking" changed the tracker's task type instead of the T3 request type. The
+  instructions now tell the two apart, and `claude-type` refuses a value that isn't a task type
+  already used or configured, pointing a request type to `claude-area --type`.
+
 ## [2.34.0] — 2026-11-07
 
 - Requests are placed by **project and type** instead of an area. `CWS_PROJECTS` get one heading

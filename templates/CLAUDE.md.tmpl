@@ -24,8 +24,9 @@ The ticket puts the session on the right tracker row in the weekly review. If a 
 ticket and the work clearly belongs to one, say so.
 
 The task type is what **triggered** the work, not what it touched on the way: a job error that
-leads to a permission change is still `job errors`. If the trigger turns out to be something
-else, run `claude-type "<type>"` and say so in one line.
+leads to a permission change is still `job errors`. It feeds the weekly review, not T3. Change it
+with `claude-type "<type>"` only when the user says "task type" or the trigger was misread, and
+say so in one line.
 
 ## Who is the ball with?
 
@@ -42,9 +43,11 @@ In T3 a thread is **working**, **pending** or **done**, and only the user decide
 - When the user says the work is done, settle the thread.
 - When they say it's pending on someone until a date, snooze the thread to that date. No date: ask.
 
-A request has a project (`ad-hoc` if none) and a type, and `claude-new` chooses both. When the user
-wants either changed, run `claude-area <project>` or `claude-area --type <type>` in the request
-folder, then rename this thread to the `Thread title` it prints. It shows in T3 within 15 minutes,
+A request has a project (`ad-hoc` if none) and a **request type** (where it sits in T3), and
+`claude-new` chooses both. The request type is not the task type above. "This is networking", "it's
+data", "move it to access": these change the request type, never the task type. Run
+`claude-area <project>` or `claude-area --type <type>` in the request folder, then rename this
+thread to the `Thread title` it prints. It shows in T3 within 15 minutes,
 and a running thread is not affected. The `.git` file in a request folder is what does this: it
 isn't a repository to work in, so don't commit there or remove it.
 

@@ -34,7 +34,7 @@ Tracked in Todoist (the `todoist-work` integration). `claude-wait` is still inst
 `.session.json` are frozen history, not current state.
 **If a folder has a `thread.md`, read it before doing anything else there.**
 
-## Thread status and area
+## Thread status and place
 
 In T3 a thread is **working**, **pending** or **done**, and only the user decides the last two.
 
@@ -42,10 +42,15 @@ In T3 a thread is **working**, **pending** or **done**, and only the user decide
 - When the user says the work is done, settle the thread.
 - When they say it's pending on someone until a date, snooze the thread to that date. No date: ask.
 
-The area is the request's group in T3's sidebar. `claude-new` chooses it; when the user wants it
-changed, run `claude-area <area>` in the request folder. It shows in T3 within 15 minutes, and a
-running thread is not affected. The `.git` file in a request folder is what does this: it isn't
-a repository to work in, so don't commit there or remove it.
+A request has a project (`ad-hoc` if none) and a type, and `claude-new` chooses both. When the user
+wants either changed, run `claude-area <project>` or `claude-area --type <type>` in the request
+folder, then rename this thread to the `Thread title` it prints. It shows in T3 within 15 minutes,
+and a running thread is not affected. The `.git` file in a request folder is what does this: it
+isn't a repository to work in, so don't commit there or remove it.
+
+When an investigation finds work to do, offer in one line to spin it off. On yes, start a request
+for it with `zsh -ic 'claude-new -p PROFILE -a --new -t TICKET -T "TASK TYPE" -A PROJECT -F TYPE -g "GOAL" --prompt "WHAT WAS FOUND, AND THIS FOLDER" "NAME"'`
+and say what you started.
 
 ## Finding and reviewing
 

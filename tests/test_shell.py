@@ -865,9 +865,8 @@ def test_claude_new_picks_the_area_before_t3_sees_the_folder(tmp_path):
     assert lines[1].startswith("claude-t3-sync --open ")
 
 
-def test_claude_new_area_flag_sets_it_directly(tmp_path):
+def test_claude_new_project_and_type_flags_pass_through(tmp_path):
     path, log = area_stubs(tmp_path)
-    r = run_new(tmp_path, '-p personal -n --new -t Other -T tooling -g goal -A ingestion --t3 "x"', PATH=path)
+    r = run_new(tmp_path, '-p personal -n --new -t Other -T tooling -g goal -A contact360 -F data --t3 "x"', PATH=path)
     assert r.returncode == 0, r.stderr
-    assert log.read_text().splitlines()[0].endswith(" ingestion")
-    assert "--pick" not in log.read_text()
+    assert log.read_text().splitlines()[0].endswith(" --pick contact360 --type data")

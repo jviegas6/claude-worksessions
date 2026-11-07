@@ -302,7 +302,8 @@ def kickoff_prompt(path):
     d = meta(path)
     head = " · ".join(p for p in ("Ticket: " + (d.get("ticket") or "?"),
                                   "Type: " + d["task_type"] if d.get("task_type") else "",
-                                  "Area: " + d["area"] if d.get("area") else "") if p)
+                                  "Project: " + d["project"] if d.get("project") else "",
+                                  "Request type: " + d["front"] if d.get("front") else "") if p)
     lines = ["New request opened by claude-new.", head,
              "Goal: " + (d.get("goal") or d.get("name") or os.path.basename(path).split("_", 1)[-1])]
     if (d.get("done_when") or "").strip():
@@ -329,7 +330,7 @@ def open_in_t3(path, prompt=None, profile=None, kickoff=False):
         # t3 can't start a thread without a message, and a thread left unsent in the app is lost.
         prompt, profile = kickoff_prompt(path), profile or meta(path).get("profile")
     if prompt:
-        args = ["thread", "start", path, prompt, "--title", name]
+        args = ["thread", "start", path, prompt, "--title", CA.thread_title(meta(path)) or name]
         if profile:
             try:
                 instance = instance_for(profile)

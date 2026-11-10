@@ -470,7 +470,7 @@ def test_uninstall_removes_the_vscode_pieces(tmp_path, settings, after, message)
     assert "uninstalled the Work sessions sidebar" in r.stdout
 
 
-def run_new_tty(root, args, typed):
+def run_new_tty(root, args, typed, env=None):
     """claude-new on a terminal (a pty), with `typed` already waiting as input."""
     import pty
     master, slave = pty.openpty()
@@ -481,7 +481,7 @@ def run_new_tty(root, args, typed):
     (stub / "claude").chmod(0o755)
     e = dict(os.environ, CLAUDE_WORK_ROOT=str(root), CWS_CONFIG=os.devnull, ZDOTDIR=str(root),
              HOME=str(root), CWS_PROFILES="personal", CWS_DEFAULT_PROFILE="personal",
-             PATH=str(stub) + os.pathsep + os.environ["PATH"])
+             PATH=str(stub) + os.pathsep + os.environ["PATH"], **(env or {}))
     src = 'source "{}/shell/worksessions.zsh"\nclaude-new {}'.format(REPO, args)
     try:
         r = subprocess.run(["zsh", "-fc", src], env=e, stdin=slave, capture_output=True, text=True, timeout=20)
@@ -501,19 +501,26 @@ def run_new_tty(root, args, typed):
 ])
 def test_claude_new_asks_about_the_review(tmp_path, args, typed, audit):
     (tmp_path / ".claude-personal").mkdir()
-    r = run_new_tty(tmp_path, args + " -t Other -T tooling demo", "\n\n" + typed)   # Enter for goal, done-when
+    r = run_new_tty(tmp_path, args + " -t Other -T tooling demo", typed)
     assert r.returncode == 0, r.stderr
     meta = json.loads(next(tmp_path.glob("[0-9]*/*/*/*/.session.json")).read_text())
     assert meta["audit"] is audit and meta["goal"] == "demo" and meta["done_when"] == ""
     assert ("(no-audit)" in r.stdout) is (not audit)
 
 
-def test_claude_new_asks_for_goal_and_done_when(tmp_path):
+def test_claude_new_asks_for_goal_and_done_when_only_when_configured(tmp_path):
     (tmp_path / ".claude-personal").mkdir()
-    r = run_new_tty(tmp_path, "-a -t Other -T tooling demo", "list the sources\na table of them\n")
+    r = run_new_tty(tmp_path, "-a -t Other -T tooling demo", "list the sources\na table of them\n", env={"CWS_ASK_GOAL": "1"})
     assert r.returncode == 0, r.stderr
     meta = json.loads(next(tmp_path.glob("[0-9]*/*/*/*/.session.json")).read_text())
     assert (meta["goal"], meta["done_when"]) == ("list the sources", "a table of them")
+    # default: not asked, the name is the goal (the typed lines are never read)
+    r = run_new_tty(tmp_path, "-a -t Other -T tooling other", "would be the goal\n")
+    assert r.returncode == 0, r.stderr
+    metas = sorted(tmp_path.glob("[0-9]*/*/*/*/.session.json"))
+    d = json.loads(metas[-1].read_text())
+    assert (d["goal"], d["done_when"]) == ("other", "")
+    assert "Goal —" not in r.stdout
 
 
 def test_claude_new_without_a_terminal_counts_the_session(tmp_path):
@@ -642,7 +649,7 @@ def test_install_installs_the_plugin_per_profile_and_removes_the_old_hooks(tmp_p
                                     text=True, stdin=subprocess.DEVNULL)
     # no claude on PATH: says what to run later, touches nothing of the plugin
     r = run("install.sh", "--dry-run", "--yes", "--no-bootstrap")
-    assert "personal: [dry-run] removed the pre-2.35 hook entries" in r.stdout
+    assert "personal: [dry-run] removed the prompt-quality hooks from settings.json (CWS_HOOKS is off)" in r.stdout
     assert "claude not found — install the plugin later" in r.stderr
     assert json.loads((tmp_path / ".claude-personal" / "settings.json").read_text()) == old   # dry run: unchanged
     env["PATH"] = _fake_claude(tmp_path, log) + ":/usr/bin:/bin"
@@ -672,7 +679,22 @@ def test_install_installs_the_plugin_per_profile_and_removes_the_old_hooks(tmp_p
     r = run("install.sh", "--yes", "--no-bootstrap")
     assert "personal: plugin worksessions installed" in r.stdout
     assert "plugin marketplace add" not in log.read_text()
+    # CWS_HOOKS=1: the six entries are written, kept up to date, and never doubled
+    conf.write_text(conf.read_text() + 'CWS_HOOKS="1"\n')
+    r = run("install.sh", "--yes", "--no-bootstrap")
+    assert "personal: added the prompt-quality hooks" in r.stdout, r.stdout + r.stderr
+    s = json.loads((tmp_path / ".claude-work" / "settings.json").read_text())
+    vague, guard = bin_ + "/claude-hook-vague", bin_ + "/claude-guard"
+    assert s["hooks"]["UserPromptSubmit"] == [{"hooks": [{"type": "command", "command": vague, "timeout": 10}]},
+                                              {"hooks": [{"type": "command", "command": guard + " prompt", "timeout": 30}]}]
+    assert s["hooks"]["Stop"] == [{"hooks": [{"type": "command", "command": guard + " stop", "timeout": 20}]}]
+    assert [h["command"] for g in s["hooks"]["PostToolUse"] for h in g["hooks"]] == [bin_ + "/claude-hook-notfound"]
+    r = run("install.sh", "--yes", "--no-bootstrap")
+    assert "personal: prompt-quality hooks in place" in r.stdout
+    assert json.loads((tmp_path / ".claude-personal" / "settings.json").read_text())["hooks"]["PostToolUse"][0]["hooks"] == [mine]
     r = run("uninstall.sh")
+    assert "removed the prompt-quality hooks from" in r.stdout
+    assert "hooks" not in json.loads((tmp_path / ".claude-work" / "settings.json").read_text())
     assert "uninstalled the worksessions plugin from " + str(tmp_path / ".claude-personal") in r.stdout
     assert "removed the claude-worksessions marketplace from " + str(tmp_path / ".claude-work") in r.stdout
     assert not os.path.lexists(hook)
@@ -682,7 +704,7 @@ def test_install_warns_on_a_broken_settings_file_for_the_hook(tmp_path):
     (tmp_path / ".claude-personal").mkdir()
     (tmp_path / ".claude-personal" / "settings.json").write_text("{broken")
     r = dry_install(tmp_path, "mac")
-    assert "remove them yourself (the plugin runs them now)" in r.stderr
+    assert "remove them yourself (CWS_HOOKS is off)" in r.stderr
 
 
 # --- goal / done_when and claude-goal -----------------------------------------------------

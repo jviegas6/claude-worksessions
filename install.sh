@@ -391,7 +391,7 @@ for pname in $PROFILES; do
   exit 1
 done
 : ${CWS_SHARED_PROFILE:=${PROFILES[1]}}
-: ${CWS_ORG:=} ${CWS_USER_ROLE:=} ${CWS_TIMEZONE:=UTC} ${CWS_TIMEZONE_WINDOWS:=UTC} ${CWS_JIRA_CLOUD_ID:=} ${CWS_INSTALL_YAZI:=1}
+: ${CWS_ORG:=} ${CWS_USER_ROLE:=} ${CWS_TIMEZONE:=UTC} ${CWS_TIMEZONE_WINDOWS:=UTC} ${CWS_JIRA_CLOUD_ID:=} ${CWS_INSTALL_YAZI:=1} ${CWS_HOOKS:=0}
 export HOME CWS_WORK_ROOT="$CLAUDE_WORK_ROOT" CWS_ORG CWS_USER_ROLE CWS_TIMEZONE CWS_TIMEZONE_WINDOWS \
        CWS_TICKET_EXAMPLE CWS_JIRA_CLOUD_ID
 say "work root  $CWS_WORK_ROOT"
@@ -645,10 +645,63 @@ PY
                 say "$p: transcripts kept $keep days (was Claude Code's default, 30)"
               fi ;;
   esac
-  # The prompt-quality hooks and claude-guard come from the plugin now (hooks/hooks.json).
-  # Releases before 2.35 wrote them into settings.json: take those entries out, or every
-  # hook would run twice.
-  hstate=$(BIN="$HOME/.local/bin" MODE=$(( DRY )) "$PY" - "$pdir/settings.json" <<'PY'
+  # Prompt-quality hooks and claude-guard: opt-in (CWS_HOOKS="1"). On, they are written into
+  # settings.json (hooks you already have are kept); off (the default), ours are taken out.
+  if (( CWS_HOOKS )); then
+    hstate=$(BIN="$HOME/.local/bin" MODE=$(( DRY )) "$PY" - "$pdir/settings.json" <<'PY'
+import json, os, sys
+p, dry = sys.argv[1], os.environ["MODE"] == "1"
+notfound, vague = os.path.join(os.environ["BIN"], "claude-hook-notfound"), os.path.join(os.environ["BIN"], "claude-hook-vague")
+guard = os.path.join(os.environ["BIN"], "claude-guard")
+# (event, matcher, command, timeout): the guard's prompt check can wait on its judge
+WANT = [("PostToolUse", "Bash|mcp__.*", notfound, 10), ("PostToolUseFailure", "Bash|mcp__.*", notfound, 10),
+        ("UserPromptSubmit", None, vague, 10), ("UserPromptSubmit", None, guard + " prompt", 30),
+        ("PreToolUse", "Read|Glob|Grep|WebFetch|WebSearch|Bash|Write|Edit|MultiEdit|NotebookEdit|mcp__.*",
+         guard + " tool", 5),
+        ("Stop", None, guard + " stop", 20)]
+try:
+    d = json.load(open(p))
+except FileNotFoundError:
+    d = {}
+except ValueError:
+    print("unparsed"); raise SystemExit
+hooks = d.setdefault("hooks", {})
+added = []
+for event, matcher, hook, timeout in WANT:
+    groups = hooks.setdefault(event, [])
+    mine = [g for g in groups if any(h.get("command") == hook for h in g.get("hooks", []))]
+    if mine:
+        # ours already, perhaps from an older release: bring a group holding only our hook up to date
+        for g in mine:
+            if len(g.get("hooks", [])) != 1:
+                continue
+            if matcher and g.get("matcher") != matcher:
+                g["matcher"] = matcher
+                added.append(event)
+            if g["hooks"][0].get("timeout") != timeout:
+                g["hooks"][0]["timeout"] = timeout
+                added.append(event)
+        continue
+    group = {"hooks": [{"type": "command", "command": hook, "timeout": timeout}]}
+    if matcher:
+        group["matcher"] = matcher
+    groups.append(group)
+    added.append(event)
+print("added" if added else "ok")
+if added and not dry:
+    perm = os.stat(p).st_mode & 0o777 if os.path.exists(p) else 0o644
+    open(p + ".tmp", "w").write(json.dumps(d, indent=2) + "\n")
+    os.chmod(p + ".tmp", perm)
+    os.replace(p + ".tmp", p)
+PY
+  )
+    case $hstate in
+      ok)       say "$p: prompt-quality hooks in place" ;;
+      unparsed) warn "$p: $pdir/settings.json isn't valid JSON — the prompt-quality hooks weren't added" ;;
+      added)    say "$p: ${${DRY:#0}:+[dry-run] }added the prompt-quality hooks (ask first when something doesn't exist or a request is vague; claude-guard)" ;;
+    esac
+  else
+    hstate=$(BIN="$HOME/.local/bin" MODE=$(( DRY )) "$PY" - "$pdir/settings.json" <<'PY'
 import json, os, sys
 p, dry = sys.argv[1], os.environ["MODE"] == "1"
 ours = {os.path.join(os.environ["BIN"], n) for n in ("claude-hook-notfound", "claude-hook-vague")}
@@ -682,12 +735,13 @@ if changed and not dry:
     os.chmod(p + ".tmp", perm)
     os.replace(p + ".tmp", p)
 PY
-)
-  case $hstate in
-    ok)       ;;
-    unparsed) warn "$p: $pdir/settings.json isn't valid JSON — if it still lists the claude-hook-* or claude-guard hooks from an older release, remove them yourself (the plugin runs them now)" ;;
-    removed)  say "$p: ${${DRY:#0}:+[dry-run] }removed the pre-2.35 hook entries from settings.json (the plugin runs them now)" ;;
-  esac
+  )
+    case $hstate in
+      ok)       ;;
+      unparsed) warn "$p: $pdir/settings.json isn't valid JSON — if it lists the claude-hook-* or claude-guard hooks, remove them yourself (CWS_HOOKS is off)" ;;
+      removed)  say "$p: ${${DRY:#0}:+[dry-run] }removed the prompt-quality hooks from settings.json (CWS_HOOKS is off)" ;;
+    esac
+  fi
 done
 if [[ ! -e "$HOME/.claude" ]]; then link ".claude-$CWS_SHARED_PROFILE" "$HOME/.claude"
 else say "kept ~/.claude"; fi
@@ -796,7 +850,7 @@ else
 fi
 
 # --- 5b. plugin -------------------------------------------------------------------------
-# Skills and hooks are a Claude Code plugin (.claude-plugin/, skills/, hooks/), installed
+# The skills are a Claude Code plugin (.claude-plugin/, skills/), installed
 # from this checkout as a local marketplace, so edits here show up on the next session.
 # One marketplace and one plugin per profile: each config dir keeps its own list.
 step "Plugin"

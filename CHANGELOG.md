@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.36.0] — 2026-11-11
+
+- **Hooks are opt-in.** The plugin no longer ships `hooks/hooks.json`. With `CWS_HOOKS="1"` in
+  `config.env`, `install.sh` writes the prompt-quality hooks and `claude-guard` into every profile's
+  `settings.json` as before 2.35; with it off (the default) it takes them out. No hook runs by default.
+- **`claude-new` no longer asks for the goal and done-when.** The name is the goal; `-g` / `--done`
+  still set them, `claude-goal` changes them, and `CWS_ASK_GOAL="1"` brings the two questions back.
+
 ## [2.35.0] — 2026-11-10
 
 - The skills and hooks are a **Claude Code plugin**, `worksessions` (`.claude-plugin/`, `hooks/hooks.json`,

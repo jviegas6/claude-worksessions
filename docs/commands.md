@@ -36,8 +36,8 @@ that profile. `ended_at` is filled in when Claude exits.
   The type is the **trigger**, not the detours: a job error that needs investigation, a
   permission change and a doc update is `job errors`.
 - `-g goal` / `--goal` is what the session should deliver, `--done text` how you will know
-  it did. Left out, `claude-new` asks for both: Enter keeps the name as the goal and leaves
-  done-when empty (and without a terminal that is what it does). [`claude-guard`](#claude-guard)
+  it did. Left out, the name is the goal and done-when stays empty; with `CWS_ASK_GOAL="1"`
+  `claude-new` asks for both (Enter keeps those defaults). [`claude-guard`](#claude-guard)
   judges each new prompt against them; [`claude-goal`](#claude-goal) changes them.
 - `--path DIR` (repeatable) declares a folder or repo outside the request as part of the work,
   so [`claude-guard`](#claude-guard) treats reads there as in scope. Stored in `.session.json`.
@@ -522,10 +522,9 @@ without being told.
 
 ## Prompt-quality hooks
 
-The hooks come with the `worksessions` plugin (`hooks/hooks.json`), which `install.sh` installs in
-every profile; `uninstall.sh` uninstalls it. Hooks of your own in `settings.json` are untouched.
-Review or disable them with `/hooks`. (Releases before 2.35 wrote them into `settings.json`;
-`install.sh` removes those entries so nothing runs twice.)
+Off by default. With `CWS_HOOKS="1"` in `config.env`, `install.sh` writes them into every
+profile's `settings.json` (hooks you already have are kept); with it off, `install.sh` and
+`uninstall.sh` take ours out. Review or disable them with `/hooks`.
 
 **Vague request → ask first** (`claude-hook-vague`, on `UserPromptSubmit`). On the first two
 prompts of a session — where vagueness costs most — a request that asks for an action

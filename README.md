@@ -39,8 +39,9 @@ source ~/.zshrc
 ```
 
 The skills are a Claude Code plugin, `worksessions`, that `install.sh` installs into every
-profile from this checkout (a local marketplace, so edits here show up on the next session). To
-install only the plugin, without the commands:
+profile: from this checkout (`CWS_PLUGIN_SOURCE="local"`, the default, so an edited skill is live
+on the next session) or from the published repository (`"github"`, moved by `claude plugin update`
+or a plugin manager such as Skillshare). To install only the plugin, without the commands:
 
 ```
 /plugin install worksessions --marketplace jviegas6/claude-worksessions

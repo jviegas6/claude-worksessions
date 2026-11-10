@@ -391,7 +391,7 @@ for pname in $PROFILES; do
   exit 1
 done
 : ${CWS_SHARED_PROFILE:=${PROFILES[1]}}
-: ${CWS_ORG:=} ${CWS_USER_ROLE:=} ${CWS_TIMEZONE:=UTC} ${CWS_TIMEZONE_WINDOWS:=UTC} ${CWS_JIRA_CLOUD_ID:=} ${CWS_INSTALL_YAZI:=1} ${CWS_HOOKS:=0}
+: ${CWS_ORG:=} ${CWS_USER_ROLE:=} ${CWS_TIMEZONE:=UTC} ${CWS_TIMEZONE_WINDOWS:=UTC} ${CWS_JIRA_CLOUD_ID:=} ${CWS_INSTALL_YAZI:=1} ${CWS_HOOKS:=0} ${CWS_PLUGIN_SOURCE:=local}
 export HOME CWS_WORK_ROOT="$CLAUDE_WORK_ROOT" CWS_ORG CWS_USER_ROLE CWS_TIMEZONE CWS_TIMEZONE_WINDOWS \
        CWS_TICKET_EXAMPLE CWS_JIRA_CLOUD_ID
 say "work root  $CWS_WORK_ROOT"
@@ -854,23 +854,43 @@ fi
 # from this checkout as a local marketplace, so edits here show up on the next session.
 # One marketplace and one plugin per profile: each config dir keeps its own list.
 step "Plugin"
-local MKT="claude-worksessions" PLUGIN="worksessions"
-if command -v claude >/dev/null 2>&1; then
+# CWS_PLUGIN_SOURCE: local (this checkout as a marketplace: edits show up on the next session),
+# github (the published repository: releases, updated with `claude plugin update` or a plugin
+# manager such as Skillshare), off (a plugin manager installs it; nothing done here)
+local MKT="claude-worksessions" PLUGIN="worksessions" GH="jviegas6/claude-worksessions" src mkt_want listed
+case $CWS_PLUGIN_SOURCE in
+  local)  src="$REPO"; mkt_want="$REPO" ;;
+  github) src="$GH"; mkt_want="$GH" ;;
+  off)    src="" ;;
+  *) warn "CWS_PLUGIN_SOURCE=$CWS_PLUGIN_SOURCE is not local, github or off — treating it as local"; src="$REPO"; mkt_want="$REPO" ;;
+esac
+if [[ -z "$src" ]]; then
+  say "CWS_PLUGIN_SOURCE=off — the plugin is left to your plugin manager (e.g. skillshare plugin add $GH)"
+elif command -v claude >/dev/null 2>&1; then
   for p in $PROFILES; do
     pdir="$HOME/.claude-$p"
-    if (( DRY )); then say "[dry-run] $p: claude plugin marketplace add $REPO; claude plugin install $PLUGIN@$MKT"; continue; fi
-    if ! CLAUDE_CONFIG_DIR="$pdir" claude plugin marketplace list 2>/dev/null | grep -qE "(^|[[:space:]])$MKT([[:space:]]|$)"; then
-      CLAUDE_CONFIG_DIR="$pdir" claude plugin marketplace add "$REPO" >/dev/null 2>&1 \
-        || { warn "$p: could not add the $MKT marketplace — run: CLAUDE_CONFIG_DIR=$pdir claude plugin marketplace add $REPO"; continue; }
+    if (( DRY )); then say "[dry-run] $p: claude plugin marketplace add $src; claude plugin install $PLUGIN@$MKT"; continue; fi
+    # The marketplace must point at the wanted source: a registration from another source
+    # (the other mode, or a moved checkout) is replaced
+    listed=$(CLAUDE_CONFIG_DIR="$pdir" claude plugin marketplace list 2>/dev/null | grep -A1 -E "(^|[[:space:]])$MKT([[:space:]]|$)" | tail -1)
+    if [[ -n "$listed" && "$listed" != *"$mkt_want"* ]]; then
+      CLAUDE_CONFIG_DIR="$pdir" claude plugin uninstall "$PLUGIN@$MKT" --scope user >/dev/null 2>&1
+      CLAUDE_CONFIG_DIR="$pdir" claude plugin marketplace remove "$MKT" >/dev/null 2>&1
+      say "$p: $MKT marketplace re-pointed to $src"
+      listed=""
+    fi
+    if [[ -z "$listed" ]]; then
+      CLAUDE_CONFIG_DIR="$pdir" claude plugin marketplace add "$src" >/dev/null 2>&1 \
+        || { warn "$p: could not add the $MKT marketplace — run: CLAUDE_CONFIG_DIR=$pdir claude plugin marketplace add $src"; continue; }
     fi
     if CLAUDE_CONFIG_DIR="$pdir" claude plugin install "$PLUGIN@$MKT" --scope user >/dev/null 2>&1; then
-      say "$p: plugin $PLUGIN installed from $REPO"
+      say "$p: plugin $PLUGIN installed from $src"
     else
       warn "$p: plugin install failed — run: CLAUDE_CONFIG_DIR=$pdir claude plugin install $PLUGIN@$MKT --scope user"
     fi
   done
 else
-  warn "claude not found — install the plugin later, per profile: CLAUDE_CONFIG_DIR=~/.claude-<profile> claude plugin marketplace add $REPO && claude plugin install $PLUGIN@$MKT --scope user"
+  warn "claude not found — install the plugin later, per profile: CLAUDE_CONFIG_DIR=~/.claude-<profile> claude plugin marketplace add $src && claude plugin install $PLUGIN@$MKT --scope user"
 fi
 # Releases before 2.35 rendered the skills into the shared profile; the plugin carries them
 # now, so a rendered copy is moved aside (nothing is deleted)

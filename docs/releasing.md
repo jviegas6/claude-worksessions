@@ -35,5 +35,6 @@ work folders, the profiles or their history. A normal run prints a one-line noti
 a newer release exists (it fetches at most once a day).
 
 `bin/` and `shell/` are symlinked/sourced from the repo, so they change as soon as the
-checkout does, and so do the plugin's skills (the marketplace points at the checkout);
+checkout does, and so do the plugin's skills with `CWS_PLUGIN_SOURCE="local"` (with `"github"` they
+move with `claude plugin update` after a merge);
 `CLAUDE.md` and the yazi config are rendered, so they change when `install.sh` runs.

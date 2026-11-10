@@ -608,10 +608,11 @@ def _fake_claude(tmp_path, log):
     f = bindir / "claude"
     f.write_text("""#!/bin/sh
 echo "$CLAUDE_CONFIG_DIR $*" >> "{log}"
-if [ "$1 $2 $3" = "plugin marketplace add" ]; then touch "$CLAUDE_CONFIG_DIR/.mkt-added"; fi
+if [ "$1 $2 $3" = "plugin marketplace add" ]; then echo "$4" > "$CLAUDE_CONFIG_DIR/.mkt-added"; fi
+if [ "$1 $2 $3" = "plugin marketplace remove" ]; then rm -f "$CLAUDE_CONFIG_DIR/.mkt-added"; fi
 if [ "$1 $2 $3" = "plugin marketplace list" ]; then
   echo "Configured marketplaces:"
-  [ -e "$CLAUDE_CONFIG_DIR/.mkt-added" ] && printf '\n  \xe2\x9d\xaf claude-worksessions\n    Source: Local\n'
+  [ -e "$CLAUDE_CONFIG_DIR/.mkt-added" ] && printf '\n  \xe2\x9d\xaf claude-worksessions\n    Source: %s\n' "$(cat "$CLAUDE_CONFIG_DIR/.mkt-added")"
 fi
 exit 0
 """.format(log=log))
@@ -692,6 +693,27 @@ def test_install_installs_the_plugin_per_profile_and_removes_the_old_hooks(tmp_p
     r = run("install.sh", "--yes", "--no-bootstrap")
     assert "personal: prompt-quality hooks in place" in r.stdout
     assert json.loads((tmp_path / ".claude-personal" / "settings.json").read_text())["hooks"]["PostToolUse"][0]["hooks"] == [mine]
+    # github: the local registration is replaced by the published repository, once
+    conf.write_text(conf.read_text() + 'CWS_PLUGIN_SOURCE="github"\n')
+    log.write_text("")
+    r = run("install.sh", "--yes", "--no-bootstrap")
+    assert "personal: claude-worksessions marketplace re-pointed to jviegas6/claude-worksessions" in r.stdout, r.stdout + r.stderr
+    assert "personal: plugin worksessions installed from jviegas6/claude-worksessions" in r.stdout
+    calls = log.read_text().splitlines()
+    cfg = str(tmp_path / ".claude-personal")
+    assert calls.index(cfg + " plugin uninstall worksessions@claude-worksessions --scope user") \
+         < calls.index(cfg + " plugin marketplace remove claude-worksessions") \
+         < calls.index(cfg + " plugin marketplace add jviegas6/claude-worksessions") \
+         < calls.index(cfg + " plugin install worksessions@claude-worksessions --scope user")
+    log.write_text("")
+    r = run("install.sh", "--yes", "--no-bootstrap")
+    assert "re-pointed" not in r.stdout and "plugin marketplace add" not in log.read_text()
+    # off: nothing is called
+    conf.write_text(conf.read_text() + 'CWS_PLUGIN_SOURCE="off"\n')
+    log.write_text("")
+    r = run("install.sh", "--yes", "--no-bootstrap")
+    assert "CWS_PLUGIN_SOURCE=off" in r.stdout and "plugin" not in log.read_text()
+    conf.write_text(conf.read_text() + 'CWS_PLUGIN_SOURCE="github"\n')
     r = run("uninstall.sh")
     assert "removed the prompt-quality hooks from" in r.stdout
     assert "hooks" not in json.loads((tmp_path / ".claude-work" / "settings.json").read_text())

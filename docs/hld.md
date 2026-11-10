@@ -256,7 +256,7 @@ transcript sits (they all sit in the shared folder).
 | Privacy | everything local or in the user's synced folder; the only network calls are Claude's own (`claude -p` for search re-ranking, retro and the guard judge) and the skills' connectors |
 | Performance | incremental caches for written files and the search index; the sidebar debounces refreshes; the guard's tool hook is ~36 ms |
 | Testability | ~330 pytest tests plus node tests for the extension; a 95 % coverage gate on `bin/`; zsh tested by running it; a real Linux install in CI |
-| Upgrades | `install.sh --update` moves the checkout to the newest release tag, prints the changelog gained and re-renders; `bin/`, `shell/` and the plugin's skills follow the checkout immediately |
+| Upgrades | `install.sh --update` moves the checkout to the newest release tag, prints the changelog gained and re-renders; `bin/` and `shell/` follow the checkout immediately, and so do the plugin's skills when `CWS_PLUGIN_SOURCE="local"` |
 
 ## 10. Constraints and assumptions
 

@@ -167,9 +167,11 @@ backed up.
    `~/.vscode-server/data/Machine`, else `~/.config/Code/User`; JSONC files are reported, not
    edited). Installs the extension when `code --list-extensions --show-versions` differs from
    `VERSION` (§13.7).
-9. **Plugin.** Per profile: `claude plugin marketplace add <checkout>` (once) and
-   `claude plugin install worksessions@claude-worksessions --scope user`; without `claude` on
-   PATH it prints the two commands. A rendered `~/.claude-<shared>/skills/<name>` is moved aside
+9. **Plugin.** `CWS_PLUGIN_SOURCE` picks the marketplace: `local` (the checkout) or `github`
+   (`jviegas6/claude-worksessions`); `off` leaves it to a plugin manager. Per profile:
+   `claude plugin marketplace add <source>` (a registration from another source is uninstalled
+   and replaced) and `claude plugin install worksessions@claude-worksessions --scope user`;
+   without `claude` on PATH it prints the two commands. A rendered `~/.claude-<shared>/skills/<name>` is moved aside
    (`.bak-<stamp>`; a symlink is left with a warning). The skills read
    `~/.config/claude-worksessions/config.env` at run time. Hooks: with `CWS_HOOKS=1` the six
    prompt-quality and guard entries are written into each profile's `settings.json` (an older

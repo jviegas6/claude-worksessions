@@ -29,11 +29,11 @@ cd ~/Repos/claude-worksessions
 ```
 
 `--update` fetches, refuses to move if the checkout has local changes, checks out the
-target, prints the changelog entries you gained, and then runs the normal install so the
-skills, `CLAUDE.md` and the yazi files are re-rendered. It never touches `_config/`, your
+target, prints the changelog entries you gained, and then runs the normal install so
+`CLAUDE.md` and the yazi files are re-rendered and the plugin is re-installed. It never touches `_config/`, your
 work folders, the profiles or their history. A normal run prints a one-line notice when
 a newer release exists (it fetches at most once a day).
 
 `bin/` and `shell/` are symlinked/sourced from the repo, so they change as soon as the
-checkout does; skills, `CLAUDE.md` and the yazi config are rendered, so they change when
-`install.sh` runs.
+checkout does, and so do the plugin's skills and hooks (the marketplace points at the checkout);
+`CLAUDE.md` and the yazi config are rendered, so they change when `install.sh` runs.

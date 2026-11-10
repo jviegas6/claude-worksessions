@@ -593,7 +593,26 @@ def test_install_writes_retention_keeping_other_settings(tmp_path):
     assert list(prof.glob("settings.json.bak-*"))
 
 
-def test_install_registers_the_notfound_hook_and_uninstall_removes_it(tmp_path):
+def _fake_claude(tmp_path, log):
+    """A `claude` on PATH that records plugin calls and answers `plugin marketplace list` with
+    what it was told to add, like the real one."""
+    bindir = tmp_path / "fakebin"
+    bindir.mkdir(exist_ok=True)
+    f = bindir / "claude"
+    f.write_text("""#!/bin/sh
+echo "$CLAUDE_CONFIG_DIR $*" >> "{log}"
+if [ "$1 $2 $3" = "plugin marketplace add" ]; then touch "$CLAUDE_CONFIG_DIR/.mkt-added"; fi
+if [ "$1 $2 $3" = "plugin marketplace list" ]; then
+  echo "Configured marketplaces:"
+  [ -e "$CLAUDE_CONFIG_DIR/.mkt-added" ] && printf '\n  \xe2\x9d\xaf claude-worksessions\n    Source: Local\n'
+fi
+exit 0
+""".format(log=log))
+    f.chmod(0o755)
+    return str(bindir)
+
+
+def test_install_installs_the_plugin_per_profile_and_removes_the_old_hooks(tmp_path):
     conf = tmp_path / "ws" / "_config" / "config.env"
     conf.parent.mkdir(parents=True)
     conf.write_text('CWS_WORK_ROOT="{}/ws"\nCWS_PROFILES="personal work"\nCWS_INSTALL_YAZI="0"\n'.format(tmp_path))
@@ -601,53 +620,61 @@ def test_install_registers_the_notfound_hook_and_uninstall_removes_it(tmp_path):
     link.parent.mkdir(parents=True)
     link.symlink_to(conf)
     mine = {"type": "command", "command": "my-formatter"}
+    bin_ = str(tmp_path / ".local" / "bin")
+    old = {"hooks": {
+        "PostToolUse": [{"matcher": "Write", "hooks": [mine]},
+                        {"matcher": "Bash|mcp__.*", "hooks": [{"type": "command", "command": bin_ + "/claude-hook-notfound", "timeout": 10}]}],
+        "UserPromptSubmit": [{"hooks": [{"type": "command", "command": bin_ + "/claude-hook-vague", "timeout": 10}]},
+                             {"hooks": [{"type": "command", "command": bin_ + "/claude-guard prompt", "timeout": 30}]}],
+        "Stop": [{"hooks": [{"type": "command", "command": bin_ + "/claude-guard stop", "timeout": 20}]}]}}
     (tmp_path / ".claude-personal").mkdir()
-    (tmp_path / ".claude-personal" / "settings.json").write_text(json.dumps(
-        {"hooks": {"PostToolUse": [{"matcher": "Write", "hooks": [mine]}]}}))
+    (tmp_path / ".claude-personal" / "settings.json").write_text(json.dumps(old))
+    # a pre-2.35 rendered skill in the shared profile, and one managed by something else (a link)
+    rendered = tmp_path / ".claude-personal" / "skills" / "weekly-review"
+    rendered.mkdir(parents=True)
+    (rendered / "SKILL.md").write_text("old render")
+    (tmp_path / "elsewhere").mkdir()
+    (tmp_path / ".claude-personal" / "skills" / "pending").symlink_to(tmp_path / "elsewhere")
+    log = tmp_path / "claude.log"
     env = {k: v for k, v in os.environ.items() if not k.startswith("CWS_")}
     env.update(HOME=str(tmp_path), ZDOTDIR=str(tmp_path), CWS_OS="mac", PATH="/usr/bin:/bin")
     run = lambda *a: subprocess.run(["zsh", os.path.join(REPO, a[0]), *a[1:]], env=env, capture_output=True,
                                     text=True, stdin=subprocess.DEVNULL)
+    # no claude on PATH: says what to run later, touches nothing of the plugin
     r = run("install.sh", "--dry-run", "--yes", "--no-bootstrap")
-    assert "personal: [dry-run] added the prompt-quality hooks" in r.stdout
+    assert "personal: [dry-run] removed the pre-2.35 hook entries" in r.stdout
+    assert "claude not found — install the plugin later" in r.stderr
+    assert json.loads((tmp_path / ".claude-personal" / "settings.json").read_text()) == old   # dry run: unchanged
+    env["PATH"] = _fake_claude(tmp_path, log) + ":/usr/bin:/bin"
     r = run("install.sh", "--yes", "--no-bootstrap")
-    hook = str(tmp_path / ".local" / "bin" / "claude-hook-notfound")
-    for p in ("personal", "work"):
-        s = json.loads((tmp_path / (".claude-" + p) / "settings.json").read_text())
-        for event in ("PostToolUse", "PostToolUseFailure"):
-            cmds = [h["command"] for g in s["hooks"][event] for h in g["hooks"]]
-            assert cmds.count(hook) == 1, (p, event)
-            assert any(g.get("matcher") == "Bash|mcp__.*" for g in s["hooks"][event])
-    assert json.loads((tmp_path / ".claude-personal" / "settings.json").read_text())["hooks"]["PostToolUse"][0]["hooks"] == [mine]
-    r = run("install.sh", "--yes", "--no-bootstrap")                                   # again: not added twice
-    assert "personal: prompt-quality hooks in place" in r.stdout
-    # an older install's guard matcher (no Write/Edit) is brought up to date, in place
-    sp = tmp_path / ".claude-personal" / "settings.json"
-    d = json.loads(sp.read_text())
-    d["hooks"]["PreToolUse"][0]["matcher"] = "Read|Glob|Grep|WebFetch|WebSearch|Bash|mcp__.*"
-    d["hooks"]["Stop"][0]["hooks"][0]["timeout"] = 10
-    sp.write_text(json.dumps(d))
-    r = run("install.sh", "--yes", "--no-bootstrap")
-    assert "personal: added the prompt-quality hooks" in r.stdout
-    assert json.loads(sp.read_text())["hooks"]["Stop"][0]["hooks"][0]["timeout"] == 20
-    pre = json.loads(sp.read_text())["hooks"]["PreToolUse"]
-    assert len(pre) == 1 and pre[0]["matcher"] == "Read|Glob|Grep|WebFetch|WebSearch|Bash|Write|Edit|MultiEdit|NotebookEdit|mcp__.*"
-    s = json.loads((tmp_path / ".claude-work" / "settings.json").read_text())
-    assert [h["command"] for g in s["hooks"]["PostToolUse"] for h in g["hooks"]] == [hook]
-    vague = str(tmp_path / ".local" / "bin" / "claude-hook-vague")
-    guard = str(tmp_path / ".local" / "bin" / "claude-guard")
-    assert s["hooks"]["UserPromptSubmit"] == [{"hooks": [{"type": "command", "command": vague, "timeout": 10}]},
-                                              {"hooks": [{"type": "command", "command": guard + " prompt", "timeout": 30}]}]
-    assert s["hooks"]["PreToolUse"] == [{"matcher": "Read|Glob|Grep|WebFetch|WebSearch|Bash|Write|Edit|MultiEdit|NotebookEdit|mcp__.*",
-                                         "hooks": [{"type": "command", "command": guard + " tool", "timeout": 5}]}]
-    assert s["hooks"]["Stop"] == [{"hooks": [{"type": "command", "command": guard + " stop", "timeout": 20}]}]
-    assert (tmp_path / "ws" / "_config" / "guard-rules.md").read_text().startswith("<!-- claude-guard")
-    assert os.path.islink(hook) and os.path.islink(tmp_path / ".local" / "bin" / "claude-retro")
-    r = run("uninstall.sh")
-    assert "removed the prompt-quality hooks from" in r.stdout
-    assert json.loads((tmp_path / ".claude-personal" / "settings.json").read_text()) == {
-        "hooks": {"PostToolUse": [{"matcher": "Write", "hooks": [mine]}]}, "cleanupPeriodDays": 3650}
+    assert "personal: plugin worksessions installed from " + REPO in r.stdout, r.stdout + r.stderr
+    assert "work: plugin worksessions installed from " + REPO in r.stdout
+    calls = log.read_text().splitlines()
+    for prof in ("personal", "work"):
+        cfg = str(tmp_path / (".claude-" + prof))
+        assert cfg + " plugin marketplace add " + REPO in calls, calls
+        assert cfg + " plugin install worksessions@claude-worksessions --scope user" in calls
+    # our old hook entries are gone, the user's own stays, retention is kept
+    s = json.loads((tmp_path / ".claude-personal" / "settings.json").read_text())
+    assert s["hooks"] == {"PostToolUse": [{"matcher": "Write", "hooks": [mine]}]}
+    assert s["cleanupPeriodDays"] == 3650
     assert "hooks" not in json.loads((tmp_path / ".claude-work" / "settings.json").read_text())
+    # the rendered copy was moved aside, the link left alone with a warning
+    assert not rendered.exists() and list(rendered.parent.glob("weekly-review.bak-*"))
+    assert "moved the rendered copy" in r.stdout
+    assert (tmp_path / ".claude-personal" / "skills" / "pending").is_symlink()
+    assert "pending is a symlink (managed elsewhere)" in r.stderr
+    assert (tmp_path / "ws" / "_config" / "guard-rules.md").read_text().startswith("<!-- claude-guard")
+    hook = str(tmp_path / ".local" / "bin" / "claude-hook-notfound")
+    assert os.path.islink(hook) and os.path.islink(tmp_path / ".local" / "bin" / "claude-retro")
+    # again: the marketplace is already there, only the install is repeated
+    log.write_text("")
+    r = run("install.sh", "--yes", "--no-bootstrap")
+    assert "personal: plugin worksessions installed" in r.stdout
+    assert "plugin marketplace add" not in log.read_text()
+    r = run("uninstall.sh")
+    assert "uninstalled the worksessions plugin from " + str(tmp_path / ".claude-personal") in r.stdout
+    assert "removed the claude-worksessions marketplace from " + str(tmp_path / ".claude-work") in r.stdout
     assert not os.path.lexists(hook)
 
 
@@ -655,7 +682,7 @@ def test_install_warns_on_a_broken_settings_file_for_the_hook(tmp_path):
     (tmp_path / ".claude-personal").mkdir()
     (tmp_path / ".claude-personal" / "settings.json").write_text("{broken")
     r = dry_install(tmp_path, "mac")
-    assert "the prompt-quality hooks weren't added" in r.stderr
+    assert "remove them yourself (the plugin runs them now)" in r.stderr
 
 
 # --- goal / done_when and claude-goal -----------------------------------------------------

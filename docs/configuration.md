@@ -57,8 +57,9 @@ just as well — re-run `install.sh` afterwards so the skills and `CLAUDE.md` ca
 | `CWS_INSTALL_YAZI` | `1` | install yazi, glow, pandoc and the Markdown extras |
 
 Changing a value: edit the file, open a new terminal. Re-run `install.sh` when you
-changed the work root, org, role, time zone, ticket example, Jira id or profiles —
-those are rendered into the skills and the work root's `CLAUDE.md`.
+changed the work root or profiles — the work root's `CLAUDE.md` is rendered from them. Org,
+role, time zone, ticket example and Jira id are read by the skills at run time, so a new
+session is enough.
 
 ## Profiles
 

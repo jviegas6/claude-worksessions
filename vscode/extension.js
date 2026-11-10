@@ -669,13 +669,18 @@ function skillDirs() {
   return [shared, ...profiles].map(p => path.join(HOME, ".claude-" + p, "skills"));
 }
 
+// The plugin's own skills (this checkout's skills/), invoked as /worksessions:<name>.
+function pluginSkills() {
+  return M.readSkills([path.join(__dirname, "..", "skills")]).map(s => ({ ...s, name: "worksessions:" + s.name }));
+}
+
 async function runSkill(bar) {
-  const skills = M.readSkills(skillDirs());
-  if (!skills.length) return vscode.window.showInformationMessage("No skills found in ~/.claude-*/skills.");
+  const skills = [...M.readSkills(skillDirs()), ...pluginSkills()];
+  if (!skills.length) return vscode.window.showInformationMessage("No skills found in ~/.claude-*/skills or the plugin.");
   const pick = await vscode.window.showQuickPick(skills.map(s => ({ label: "/" + s.name, detail: s.description, skill: s })),
                                                  { placeHolder: "Run a skill — it starts a new request", matchOnDetail: true });
   if (!pick) return;
-  const name = pick.skill.name.replace(/-/g, " ");
+  const name = pick.skill.name.replace(/^worksessions:/, "").replace(/-/g, " ");   // request name: the skill, in words
   bar.newRequest(`--prompt ${shq("/" + pick.skill.name)} ${shq(name)}`, "new request · /" + pick.skill.name);
 }
 

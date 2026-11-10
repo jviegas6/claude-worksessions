@@ -5,8 +5,10 @@ description: Reconstruct what the user actually did on a work day by pulling Tea
 
 # Workday recap
 
+> **Settings.** Read `~/.config/claude-worksessions/config.env` once at the start (one `cat`; it is a link to `<work root>/_config/config.env`). `CWS_WORK_ROOT` is the work root every path below is relative to; `CWS_USER_ROLE`, `CWS_ORG`, `CWS_TIMEZONE` and `CWS_TIMEZONE_WINDOWS` come from the same file. If the file is missing, ask for the work root in one question and stop.
+
 Build an honest picture of one work day from four sources, then write it up.
-The user is a {{CWS_USER_ROLE}} at {{CWS_ORG}}; the point is a defensible record of
+The user's role and organisation are `CWS_USER_ROLE` and `CWS_ORG` from the settings file; the point is a defensible record of
 where the day went, not a flattering narrative.
 
 ## Step 0 — establish the day and the identity
@@ -23,12 +25,12 @@ activity, not just theirs.
 
 **The four sources do not agree on time zone.** Merging them raw produces a
 timeline that is silently an hour wrong for half its rows. Convert everything to
-the user's local time ({{CWS_TIMEZONE}}) before sorting:
+the user's local time (`CWS_TIMEZONE`) before sorting:
 
 | source | field | zone as returned | to do |
 |---|---|---|---|
 | `claude-audit` | `start` / `end` | already local | use as-is |
-| calendar | `start.dateTime` | wall clock in `start.timeZone` (`{{CWS_TIMEZONE_WINDOWS}}` = {{CWS_TIMEZONE}}, daylight saving included) | use as-is, never re-read as UTC |
+| calendar | `start.dateTime` | wall clock in `start.timeZone` (`CWS_TIMEZONE_WINDOWS` = `CWS_TIMEZONE`, daylight saving included) | use as-is, never re-read as UTC |
 | email | `sentDateTime` | UTC (`Z`) | convert to local |
 | chats | `createdDateTime` | UTC (`Z`) | convert to local |
 
@@ -145,7 +147,7 @@ The prose recap is for reading; the CSV is for auditing. `claude-audit` cannot
 reach the Microsoft 365 tools, so **you** hand it the meetings, emails and chats
 you gathered and it does the merge:
 
-1. Write the events to `{{CWS_WORK_ROOT}}/_audit/activity/YYYY-MM-DD.json` in the
+1. Write the events to `<CWS_WORK_ROOT>/_audit/activity/YYYY-MM-DD.json` in the
    schema `claude-audit --schema` prints. Times must already be **local**
    (step 0.5) — the script trusts them and only attaches the local zone.
 2. Run:
@@ -222,7 +224,7 @@ the same subject ran through. Don't recompute it. **Never sum `worked_h` and
 `scheduled_h`** yourself: a session can run through a meeting, so report them as two
 figures.
 
-Write the prose recap to `{{CWS_WORK_ROOT}}/_daily/YYYY-MM-DD.md`
+Write the prose recap to `<CWS_WORK_ROOT>/_daily/YYYY-MM-DD.md`
 (create `_daily/` if needed; the leading underscore keeps it out of `claude-new -l`).
 Then print the headline, the timeline, and the coverage note in the terminal, and
 say where the file went. Do not create a request folder for a recap — it is

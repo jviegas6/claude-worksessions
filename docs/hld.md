@@ -81,7 +81,7 @@ flowchart LR
 |---|---|---|
 | **Entry** | `claude-new`, `claude-resume`, `ws`, VS Code sidebar | start and resume work in the right folder with the right profile |
 | **Metadata** | `.session.json`, `claude-type`, `claude-goal` | what a request is: ticket, profile, task type, goal, audit flag |
-| **Agent configuration** | profiles, `install.sh`, rendered `CLAUDE.md` and skills, hooks | how Claude runs: which account, which standing context, which rules |
+| **Agent configuration** | profiles, `install.sh`, rendered `CLAUDE.md`, the `worksessions` plugin (skills, hooks) | how Claude runs: which account, which standing context, which rules |
 | **Guard rails** | `claude-hook-vague`, `claude-hook-notfound`, `claude-guard` | live checks on prompts and tool calls |
 | **Derived data** | `claude-sessions`, `claude-audit`, `claude-search`, `claude-retro` | read-only views over transcripts and folders |
 | **Decisions** | weekly-review skill, `claude-audit --propose/--apply`, ledger | human decisions recorded once and reused |
@@ -225,8 +225,8 @@ flowchart LR
 
 Each profile is its own Claude Code config folder with its own login or gateway `env`,
 settings and hooks. The **shared** profile owns the history-bearing folders; every other profile
-links to them. So any session can be resumed, searched and audited from any profile, and skills
-are rendered once. Which profile ran a session comes from `.session.json`, not from where its
+links to them. So any session can be resumed, searched and audited from any profile; the skills
+and hooks come from the `worksessions` plugin, installed in each profile from the checkout. Which profile ran a session comes from `.session.json`, not from where its
 transcript sits (they all sit in the shared folder).
 
 ## 8. Design decisions
@@ -256,7 +256,7 @@ transcript sits (they all sit in the shared folder).
 | Privacy | everything local or in the user's synced folder; the only network calls are Claude's own (`claude -p` for search re-ranking, retro and the guard judge) and the skills' connectors |
 | Performance | incremental caches for written files and the search index; the sidebar debounces refreshes; the guard's tool hook is ~36 ms |
 | Testability | ~330 pytest tests plus node tests for the extension; a 95 % coverage gate on `bin/`; zsh tested by running it; a real Linux install in CI |
-| Upgrades | `install.sh --update` moves the checkout to the newest release tag, prints the changelog gained and re-renders; `bin/` and `shell/` follow the checkout immediately |
+| Upgrades | `install.sh --update` moves the checkout to the newest release tag, prints the changelog gained and re-renders; `bin/`, `shell/` and the plugin's skills and hooks follow the checkout immediately |
 
 ## 10. Constraints and assumptions
 

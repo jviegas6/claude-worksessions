@@ -5,8 +5,10 @@ description: What still needs a reply from the user in Teams and mail, and what 
 
 # Pending
 
+> **Settings.** Read `~/.config/claude-worksessions/config.env` once at the start (one `cat`; it is a link to `<work root>/_config/config.env`). `CWS_WORK_ROOT` is the work root every path below is relative to; `CWS_USER_ROLE` and `CWS_ORG` come from the same file. If the file is missing, ask for the work root in one question and stop.
+
 One screen: what needs the user's reply, what they are waiting on, and whether each is
-already tracked as an open topic. The user is a {{CWS_USER_ROLE}} at {{CWS_ORG}}.
+already tracked as an open topic. The user's role and organisation are `CWS_USER_ROLE` and `CWS_ORG` from the settings file.
 
 **Read only.** Never draft, send, flag or label anything in Teams or Outlook. Never create a
 request folder or set a waiting flag unless the user asks for that item by name, after seeing
@@ -61,10 +63,10 @@ Waiting on them
 | who | what I asked | where | since | tracked |
 ```
 
-`tracked` is the request folder name, "stale: flag says waiting on me" or "no". Under the
-tables, one line per stale flag with the command that fixes it, e.g.
-`cd <folder> && claude-wait them "Ana" "the new IP" --where teams --note "..."`.
+`tracked` is the request folder name, "stale: flag says waiting on me" or "no".
 
-Then stop. If the user picks an item: for an untracked one, `claude-new -t <TICKET or Other>
-"<topic>"` starts its folder and the session can run `claude-wait me ...` there with the message
-as the note; for a stale one, run the `claude-wait` line shown. Only on request, one item at a time.
+`claude-wait` is disabled (2026-11-04; waiting is tracked in Todoist): never run it, never
+print a `claude-wait` command, and treat waiting flags as frozen history.
+
+Then stop. If the user picks an untracked item, `claude-new -t <TICKET or Other> "<topic>"`
+starts its folder. Only on request, one item at a time.

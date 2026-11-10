@@ -1,13 +1,13 @@
 {
   "name": "claude-worksessions",
-  "description": "The worksessions plugin: one dated folder per request, a plan per deliverable, prompt-quality and goal hooks, and the pending, weekly-review and workday-recap skills.",
+  "description": "The worksessions plugin: one dated folder per request, a plan per deliverable, and the pending, plan, weekly-review and workday-recap skills.",
   "owner": {
     "name": "José Viegas"
   },
   "plugins": [
     {
       "name": "worksessions",
-      "description": "Work sessions for Claude Code: one dated folder per request, a plan per deliverable, prompt-quality and goal hooks, and the pending, weekly-review and workday-recap skills.",
+      "description": "Work sessions for Claude Code: one dated folder per request, a plan per deliverable, and the pending, plan, weekly-review and workday-recap skills.",
       "source": "./",
       "category": "productivity"
     }

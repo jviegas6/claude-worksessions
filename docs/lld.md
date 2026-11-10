@@ -37,7 +37,7 @@ in each section's title.
 | `install.sh`, `uninstall.sh` | zsh; set up and remove everything outside the repo |
 | `config/*.example.*` | seeds for `<work root>/_config/` |
 | `templates/CLAUDE.md.tmpl` | the work root's `CLAUDE.md` |
-| `.claude-plugin/`, `hooks/hooks.json`, `skills/*/SKILL.md` | the `worksessions` Claude Code plugin: manifest, local marketplace, hooks, skills; installed per profile from this checkout |
+| `.claude-plugin/`, `skills/*/SKILL.md` | the `worksessions` Claude Code plugin: manifest, local marketplace, skills; installed per profile from this checkout |
 | `vscode/` | the sidebar extension (`extension.js`, `model.js`, `package.json`, `package_vsix.py`, `test/`) |
 | `yazi/` | yazi config template, glow styles, `md-email.css`, `md2html.sh` |
 | `tests/` | pytest suite; `vscode/test/` node tests run from `tests/test_vscode.py` |
@@ -169,9 +169,11 @@ backed up.
    `VERSION` (§13.7).
 9. **Plugin.** Per profile: `claude plugin marketplace add <checkout>` (once) and
    `claude plugin install worksessions@claude-worksessions --scope user`; without `claude` on
-   PATH it prints the two commands. Pre-2.35 hook entries are removed from `settings.json` and a
-   rendered `~/.claude-<shared>/skills/<name>` is moved aside (`.bak-<stamp>`; a symlink is left
-   with a warning). The skills read `~/.config/claude-worksessions/config.env` at run time.
+   PATH it prints the two commands. A rendered `~/.claude-<shared>/skills/<name>` is moved aside
+   (`.bak-<stamp>`; a symlink is left with a warning). The skills read
+   `~/.config/claude-worksessions/config.env` at run time. Hooks: with `CWS_HOOKS=1` the six
+   prompt-quality and guard entries are written into each profile's `settings.json` (an older
+   group holding only our hook is brought up to date); off, ours are removed.
 10. **yazi** (if enabled). Renders `yazi.toml`, copies the glow styles, `md-email.css`,
     `md2html.sh`; installs the `piper` plugin.
 11. **`~/.zshrc`.** A block between `# >>> claude-worksessions >>>` and `# <<< claude-worksessions <<<`

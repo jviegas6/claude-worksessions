@@ -682,9 +682,9 @@ print("{:<10} {:<14} {:<16} {:<9}".format("[" + (d.get("profile") or "?") + "]",
   fi
   [[ "$ttype" == "-" ]] && ttype=""
 
-  # Goal and done-when: the contract claude-guard holds the session to. Enter keeps the
-  # name as the goal and leaves done-when empty; claude-goal changes them later.
-  if (( ! goal_set )) && [[ -t 0 ]]; then
+  # Goal and done-when: the contract claude-guard holds the session to. Asked only with
+  # CWS_ASK_GOAL="1"; otherwise the name is the goal and claude-goal changes it later.
+  if (( ! goal_set )) && (( ${CWS_ASK_GOAL:-0} )) && [[ -t 0 ]]; then
     read "goal?Goal — what should this session deliver? [$name]: " || return 1
     [[ -z "$done_when" ]] && { read "done_when?Done when (Enter to skip): " || return 1; }
   fi

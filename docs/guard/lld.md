@@ -676,8 +676,9 @@ call reads the config and exits.
 
 ### 13.2 `uninstall.sh`
 
-Removes the three `claude-guard <event>` commands (and the other prompt-quality hooks) from
-each profile's settings, drops empty groups and events, and removes the symlink.
+Uninstalls the `worksessions` plugin (which carries the three `claude-guard <event>` hooks and the
+other prompt-quality hooks) from each profile, removes pre-2.35 entries from each profile's
+settings, drops empty groups and events, and removes the symlink.
 
 ---
 

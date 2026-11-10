@@ -96,7 +96,7 @@ JSON payload on stdin and answer with JSON on stdout (spec: https://code.claude.
 | Judge | `claude -p` on `CWS_GUARD_MODEL` (default `haiku`) under `CWS_GUARD_PROFILE` (default: the session's profile), with a JSON schema for its output. Verdict: `continuation`, `extension` or `pivot`, plus literal scope and targets. |
 | `claude-new` (shell) | Records `goal` and `done_when` in `.session.json`. |
 | `claude-goal` (shell) | Re-anchors a folder's goal: history, scope reset, log line. |
-| `install.sh` / `uninstall.sh` | Register and remove the hooks in every profile's `settings.json`; seed `_config/guard-rules.md`. |
+| `install.sh` / `uninstall.sh` | Install and uninstall the `worksessions` plugin, whose `hooks/hooks.json` registers the hooks; seed `_config/guard-rules.md`. |
 
 ## 6. Main flows
 

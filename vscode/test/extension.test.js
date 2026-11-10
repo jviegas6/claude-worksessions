@@ -445,7 +445,13 @@ test("recent sessions, go to request, skills, resume by id, new window", async t
   w.fake.answers.push(items => items[0], undefined);
   await w.run("goToRequest");
 
-  w.fake.answers.push(items => { assert.deepStrictEqual(items.map(i => i.label), ["/weekly-review"]); return items[0]; });
+  // the profile's skills first, then the plugin's own (this checkout's skills/) as /worksessions:<name>
+  w.fake.answers.push(items => {
+    const labels = items.map(i => i.label);
+    assert.strictEqual(labels[0], "/weekly-review");
+    assert.deepStrictEqual(labels.slice(1), fs.readdirSync(path.join(__dirname, "..", "..", "skills")).sort().map(n => "/worksessions:" + n));
+    return items[0];
+  });
   await w.run("runSkill");
   const sk = w.fake.terminals.at(-1);
   assert.deepStrictEqual(sk.sent, ["claude-new --prompt '/weekly-review' 'weekly review'"]);
@@ -469,11 +475,15 @@ test("recent sessions, go to request, skills, resume by id, new window", async t
   assert.deepStrictEqual(w.fake.executed.at(-1), ["vscode.openFolder", { fsPath: w.A.path }]);
 });
 
-test("run skill with no skills installed says so", async t => {
+test("run skill with no skills installed still offers the plugin's own", async t => {
   const w = await world(t);
   fs.rmSync(path.join(process.env.HOME, ".claude-personal/skills"), { recursive: true });
+  w.fake.answers.push(items => {
+    assert.ok(items.every(i => i.label.startsWith("/worksessions:")) && items.length > 0);
+    return items.find(i => i.label === "/worksessions:pending");
+  });
   await w.run("runSkill");
-  assert.match(w.fake.messages.at(-1)[1], /No skills found/);
+  assert.deepStrictEqual(w.fake.terminals.at(-1).sent, ["claude-new --prompt '/worksessions:pending' 'pending'"]);
 });
 
 test("files: a Files node per request, folders, opening, reveal, copy, and what a session wrote", async t => {

@@ -1,5 +1,22 @@
 # Changelog
 
+## [2.35.0] — 2026-11-10
+
+- The skills and hooks are a **Claude Code plugin**, `worksessions` (`.claude-plugin/`, `hooks/hooks.json`,
+  `skills/`). `install.sh` adds this checkout as a local marketplace and installs the plugin in every
+  profile, so an edit to a skill shows up on the next session; `/plugin install worksessions
+  --marketplace jviegas6/claude-worksessions` installs it without the commands. A plugin manager
+  such as Skillshare can manage it from the repository.
+- The skills no longer carry rendered values: they read `~/.config/claude-worksessions/config.env`
+  (org, role, time zone, Jira id, ticket example, work root) when they start. Changing one of those no
+  longer needs `install.sh`.
+- `install.sh` removes the hook entries that releases before 2.35 wrote into `settings.json`, so no
+  hook runs twice, and moves a rendered `~/.claude-<shared>/skills/<name>` aside (`.bak-<stamp>`).
+  `uninstall.sh` uninstalls the plugin and its marketplace from every profile.
+- `pending`: `claude-wait` is disabled; the skill no longer prints its commands (carried over from
+  the 2026-11-04 local change).
+- VS Code **Run skill…** lists the plugin's skills as `/worksessions:<name>`.
+
 ## [2.34.1] — 2026-11-07
 
 - "This is networking" changed the tracker's task type instead of the T3 request type. The

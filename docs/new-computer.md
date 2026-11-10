@@ -4,7 +4,7 @@ What lives where decides what you need to carry:
 
 | what | where | on the new machine |
 |---|---|---|
-| this package | GitHub | `git clone` |
+| this package (commands, and the `worksessions` plugin with the skills and hooks) | GitHub | `git clone`; `install.sh` installs the plugin per profile |
 | your config, context, review rules | `<work root>/_config/` | arrives with the synced work root |
 | request folders, `_audit/` (ledger, activity) | `<work root>/` | arrives with the synced work root |
 | Claude history (transcripts) | `~/.claude-<shared profile>/projects/` | **copy it** — the audit and search are built from it |

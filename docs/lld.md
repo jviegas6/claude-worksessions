@@ -37,7 +37,7 @@ in each section's title.
 | `install.sh`, `uninstall.sh` | zsh; set up and remove everything outside the repo |
 | `config/*.example.*` | seeds for `<work root>/_config/` |
 | `templates/CLAUDE.md.tmpl` | the work root's `CLAUDE.md` |
-| `skills/*/SKILL.md` | Claude skills, rendered into the shared profile |
+| `.claude-plugin/`, `hooks/hooks.json`, `skills/*/SKILL.md` | the `worksessions` Claude Code plugin: manifest, local marketplace, hooks, skills; installed per profile from this checkout |
 | `vscode/` | the sidebar extension (`extension.js`, `model.js`, `package.json`, `package_vsix.py`, `test/`) |
 | `yazi/` | yazi config template, glow styles, `md-email.css`, `md2html.sh` |
 | `tests/` | pytest suite; `vscode/test/` node tests run from `tests/test_vscode.py` |
@@ -82,7 +82,7 @@ A missing file leaves the defaults.
 | Key | Default | Consumers |
 |---|---|---|
 | `CWS_WORK_ROOT` | `$HOME/work_sessions` (fallback `CLAUDE_WORK_ROOT`) | all |
-| `CWS_ORG` | empty | skills (rendered); `claude-audit` adds its words to `STOPWORDS` |
+| `CWS_ORG` | empty | skills (read from `config.env` at run time); `claude-audit` adds its words to `STOPWORDS` |
 | `CWS_USER_ROLE` | `data/platform engineer` (installer default) | skills; `claude-retro` judge prompt |
 | `CWS_TIMEZONE` / `CWS_TIMEZONE_WINDOWS` | `UTC` | skills (Outlook queries) |
 | `CWS_TICKET_EXAMPLE` | `PROJ-123` | `claude-new` prompts, `CLAUDE.md`, skills |
@@ -167,7 +167,11 @@ backed up.
    `~/.vscode-server/data/Machine`, else `~/.config/Code/User`; JSONC files are reported, not
    edited). Installs the extension when `code --list-extensions --show-versions` differs from
    `VERSION` (§13.7).
-9. **Skills.** Renders each `skills/*/SKILL.md` to `~/.claude-<shared>/skills/<name>/SKILL.md`.
+9. **Plugin.** Per profile: `claude plugin marketplace add <checkout>` (once) and
+   `claude plugin install worksessions@claude-worksessions --scope user`; without `claude` on
+   PATH it prints the two commands. Pre-2.35 hook entries are removed from `settings.json` and a
+   rendered `~/.claude-<shared>/skills/<name>` is moved aside (`.bak-<stamp>`; a symlink is left
+   with a warning). The skills read `~/.config/claude-worksessions/config.env` at run time.
 10. **yazi** (if enabled). Renders `yazi.toml`, copies the glow styles, `md-email.css`,
     `md2html.sh`; installs the `piper` plugin.
 11. **`~/.zshrc`.** A block between `# >>> claude-worksessions >>>` and `# <<< claude-worksessions <<<`
@@ -212,10 +216,11 @@ Written atomically; invalid JSON is reported and left alone.
 ### 3.5 `uninstall.sh`
 
 Removes: the ten `~/.local/bin` links that point into the repo; the `~/.zshrc` block (after a
-backup); the VS Code wrapper setting where it equals the wrapper path; the extension; the six hook
+backup); the VS Code wrapper setting where it equals the wrapper path; the extension; the pre-2.35 hook
 commands from every `~/.claude-*/settings.json` (dropping empty groups, events and `hooks`); the
-config link. Keeps: the work root, `_config/`, profiles and history, shared-item links,
-`~/.claude`, gateway env, retention, sign-in markers, rendered skills, yazi config, packages.
+plugin and its marketplace from every profile; the config link. Keeps: the work root, `_config/`,
+profiles and history, shared-item links, `~/.claude`, gateway env, retention, sign-in markers,
+yazi config, packages.
 
 ---
 
@@ -759,7 +764,7 @@ change.
 | Recent sessions… | quick pick of visible sessions |
 | Set task type… | writes `.session.json` directly (`M.setTaskType`) for a request or a session |
 | Go to request… | open in a new window, reveal, or new session |
-| Run skill… | skills from `~/.claude-<shared>/skills` then each profile's; `claude-new --prompt '/<skill>' '<name>'` |
+| Run skill… | skills from `~/.claude-<shared>/skills` then each profile's, then the plugin's as `worksessions:<name>`; `claude-new --prompt '/<skill>' '<name>'` |
 | Resume session by id… | `claude-resume --resume <id>` |
 | Filter… / Clear filters / Sort… / Change grouping / Refresh / Clear search / Focus search | view state |
 | Pin / Unpin | toggle in `pinned.json` |

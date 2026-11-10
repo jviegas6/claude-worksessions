@@ -522,8 +522,10 @@ without being told.
 
 ## Prompt-quality hooks
 
-`install.sh` registers two hooks in every profile's `settings.json`. Hooks you already have
-are kept; `uninstall.sh` removes only these. Review or disable them with `/hooks`.
+The hooks come with the `worksessions` plugin (`hooks/hooks.json`), which `install.sh` installs in
+every profile; `uninstall.sh` uninstalls it. Hooks of your own in `settings.json` are untouched.
+Review or disable them with `/hooks`. (Releases before 2.35 wrote them into `settings.json`;
+`install.sh` removes those entries so nothing runs twice.)
 
 **Vague request → ask first** (`claude-hook-vague`, on `UserPromptSubmit`). On the first two
 prompts of a session — where vagueness costs most — a request that asks for an action

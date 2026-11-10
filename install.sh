@@ -645,60 +645,48 @@ PY
                 say "$p: transcripts kept $keep days (was Claude Code's default, 30)"
               fi ;;
   esac
-  # Prompt-quality hooks: "doesn't exist → ask first" on commands and MCP tools,
-  # "vague request → ask first" on a session's first prompts, and claude-guard (scope,
-  # pivots, loops; it does nothing until CWS_GUARD_MODE is shadow or enforce)
+  # The prompt-quality hooks and claude-guard come from the plugin now (hooks/hooks.json).
+  # Releases before 2.35 wrote them into settings.json: take those entries out, or every
+  # hook would run twice.
   hstate=$(BIN="$HOME/.local/bin" MODE=$(( DRY )) "$PY" - "$pdir/settings.json" <<'PY'
 import json, os, sys
 p, dry = sys.argv[1], os.environ["MODE"] == "1"
-notfound, vague = os.path.join(os.environ["BIN"], "claude-hook-notfound"), os.path.join(os.environ["BIN"], "claude-hook-vague")
-guard = os.path.join(os.environ["BIN"], "claude-guard")
-# (event, matcher, command, timeout): the guard's prompt check can wait on its judge
-WANT = [("PostToolUse", "Bash|mcp__.*", notfound, 10), ("PostToolUseFailure", "Bash|mcp__.*", notfound, 10),
-        ("UserPromptSubmit", None, vague, 10), ("UserPromptSubmit", None, guard + " prompt", 30),
-        ("PreToolUse", "Read|Glob|Grep|WebFetch|WebSearch|Bash|Write|Edit|MultiEdit|NotebookEdit|mcp__.*",
-         guard + " tool", 5),
-        ("Stop", None, guard + " stop", 20)]
+ours = {os.path.join(os.environ["BIN"], n) for n in ("claude-hook-notfound", "claude-hook-vague")}
+ours |= {os.path.join(os.environ["BIN"], "claude-guard") + " " + e for e in ("prompt", "tool", "stop")}
 try:
     d = json.load(open(p))
 except FileNotFoundError:
-    d = {}
+    print("ok"); raise SystemExit
 except ValueError:
     print("unparsed"); raise SystemExit
-hooks = d.setdefault("hooks", {})
-added = []
-for event, matcher, hook, timeout in WANT:
-    groups = hooks.setdefault(event, [])
-    mine = [g for g in groups if any(h.get("command") == hook for h in g.get("hooks", []))]
-    if mine:
-        # ours already, perhaps from an older release: bring a group holding only our hook up to date
-        for g in mine:
-            if len(g.get("hooks", [])) != 1:
-                continue
-            if matcher and g.get("matcher") != matcher:
-                g["matcher"] = matcher
-                added.append(event)
-            if g["hooks"][0].get("timeout") != timeout:
-                g["hooks"][0]["timeout"] = timeout
-                added.append(event)
-        continue
-    group = {"hooks": [{"type": "command", "command": hook, "timeout": timeout}]}
-    if matcher:
-        group["matcher"] = matcher
-    groups.append(group)
-    added.append(event)
-print("added" if added else "ok")
-if added and not dry:
-    perm = os.stat(p).st_mode & 0o777 if os.path.exists(p) else 0o644
+hooks, changed = d.get("hooks") or {}, False
+for event in list(hooks):
+    groups = []
+    for g in hooks[event]:
+        kept = [h for h in g.get("hooks", []) if h.get("command") not in ours]
+        changed |= len(kept) != len(g.get("hooks", []))
+        if kept:
+            groups.append(dict(g, hooks=kept))
+    if groups:
+        hooks[event] = groups
+    else:
+        del hooks[event]
+print("removed" if changed else "ok")
+if changed and not dry:
+    if hooks:
+        d["hooks"] = hooks
+    else:
+        d.pop("hooks", None)
+    perm = os.stat(p).st_mode & 0o777
     open(p + ".tmp", "w").write(json.dumps(d, indent=2) + "\n")
     os.chmod(p + ".tmp", perm)
     os.replace(p + ".tmp", p)
 PY
 )
   case $hstate in
-    ok)       say "$p: prompt-quality hooks in place" ;;
-    unparsed) warn "$p: $pdir/settings.json isn't valid JSON — the prompt-quality hooks weren't added" ;;
-    added)    say "$p: ${${DRY:#0}:+[dry-run] }added the prompt-quality hooks (ask first when something doesn't exist or a request is vague; claude-guard)" ;;
+    ok)       ;;
+    unparsed) warn "$p: $pdir/settings.json isn't valid JSON — if it still lists the claude-hook-* or claude-guard hooks from an older release, remove them yourself (the plugin runs them now)" ;;
+    removed)  say "$p: ${${DRY:#0}:+[dry-run] }removed the pre-2.35 hook entries from settings.json (the plugin runs them now)" ;;
   esac
 done
 if [[ ! -e "$HOME/.claude" ]]; then link ".claude-$CWS_SHARED_PROFILE" "$HOME/.claude"
@@ -807,10 +795,37 @@ else
   fi
 fi
 
-step "Skills"
-local s
+# --- 5b. plugin -------------------------------------------------------------------------
+# Skills and hooks are a Claude Code plugin (.claude-plugin/, skills/, hooks/), installed
+# from this checkout as a local marketplace, so edits here show up on the next session.
+# One marketplace and one plugin per profile: each config dir keeps its own list.
+step "Plugin"
+local MKT="claude-worksessions" PLUGIN="worksessions"
+if command -v claude >/dev/null 2>&1; then
+  for p in $PROFILES; do
+    pdir="$HOME/.claude-$p"
+    if (( DRY )); then say "[dry-run] $p: claude plugin marketplace add $REPO; claude plugin install $PLUGIN@$MKT"; continue; fi
+    if ! CLAUDE_CONFIG_DIR="$pdir" claude plugin marketplace list 2>/dev/null | grep -qE "(^|[[:space:]])$MKT([[:space:]]|$)"; then
+      CLAUDE_CONFIG_DIR="$pdir" claude plugin marketplace add "$REPO" >/dev/null 2>&1 \
+        || { warn "$p: could not add the $MKT marketplace — run: CLAUDE_CONFIG_DIR=$pdir claude plugin marketplace add $REPO"; continue; }
+    fi
+    if CLAUDE_CONFIG_DIR="$pdir" claude plugin install "$PLUGIN@$MKT" --scope user >/dev/null 2>&1; then
+      say "$p: plugin $PLUGIN installed from $REPO"
+    else
+      warn "$p: plugin install failed — run: CLAUDE_CONFIG_DIR=$pdir claude plugin install $PLUGIN@$MKT --scope user"
+    fi
+  done
+else
+  warn "claude not found — install the plugin later, per profile: CLAUDE_CONFIG_DIR=~/.claude-<profile> claude plugin marketplace add $REPO && claude plugin install $PLUGIN@$MKT --scope user"
+fi
+# Releases before 2.35 rendered the skills into the shared profile; the plugin carries them
+# now, so a rendered copy is moved aside (nothing is deleted)
+local s old
 for s in "$REPO"/skills/*(/); do
-  render "$s/SKILL.md" "$SHARED/skills/${s:t}/SKILL.md"
+  old="$SHARED/skills/${s:t}"
+  if [[ -L "$old" ]]; then warn "$old is a symlink (managed elsewhere) — the plugin has this skill too; remove the link to avoid two copies"
+  elif [[ -d "$old" ]]; then run mv "$old" "$old.bak-$STAMP"; say "moved the rendered copy $old aside → ${old:t}.bak-$STAMP (the plugin has it)"
+  fi
 done
 
 # --- 6. yazi ------------------------------------------------------------------------------

@@ -79,6 +79,14 @@ PY
   )
   [[ "$out" == removed ]] && say "removed the prompt-quality hooks from $sfile"
 done
+# The plugin (skills and hooks) and its local marketplace, per profile
+if command -v claude >/dev/null 2>&1; then
+  for pdir in "$HOME"/.claude-*(N/); do
+    [[ -L "$pdir" ]] && continue
+    CLAUDE_CONFIG_DIR="$pdir" claude plugin uninstall worksessions@claude-worksessions --scope user >/dev/null 2>&1 && say "uninstalled the worksessions plugin from $pdir"
+    CLAUDE_CONFIG_DIR="$pdir" claude plugin marketplace remove claude-worksessions >/dev/null 2>&1 && say "removed the claude-worksessions marketplace from $pdir"
+  done
+fi
 L="$HOME/.config/claude-worksessions/config.env"
 [[ -L "$L" ]] && rm "$L" && say "removed $L (the config file itself is kept)"
-say "Skills (~/.claude-*/skills/weekly-review, workday-recap) and ~/.config/yazi were left in place."
+say "~/.config/yazi was left in place."

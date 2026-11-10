@@ -5,6 +5,8 @@ description: Fill in the weekly functional-review tracker (Week, Task, Jira Tick
 
 # Weekly functional review
 
+> **Settings.** Read `~/.config/claude-worksessions/config.env` once at the start (one `cat`; it is a link to `<work root>/_config/config.env`). `CWS_WORK_ROOT` is the work root every path below is relative to; `CWS_JIRA_CLOUD_ID` (the Atlassian cloud id) and `CWS_TICKET_EXAMPLE` come from the same file. If the file is missing, ask for the work root in one question and stop.
+
 The output is rows for the user's weekly tracker: one row per (week, task, Jira
 ticket), in the tracker's own column layout, ready to paste. Two judgement calls
 sit in between — *which sessions belong with which meetings/emails*, and *which
@@ -12,7 +14,7 @@ task a piece of work is*. Both are settled with the user once and stored in the
 review ledger (`_audit/review/ledger.json`), so each week only asks about what is
 new. Getting that curation right is the whole job; the arithmetic is the script's.
 
-Paths below are relative to `{{CWS_WORK_ROOT}}`.
+Paths below are relative to `CWS_WORK_ROOT` (the work root).
 
 **Read `_config/review-rules.md` first** if it exists: it holds the user's own
 house rules (which epic catches which work, the default task, tickets to ignore).
@@ -37,7 +39,7 @@ hold confirmed subjects.
 Refresh `_audit/review/jira.json` as `[{key, summary, status, updated, mine}]` from:
 
 ```
-searchJiraIssuesUsingJql(cloudId="{{CWS_JIRA_CLOUD_ID}}",
+searchJiraIssuesUsingJql(cloudId="<CWS_JIRA_CLOUD_ID>",
   jql='(assignee = currentUser() OR reporter = currentUser() OR watcher = currentUser())
        AND updated >= "<week start minus 60 days>" ORDER BY updated DESC',
   fields=["summary","status","updated","assignee"], maxResults=100)
@@ -121,9 +123,9 @@ Write the answers to `_audit/review/decisions_<monday>.json` and run
 ```json
 {"assign":   [{"key": "<session_key or event_key>", "subject": "<subject name>"}],
  "reject":   [["<session_key>", "<event_key>"]],
- "subjects": [{"subject": "<subject name>", "task": "<task>", "ticket": "{{CWS_TICKET_EXAMPLE}}"}],
+ "subjects": [{"subject": "<subject name>", "task": "<task>", "ticket": "<ticket, e.g. CWS_TICKET_EXAMPLE>"}],
  "tasks":    [{"task": "...", "tickets": ["..."], "keywords": ["..."], "paths": ["..."],
-               "flags": {"hld": "Yes"}, "comments": {"{{CWS_TICKET_EXAMPLE}}": "Calls, generic support"}}],
+               "flags": {"hld": "Yes"}, "comments": {"<ticket, e.g. CWS_TICKET_EXAMPLE>": "Calls, generic support"}}],
  "weeks":    {"YYYY-MM-DD": {"leave_days": 2,
                "rows": {"<task>|<ticket>": {"comments": "...", "flags": {"hld": "Completed"},
                                             "utilization": 40}}}}}

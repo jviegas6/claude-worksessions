@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.38.1] — 2026-11-11
+
+- **`claude-new -F TYPE` didn't place the request in T3.** zsh passed `--type TYPE` to `claude-area`
+  as one argument, which it rejected, so neither the type nor the `-A` project was set. Both are now
+  separate arguments. The test stub logs each argument on its own, so this can't pass unseen again.
+
 ## [2.38.0] — 2026-11-11
 
 - **`weekly-review` is no longer part of the plugin.** The skill (the weekly tracker and the weekly

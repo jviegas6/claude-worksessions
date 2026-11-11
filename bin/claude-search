@@ -4,6 +4,7 @@
   claude-search PROJ-123                   sessions on that ticket
   claude-search "login issues"             sessions that dealt with it
   claude-search firewall --from 2026-09-01
+  claude-search --suggest "brainlabs ingestion"   ticket and task type for a new request
   claude-search "fabric mirror" --ai       let Claude judge relevance and say why
 
 It searches each session's title, what you typed, Claude's replies, the commands
@@ -18,6 +19,7 @@ import argparse
 import collections
 import csv
 import datetime as dt
+import glob
 import importlib.machinery
 import importlib.util
 import json
@@ -448,10 +450,119 @@ def pick_and_resume(results, opener="cli"):
     os.execvp("claude", ["claude", "--resume", d["session_id"]])
 
 
+# ---------------------------------------------------------------- suggestions for claude-new
+
+CLOSED_STATUSES = {"done", "closed", "resolved", "cancelled", "canceled"}
+SUGGEST_TICKETS = 3
+TICKET_WINDOW_DAYS = 60   # recent requests whose ticket boosts a candidate
+TYPE_WINDOW_DAYS = 90     # past requests whose task type is voted on
+HISTORY_BOOST = 1.0       # per similar recent request that used the ticket, capped at 3x
+TYPE_COMMON_SHARE = 0.4   # a word in more than this share of requests says nothing about the type
+TYPE_MIN_SHARE = 0.5      # the winning type needs this share of the weighted votes...
+TYPE_MIN_REQUESTS = 3     # ...and this many requests behind it
+STRONG_SHARED = 2         # a hint needs this many shared terms (and an open ticket)
+
+
+def read_json(path, default):
+    try:
+        with open(path) as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return default
+
+
+def recent_requests(root, days, today):
+    """Request folders of the last `days` days: name+goal terms, ticket and task type.
+    The day comes from the folder path (YYYY/MM/DD/...), as everywhere else."""
+    cutoff = today - dt.timedelta(days=days)
+    out = []
+    for path in glob.glob(os.path.join(root, "[0-9]" * 4, "[0-9][0-9]", "[0-9][0-9]", "*", ".session.json")):
+        parts = path.split(os.sep)
+        try:
+            day = dt.date(int(parts[-5]), int(parts[-4]), int(parts[-3]))
+        except ValueError:
+            continue
+        meta = read_json(path, None)
+        if day < cutoff or not isinstance(meta, dict):
+            continue
+        out.append({"day": day, "ticket": (meta.get("ticket") or "").strip(),
+                    "type": (meta.get("task_type") or "").strip(),
+                    "terms": set(terms("{} {}".format(meta.get("name") or "", meta.get("goal") or "")))})
+    return out
+
+
+def suggest(text, today=None):
+    """Ticket candidates (up to 3) and a task type for a new request, from the Jira cache and
+    past requests. Scoring is by shared stemmed terms (terms(): the audit's tokeniser and
+    synonyms), each weighted by how rare it is among the issue summaries."""
+    today = today or dt.date.today()
+    root = CA.DEFAULT_ROOT
+    want = set(terms(text))
+    result = {"tickets": [], "type": None}
+    if not want:
+        return result
+
+    ledger = read_json(CA.LEDGER_PATH, {})
+    ignored = set(ledger.get("ignore_tickets") or []) if isinstance(ledger, dict) else set()
+    issues = [i for i in CA.load_jira() if i["key"] not in ignored]
+    requests = recent_requests(root, max(TICKET_WINDOW_DAYS, TYPE_WINDOW_DAYS), today)
+
+    # tickets
+    summaries = {i["key"]: set(terms(i.get("summary"))) for i in issues}
+    df = collections.Counter(t for s in summaries.values() for t in s)
+    weight = lambda t: 1.0 + math.log(len(issues) / df[t])
+    boost = collections.Counter()
+    for r in requests:
+        if (today - r["day"]).days <= TICKET_WINDOW_DAYS and r["ticket"] and r["terms"] & want:
+            boost[r["ticket"]] = min(boost[r["ticket"]] + HISTORY_BOOST, 3 * HISTORY_BOOST)
+    cands = []
+    for i in issues:
+        shared = want & summaries[i["key"]]
+        if not shared:
+            continue
+        closed = (i.get("status") or "").strip().lower() in CLOSED_STATUSES
+        score = sum(weight(t) for t in shared) * (0.25 if closed else 1.0) * (1.0 if i.get("mine") else 0.6)
+        score += boost[i["key"]]
+        cands.append({"key": i["key"], "summary": i.get("summary") or "", "status": i.get("status") or "",
+                      "mine": bool(i.get("mine")), "score": round(score, 2), "shared": sorted(shared),
+                      "strong": len(shared) >= STRONG_SHARED and not closed})
+    cands.sort(key=lambda c: (-c["score"], c["key"]))
+    result["tickets"] = cands[:SUGGEST_TICKETS]
+
+    # task type: each similar request votes with the rarity weight of the words it shares;
+    # words most requests have ("check", "data") are left out. Suggested only on a clear win.
+    typed = [r for r in requests if (today - r["day"]).days <= TYPE_WINDOW_DAYS and r["type"]]
+    rdf = collections.Counter(t for r in typed for t in r["terms"])
+    common = {t for t, n in rdf.items() if n / len(typed) > TYPE_COMMON_SHARE}
+    votes, counts = collections.Counter(), collections.Counter()
+    for r in typed:
+        shared = (want & r["terms"]) - common
+        if shared:
+            votes[r["type"]] += sum(1.0 + math.log(len(typed) / rdf[t]) for t in shared)
+            counts[r["type"]] += 1
+    if votes:
+        best = max(votes, key=lambda k: (votes[k], counts[k], k))
+        if votes[best] >= TYPE_MIN_SHARE * sum(votes.values()) and counts[best] >= TYPE_MIN_REQUESTS:
+            result["type"] = {"name": best, "count": counts[best]}
+    return result
+
+
+def print_suggestions(text, as_json):
+    found = suggest(text)
+    if as_json:
+        print(json.dumps(found, ensure_ascii=False))
+        return
+    for c in found["tickets"]:
+        print("ticket  {}  {}  [{}]{}".format(c["key"], c["summary"], c["status"], "" if c["mine"] else " (not mine)"))
+    if found["type"]:
+        print("type    {}  ({} similar request{})".format(
+            found["type"]["name"], found["type"]["count"], "" if found["type"]["count"] == 1 else "s"))
+
+
 def main():
     ap = argparse.ArgumentParser(prog="claude-search", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("query", nargs="+", help="a ticket (PROJ-123) and/or any words ('login issues')")
+    ap.add_argument("query", nargs="*", help="a ticket (PROJ-123) and/or any words ('login issues')")
     ap.add_argument("--from", dest="start", metavar="DATE", help="only sessions active on or after this day")
     ap.add_argument("--to", dest="end", metavar="DATE", help="only sessions active on or before this day")
     ap.add_argument("--limit", type=int, default=10, metavar="N", help="how many results (default: 10)")
@@ -466,8 +577,17 @@ def main():
     where.add_argument("--cli", dest="opener", action="store_const", const="cli",
                        help="the session picked resumes in this terminal")
     ap.add_argument("--csv", nargs="?", const="-", metavar="FILE", help="write CSV (to stdout by default)")
+    ap.add_argument("--suggest", action="store_true",
+                    help="treat the words as a new request's name/goal and print up to 3 ticket candidates "
+                         "(from the Jira cache) and a task type (from past requests); what claude-new asks with")
+    ap.add_argument("--json", action="store_true", help="with --suggest: print JSON")
     args = ap.parse_args()
     query = " ".join(args.query)
+    if args.suggest:
+        print_suggestions(query, args.json)
+        return
+    if not query:
+        ap.error("the query is required (or use --suggest TEXT)")
 
     docs, changed = build_index()
     if changed > 5:

@@ -1,5 +1,21 @@
 # Changelog
 
+## [3.2.0] — 2026-11-11
+
+- **`claude-new` suggests the ticket and the task type.** 87% of requests were created with
+  `Other` and the type was often a guess. Without `-t`, it lists up to three candidates from
+  the Jira cache (`_audit/review/jira.json`); a number picks one, and Enter takes the top one only
+  when it is strong (two shared words and still open), otherwise Enter means `Other`. Without
+  `-T`, the task type of similar requests of the last 90 days is the default ("job errors, 4
+  similar requests"), ahead of the keyword guess, but only on a clear win: at least half of the
+  votes, weighted by how rare the shared words are, and at least 3 requests; else no suggestion. With an
+  explicit `-t Other` and a strong candidate it prints one `hint: maybe BTPA-123 — summary` line
+  on stderr and goes on: it never asks, so spin-offs stay non-interactive.
+- **`claude-search --suggest TEXT [--json]`** is the engine: ticket candidates scored by shared
+  stemmed words (rarer words count more; not-mine ×0.6, closed ×0.25, `ignore_tickets` left
+  out, +1 per similar request of the last 60 days that used the ticket), and the winning task
+  type with its count. No Jira cache or no overlap: empty, exit 0.
+
 ## [3.1.0] — 2026-11-11
 
 - **No profiles.** The app that runs Claude picks the login: T3 Code's providers (one config dir

@@ -1,6 +1,6 @@
 #!/usr/bin/env zsh
 # Remove what install.sh added to this machine. Your work root, _config, the
-# Claude profile dirs and their history are NOT touched.
+# Claude config dirs, their history and any links between them are NOT touched.
 emulate -L zsh
 REPO="${0:A:h}"
 say() { print -r -- "  $*"; }
@@ -19,7 +19,7 @@ open(p, "w").write(s)
 PY
   say "removed the block from ~/.zshrc (backup kept)"
 fi
-# VS Code: the Claude extension must stop launching through the claude-vscode just removed
+# VS Code: the Claude extension must stop launching through claude-vscode (releases before 3.1)
 for vsset in "$HOME/Library/Application Support/Code/User/settings.json" \
              "$HOME/.config/Code/User/settings.json" "$HOME/.vscode-server/data/Machine/settings.json"; do
   [[ -f "$vsset" ]] || continue
@@ -45,8 +45,8 @@ if command -v code >/dev/null 2>&1 &&
    code --list-extensions 2>/dev/null | grep -qix "jviegas6.claude-worksessions"; then
   code --uninstall-extension jviegas6.claude-worksessions >/dev/null 2>&1 && say "uninstalled the Work sessions sidebar"
 fi
-# The prompt-quality hooks: take their entries out of each profile's settings.json
-for sfile in "$HOME"/.claude-*/settings.json(N); do
+# The prompt-quality hooks: take their entries out of each Claude config dir's settings.json
+for sfile in "$HOME"/.claude/settings.json(N) "$HOME"/.claude-*/settings.json(N); do
   out=$(BIN="$HOME/.local/bin" "$PY" - "$sfile" 2>&1 <<'PY'
 import json, os, sys
 p = sys.argv[1]
@@ -79,7 +79,7 @@ PY
   )
   [[ "$out" == removed ]] && say "removed the prompt-quality hooks from $sfile"
 done
-# A worksessions plugin left by releases 2.35 to 2.38, and its local marketplace, per profile
+# A worksessions plugin left by releases 2.35 to 2.38, and its local marketplace, per config dir
 if command -v claude >/dev/null 2>&1; then
   for pdir in "$HOME"/.claude-*(N/); do
     [[ -L "$pdir" ]] && continue

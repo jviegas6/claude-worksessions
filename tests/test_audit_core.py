@@ -53,13 +53,13 @@ def test_load_config_parses_quoted_bare_comments_and_home(audit, home, monkeypat
 
 def test_load_config_env_overrides_file_and_missing_file_is_fine(audit, home, monkeypatch):
     monkeypatch.setenv("CWS_CONFIG", str(home / "missing.env"))
-    monkeypatch.setenv("CWS_PROFILES", "one")
-    assert audit.load_config() == {"CWS_CONFIG": str(home / "missing.env"), "CWS_PROFILES": "one"}
+    monkeypatch.setenv("CWS_CLAUDE_HOMES", "~/one")
+    assert audit.load_config() == {"CWS_CONFIG": str(home / "missing.env"), "CWS_CLAUDE_HOMES": "~/one"}
 
 
 def test_module_config_comes_from_file(audit, home):
-    assert audit.PROFILES == ["personal", "work"]
-    assert audit.CONFIG_DIRS == [str(home / ".claude-personal"), str(home / ".claude-work")]
+    assert audit.CLAUDE_HOMES == [str(home / ".claude-personal"), str(home / ".claude-work")]
+    assert audit.CONFIG_DIRS == audit.CLAUDE_HOMES
     assert audit.DEFAULT_OUT_DIR == str(home / "work_sessions" / "_audit")
 
 
@@ -135,28 +135,83 @@ def test_transcript_files_none(audit):
     assert audit.transcript_files() == []
 
 
+@pytest.mark.parametrize("conf,want", [
+    ({"CWS_CLAUDE_HOMES": "~/.claude-a  ~/b"}, [".claude-a", "b"]),
+    ({"CWS_PROFILES": "personal work"}, [".claude-personal", ".claude-work"]),   # a config from before 3.1
+    ({"CWS_CLAUDE_HOMES": "~/x", "CWS_PROFILES": "personal"}, ["x"]),             # the new setting wins
+    ({}, [".claude"]),
+])
+def test_claude_homes(audit, home, conf, want):
+    assert audit.claude_homes(conf) == [str(home / w) for w in want]
+
+
+def test_two_homes_on_one_projects_dir_count_once(audit, home):
+    # ~/.claude-work/projects is a link to ~/.claude-personal/projects: every session once
+    p = home / ".claude-personal" / "projects" / "proj"
+    write_jsonl(p / "s1.jsonl", [{}])
+    write_jsonl(p / "s2.jsonl", [{}])
+    (home / ".claude-work").mkdir()
+    os.symlink(str(home / ".claude-personal" / "projects"), str(home / ".claude-work" / "projects"))
+    assert sorted(audit.transcript_files()) == sorted(os.path.realpath(str(p / n)) for n in ("s1.jsonl", "s2.jsonl"))
+
+
+def test_a_session_copied_into_another_home_counts_once(audit, home):
+    write_jsonl(home / ".claude-personal" / "projects" / "a" / "s1.jsonl", [{}])
+    write_jsonl(home / ".claude-work" / "projects" / "a" / "s1.jsonl", [{}])
+    write_jsonl(home / ".claude-work" / "projects" / "a" / "s3.jsonl", [{}])
+    files = audit.transcript_files()
+    assert [os.path.basename(f) for f in files] == ["s1.jsonl", "s3.jsonl"]
+    assert files[0].startswith(os.path.realpath(str(home / ".claude-personal")))
+
+
+@pytest.mark.parametrize("conf,cmd,t3", [
+    ({"CWS_OPEN_CMD": "code {dir}"}, "code {dir}", False),
+    ({"CWS_OPEN": "t3"}, "claude-t3-sync --open {dir} --prompt {prompt}", True),   # before 3.1
+    ({"CWS_OPEN": "t3", "CWS_OPEN_CMD": ""}, "", False),                         # set empty: nothing
+    ({}, "", False),
+])
+def test_open_cmd(audit, conf, cmd, t3):
+    assert audit.open_cmd(conf) == cmd and audit.opens_in_t3(conf) is t3
+
+
+def test_resume_config_dir(audit, home):
+    (home / ".claude-personal").mkdir()
+    (home / ".claude-work").mkdir()
+    assert audit.resume_config_dir(str(home / ".claude-work")) == str(home / ".claude-work")
+    os.symlink(str(home / ".claude-personal"), str(home / ".claude"))
+    assert audit.resume_config_dir(str(home / ".claude-personal")) == ""   # what a bare claude uses
+    assert audit.resume_config_dir("") == ""
+
+
+def test_home_of(audit, home):
+    p = home / ".claude-work" / "projects" / "x" / "s.jsonl"
+    write_jsonl(p, [{}])
+    assert audit.home_of(str(p)) == str(home / ".claude-work")
+    assert audit.home_of(str(home / "elsewhere.jsonl")) == ""
+
+
 def test_session_meta_variants(audit, home):
-    assert audit.session_meta("")["profile"] == "unknown"
+    assert audit.session_meta("")["found"] is False
     d = home / "work_sessions" / "req"
+    # a "profile" from before 3.1 is ignored
     write_json(d / ".session.json", {"profile": "work", "ticket": " DATA-1 ", "task_type": " tooling ",
                                      "session_types": {"sid": "permissions"}, "audit": False})
     m = audit.session_meta(str(d))
-    assert m == {"profile": "work", "ticket": "DATA-1", "task_type": "tooling",
+    assert m == {"found": True, "ticket": "DATA-1", "task_type": "tooling",
                  "session_types": {"sid": "permissions"}, "audit": False}
     assert audit.session_meta(str(d)) is m  # cached
-    assert audit.profile_for(str(d)) == "work"
 
     bad = home / "work_sessions" / "bad"
     bad.mkdir()
     (bad / ".session.json").write_text("{not json")
-    assert audit.session_meta(str(bad)) == {"profile": "unknown", "ticket": "", "task_type": "",
+    assert audit.session_meta(str(bad)) == {"found": False, "ticket": "", "task_type": "",
                                             "session_types": {}, "audit": True}
     assert audit.session_meta(str(home / "nofolder"))["audit"] is True
 
 
 def test_session_folder_and_meta_for(audit, home):
     req = home / "work_sessions" / "req"
-    write_json(req / ".session.json", {"profile": "work", "ticket": "DATA-2"})
+    write_json(req / ".session.json", {"ticket": "DATA-2"})
     write_json(audit.SESSION_FOLDERS_PATH, {"sid-1": str(req)})
     repo = home / "repo"
     repo.mkdir()
@@ -165,7 +220,7 @@ def test_session_folder_and_meta_for(audit, home):
     # ran in a folder without metadata -> falls back to the assigned request folder
     assert audit.meta_for(str(repo), "sid-1")["ticket"] == "DATA-2"
     # no assignment -> the empty meta
-    assert audit.meta_for(str(repo), "sid-2")["profile"] == "unknown"
+    assert audit.meta_for(str(repo), "sid-2")["found"] is False
     # own metadata wins
     assert audit.meta_for(str(req), "sid-2")["ticket"] == "DATA-2"
 
@@ -387,7 +442,7 @@ def make_session(stamps, info=None, cost=None, turns=None, path="/t/sid-123.json
 
 def test_build_row_with_cost_and_session_type(audit, home):
     req = home / "work_sessions" / "req"
-    write_json(req / ".session.json", {"profile": "work", "ticket": "DATA-9", "task_type": "tooling",
+    write_json(req / ".session.json", {"ticket": "DATA-9", "task_type": "tooling",
                                        "session_types": {"sid-123": "permissions"}})
     stamps = [local(2026, 9, 9, 10), local(2026, 9, 9, 10, 4)]
     cost = {"totalCostUSD": 1.23456, "totalLinesAdded": 10, "totalLinesRemoved": 2,
@@ -397,7 +452,7 @@ def test_build_row_with_cost_and_session_type(audit, home):
     row = audit.build_row(s, 300, 120, 1800)
     assert row["date"] == "2026-09-09" and row["worked_h"] == 0.5
     assert row["worked_exact"] == "0:04:00" and row["elapsed"] == "0:04:00"
-    assert row["profile"] == "work" and row["ticket"] == "DATA-9"
+    assert "profile" not in row and row["ticket"] == "DATA-9"
     assert row["task_type"] == "permissions"
     assert row["title"] == ("line opening " + "y" * 100)[:80]
     assert row["cost_usd"] == 1.2346 and row["lines_added"] == 10 and row["lines_removed"] == 2

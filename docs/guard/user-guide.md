@@ -179,7 +179,7 @@ And for all sessions together, in `<work root>/_audit/guard/`:
 
 | File | Holds |
 |---|---|
-| `judge.jsonl` | every decision of the judge, complete: the goal, done-when and scope it was shown, the prompt, its verdict and reason, the model, profile and time |
+| `judge.jsonl` | every decision of the judge, complete: the goal, done-when and scope it was shown, the prompt, its verdict and reason, the model, the judge's config dir and time |
 | `reviews.jsonl` | your marks on those decisions (`claude-guard review`) |
 
 A line in `.quality.jsonl` looks like this:
@@ -296,11 +296,11 @@ SDK objects that look like that (for example `client.jobs.list`), list their fir
 CWS_GUARD_IGNORE_NAMES="client sdk"
 ```
 
-### 7.3 Judge model, profile and patience
+### 7.3 Judge model, login and patience
 
 ```sh
-CWS_GUARD_MODEL="haiku"          # any model alias or name your profile can use
-CWS_GUARD_PROFILE=""             # the profile the judge runs under (e.g. "personal"); empty = the session's own
+CWS_GUARD_MODEL="haiku"          # any model alias or name your Claude login can use
+CWS_GUARD_CONFIG_DIR=""          # the Claude config dir the judge runs with (e.g. "~/.claude-personal"); empty = the session's own
 CWS_GUARD_JUDGE_TIMEOUT="25"     # seconds; if the judge is slower, the prompt goes through (keep under 30)
 ```
 
@@ -311,9 +311,9 @@ CWS_GUARD_JUDGE_TIMEOUT="25"     # seconds; if the judge is slower, the prompt g
 | Symptom | Cause / fix |
 |---|---|
 | `claude-guard report` shows no records | mode is `off`; or the sessions didn't run inside a request folder; or no hooks (run `./install.sh`, then check `/hooks` in Claude Code) |
-| `judge failed … Not logged in` | the judge's profile (the session's, or `CWS_GUARD_PROFILE`) isn't signed in. Run `claude` once with that profile, or set `CWS_GUARD_PROFILE` to one that is |
-| `judge failed … judge profile dir … not found` | `CWS_GUARD_PROFILE` names a profile that doesn't exist; use a name from `claude-new -L` |
-| `judge failed …` on the gateway profile | the gateway may not offer the configured model. Set `CWS_GUARD_MODEL` to one it has, or `CWS_GUARD_PROFILE` to another profile |
+| `judge failed … Not logged in` | the judge's login (the session's, or `CWS_GUARD_CONFIG_DIR`) isn't signed in. Sign in to it, or set `CWS_GUARD_CONFIG_DIR` to a config dir that is |
+| `judge failed … judge config dir … not found` | `CWS_GUARD_CONFIG_DIR` names a folder that doesn't exist; use one of `CWS_CLAUDE_HOMES` |
+| `judge failed …` on a gateway login | the gateway may not offer the configured model. Set `CWS_GUARD_MODEL` to one it has, or `CWS_GUARD_CONFIG_DIR` to another login's dir |
 | `judge failed … timeout` | raise `CWS_GUARD_JUDGE_TIMEOUT` (below 30), or use a faster model |
 | A read you needed was denied | name the repo or folder in the prompt, add it with `claude-goal --path`, or say "go deeper"; if it keeps happening, tune §7 |
 | A follow-up was blocked as a new objective | resend with `force:`; add the case to `guard-rules.md` |

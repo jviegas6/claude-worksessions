@@ -93,10 +93,10 @@ JSON payload on stdin and answer with JSON on stdout (spec: https://code.claude.
 | `bin/claude-guard judge` | Internal. The background half of a prompt check in shadow mode. |
 | `bin/claude-guard report` | Summary of `.quality.jsonl` across the work root, for review and tuning, plus how many judge decisions were reviewed and which were wrong. |
 | `bin/claude-guard review` | Lists the judge's decisions from the central journal and records the user's `right`/`wrong` mark and note on each. The learning loop for `guard-rules.md`. |
-| Judge | `claude -p` on `CWS_GUARD_MODEL` (default `haiku`) under `CWS_GUARD_PROFILE` (default: the session's profile), with a JSON schema for its output. Verdict: `continuation`, `extension` or `pivot`, plus literal scope and targets. |
+| Judge | `claude -p` on `CWS_GUARD_MODEL` (default `haiku`) with `CWS_GUARD_CONFIG_DIR` (default: the session's own Claude config dir), with a JSON schema for its output. Verdict: `continuation`, `extension` or `pivot`, plus literal scope and targets. |
 | `claude-new` (shell) | Records `goal` and `done_when` in `.session.json`. |
 | `claude-goal` (shell) | Re-anchors a folder's goal: history, scope reset, log line. |
-| `install.sh` / `uninstall.sh` | Write the hooks into every profile's `settings.json` when `CWS_HOOKS="1"`, remove them otherwise; seed `_config/guard-rules.md`. |
+| `install.sh` / `uninstall.sh` | Write the hooks into every `CWS_CLAUDE_HOMES` dir's `settings.json` when `CWS_HOOKS="1"`, remove them otherwise; seed `_config/guard-rules.md`. |
 
 ## 6. Main flows
 
@@ -169,10 +169,10 @@ the stop is logged as `depth`. In enforce, Claude is asked once to add them.
 | `.session.json` | `claude-new`, `claude-goal` | adds `goal`, `done_when`, `goal_history[]` |
 | `.scope.json` | `claude-guard` | per session id: prompt counter, literal scope, targets, go-deeper flag, current request's counters |
 | `.quality.jsonl` | `claude-guard`, `claude-goal` | one JSON line per decision: `ts`, `event`, `decision`, `type`, `initiated_by`, `reason`, event-specific fields |
-| `_audit/guard/judge.jsonl` | `claude-guard` | every judge decision across the work root, complete: what the judge saw (goal, done-when, scope before, prompt) and said (verdict, literal, targets, reason), with model, profile, time and whether it was enforced |
+| `_audit/guard/judge.jsonl` | `claude-guard` | every judge decision across the work root, complete: what the judge saw (goal, done-when, scope before, prompt) and said (verdict, literal, targets, reason), with model, judge config dir, time and whether it was enforced |
 | `_audit/guard/reviews.jsonl` | `claude-guard review` | the user's `right`/`wrong` mark and note per decision id; the latest mark wins |
 | `_config/guard-rules.md` | user | the judge's system prompt |
-| `_config/config.env` | user | `CWS_GUARD_MODE`, `CWS_GUARD_MODEL`, `CWS_GUARD_PROFILE`, `CWS_GUARD_JUDGE_TIMEOUT`, `CWS_GUARD_IGNORE_NAMES` |
+| `_config/config.env` | user | `CWS_GUARD_MODE`, `CWS_GUARD_MODEL`, `CWS_GUARD_CONFIG_DIR`, `CWS_GUARD_JUDGE_TIMEOUT`, `CWS_GUARD_IGNORE_NAMES` |
 
 All state lives in the request folder, which is usually in a synced folder (OneDrive, iCloud) along with the rest of the
 work, so the audit trail stays next to the work it describes.
@@ -196,7 +196,7 @@ data shows directly what enforcement would have blocked.
 | D1 | Override prefix `force:` | `!force` (handoff) | A leading `!` runs a shell command in Claude Code and never reaches the hook. |
 | D2 | Judge runs detached in shadow | synchronous always; hook `async: true` | Measured at 7–11 s per call. Shadow must not cost the user time. Doing it in the script keeps one hook registration for both modes; switching mode is just a config change. |
 | D3 | Three verdicts (`continuation`, `extension`, `pivot`) | two | With two, "apply it to one more schema" was classified as a pivot. Extension is allowed and grows the targets. |
-| D4 | Judge isolation: `--settings '{"disableAllHooks": true}'`, `--strict-mcp-config`, `--tools ""`, `--no-session-persistence`, custom system prompt, cwd = temp dir, env `CWS_GUARD_JUDGE=1` | `--bare`; `--setting-sources ""` | `--bare` does not use the OAuth login of subscription profiles; `--setting-sources ""` drops the gateway URL and token a gateway profile keeps in its settings. Loading the profile's settings with all hooks disabled keeps authentication working on both, with no hooks (no recursion), tools, MCP or transcript. The env var is a second recursion guard. |
+| D4 | Judge isolation: `--settings '{"disableAllHooks": true}'`, `--strict-mcp-config`, `--tools ""`, `--no-session-persistence`, custom system prompt, cwd = temp dir, env `CWS_GUARD_JUDGE=1` | `--bare`; `--setting-sources ""` | `--bare` does not use the OAuth login of subscription logins; `--setting-sources ""` drops the gateway URL and token a gateway profile keeps in its settings. Loading the profile's settings with all hooks disabled keeps authentication working on both, with no hooks (no recursion), tools, MCP or transcript. The env var is a second recursion guard. |
 | D5 | No LLM on tool calls | judge each call | Tool calls are frequent. 10 s each is unacceptable, and the question (is X among the targets?) is mechanical once the targets are known. |
 | D6 | Loose matching (substring either way, same last segment) | exact | False positives erode trust faster than false negatives. Shadow data will show where to tighten. |
 | D7 | State keyed by session id in one `.scope.json`, with `flock` | one file per session | Several sessions can share a request folder, and the handoff named `.scope.json`. The lock makes the background judge and the tool hook safe to interleave. |
@@ -207,7 +207,7 @@ data shows directly what enforcement would have blocked.
 | D14 | No target matching on tool calls (2.21.0; replaces D5–D6 for calls) | match each call against the targets | It overlapped the judge and contradicted it: an on-goal search was denied because its words weren't the target's exact text, and the deny only made Claude reword the query. Per call, only facts are checked: loops and other request folders |
 | D14 | Extensions add up: past `CWS_GUARD_MAX_EXTENSIONS` (2) per goal, one more is a pivot; a different product or platform is a pivot, not an extension | judge each prompt alone | Seen in testing: "Databricks API" → Snowflake → SQL Server were three extensions, each allowed. Drift is a property of the sequence, not of one prompt |
 | D12 | The request's scope is its folder, plus repos it **edits**, repos it **names** and folders it **declares** | a global list of allowed folders; any git repo | Measured in shadow: most false flags were reads of the repo the work was in. Edits and names follow the work itself; a declaration covers the rest; a global list would let every session read everywhere |
-| D11 | Configurable judge profile (`CWS_GUARD_PROFILE`) | always the session's profile | Keeps the judge's authentication, endpoint and cost under the user's control, for example judging every session on one profile's subscription. The session's profile stays the default. |
+| D11 | Configurable judge config dir (`CWS_GUARD_CONFIG_DIR`; `CWS_GUARD_PROFILE` before 3.1) | always the session's login | Keeps the judge's authentication, endpoint and cost under the user's control, for example judging every session on one login's subscription. The session's own login stays the default. |
 
 ## 10. Non-functional characteristics
 
@@ -219,7 +219,7 @@ data shows directly what enforcement would have blocked.
 | Cost | ~$0.004 per judged prompt on Haiku with the default rules |
 | Reliability | fail open on every path; the process always exits 0; stderr gets diagnostics |
 | Concurrency | `flock` on `.scope.json`; `.quality.jsonl` is append-only, one line per write; late verdicts are applied only if their prompt is still current |
-| Privacy | the judge receives the goal, done-when, current literal scope and the prompt (first 4,000 chars) through the same profile and endpoint the session uses; no transcript is persisted for it |
+| Privacy | the judge receives the goal, done-when, current literal scope and the prompt (first 4,000 chars) through the same login and endpoint the session uses; no transcript is persisted for it |
 | Portability | Python 3 standard library, POSIX `fcntl` (macOS, Linux) |
 
 ## 11. Risks and limitations
@@ -229,7 +229,7 @@ data shows directly what enforcement would have blocked.
 | Out-of-scope false positives (supporting reads, docs, code needed to answer) | Loose matching, safe roots, "go deeper" escape, shadow period, `CWS_GUARD_IGNORE_NAMES`. The report shows each flag with what was reached. |
 | Targets only known after the judge returns (shadow, first seconds of a request) | The prompt's own names are added at once. With no targets at all, nothing is flagged. |
 | Judge misclassification | Rules are editable. Shadow logs the reason for every verdict, and `force:` / `claude-goal` override in enforce. |
-| Judge unavailable on a profile (not logged in, gateway without the model) | Fail open with `judge_error` logged; the report counts failures. |
+| Judge unavailable on a login (not logged in, gateway without the model) | Fail open with `judge_error` logged; the report counts failures. |
 | Enforce adds ~10 s to every non-trivial prompt | Measured in shadow (`judge_ms`). A decision for Phase 2: skip the judge when the prompt's names already fall inside the targets. |
 | Keyword lists are English/Portuguese | Language, not data; candidates for configuration. |
 

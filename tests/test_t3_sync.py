@@ -76,19 +76,6 @@ def t3(home, monkeypatch):
             con.commit()
             con.close()
 
-        def instances(self, **homes):
-            (t3home / "userdata" / "settings.json").write_text(json.dumps({"providerInstances": {
-                iid: {"driver": "claudeAgent", "enabled": True, "config": {"homePath": home}}
-                for iid, home in homes.items()}}))
-
-        def used(self, instance, model, when="2026-10-30"):
-            con = sqlite3.connect(str(db))
-            con.execute("insert into orchestration_v2_projection_threads (thread_id, project_id, provider_instance_id, "
-                        "payload_json, updated_at) values (?, 'p', ?, ?, ?)",
-                        ("t-" + when, instance, json.dumps({"modelSelection": {"model": model}}), when))
-            con.commit()
-            con.close()
-
         def server(self):
             (t3home / "userdata" / "environment-id").write_text("env-1\n")
 
@@ -310,44 +297,24 @@ def test_thread_for_unknown_database(t3, sync, home):
         sync.thread_for("sess-a")
 
 
-def test_open_with_a_prompt_starts_a_thread_on_the_profile(t3, sync, monkeypatch, home):
+def test_open_with_a_prompt_starts_a_thread(t3, sync, monkeypatch, home):
     d = t3.request("2026/11/01/10-00-00_weekly", {"ticket": "Other", "name": "weekly review"})
     t3.server()
-    t3.instances(personal_i="~/.claude-personal", work_i="~/.claude-work", other=None)
-    t3.used("personal_i", "model-old", "2026-10-01")
-    t3.used("personal_i", "model-new", "2026-10-30")
     opened, real_run = [], sync.subprocess.run
     monkeypatch.setattr(sync.subprocess, "run",
                         lambda cmd, **kw: opened.append(cmd) if cmd[0] in ("open", "xdg-open") else real_run(cmd, **kw))
-    sync.main(["--open", str(d), "--prompt", "/weekly-review 2026-10-26", "--profile", "personal"])
+    sync.main(["--open", str(d), "--prompt", "/weekly-review 2026-10-26"])
     real = os.path.realpath(str(d))
     title = "Other · 2026-11-01 · weekly review"
-    assert t3.calls()[-1] == "thread start {} /weekly-review 2026-10-26 --title {} --provider personal_i --model model-new".format(
-        real, title)
+    # T3 picks the Claude instance: no --provider or --model
+    assert t3.calls()[-1] == "thread start {} /weekly-review 2026-10-26 --title {}".format(real, title)
     assert opened == [[("open" if sys.platform == "darwin" else "xdg-open"), "t3code://threads/env-1/th-new"]]
 
 
-def test_prompt_model_falls_back_to_config_then_to_t3(t3, sync, monkeypatch, capsys):
-    d = t3.request("2026/11/01/11-00-00_x", {"ticket": "Other", "name": "x"})
-    t3.server()
-    t3.instances(work_i="~/.claude-work")
-    real_run = sync.subprocess.run
-    monkeypatch.setattr(sync.subprocess, "run",
-                        lambda cmd, **kw: None if cmd[0] in ("open", "xdg-open") else real_run(cmd, **kw))
-    monkeypatch.setitem(sync.CA.CONFIG, "CWS_T3_MODEL", "cfg-model")
-    sync.open_in_t3(str(d), "hi", "work")
-    assert t3.calls()[-1].endswith("--provider work_i --model cfg-model")
-    monkeypatch.delitem(sync.CA.CONFIG, "CWS_T3_MODEL")
-    sync.open_in_t3(str(d), "hi", "work")
-    assert t3.calls()[-1].endswith("--title Other · 2026-11-01 · x")
-    assert "No model known for work_i" in capsys.readouterr().out
-
-
-def test_prompt_needs_an_instance_for_the_profile(t3, sync):
-    d = t3.request("2026/11/01/12-00-00_y", {"ticket": "Other", "name": "y"})
-    t3.instances(work_i="~/.claude-work")
-    with pytest.raises(SystemExit, match="no T3 Claude instance uses ~/.claude-personal"):
-        sync.open_in_t3(str(d), "hi", "personal")
+def test_profile_flag_is_gone(sync, capsys):
+    with pytest.raises(SystemExit):
+        sync.main(["--open", "/tmp", "--prompt", "hi", "--profile", "personal"])
+    assert "unrecognized arguments: --profile" in capsys.readouterr().err
 
 
 def _no_open(sync, monkeypatch):
@@ -362,8 +329,6 @@ def test_open_starts_a_kickoff_thread_when_the_request_has_none(t3, sync, monkey
     d = t3.request("2026/11/04/17-21-38_ben", {"ticket": "BS-1", "name": "Ben", "task_type": "data quality",
                                                "goal": "the MD file", "done_when": "  sent  ", "profile": "personal"})
     t3.server()
-    t3.instances(personal_i="~/.claude-personal")
-    t3.used("personal_i", "opus")
     opened = _no_open(sync, monkeypatch)
     sync.main(["--open", str(d)])
     real = os.path.realpath(str(d))
@@ -371,7 +336,7 @@ def test_open_starts_a_kickoff_thread_when_the_request_has_none(t3, sync, monkey
     start = log[log.index("thread start"):]
     assert start.startswith("thread start {} New request opened by claude-new.\nTicket: BS-1 · Type: data quality\n"
                             "Goal: the MD file\nDone when: sent\nRead .session.json, and thread.md".format(real))
-    assert start.endswith("--title BS-1 · 2026-11-04 · Ben --provider personal_i --model opus")
+    assert start.endswith("--title BS-1 · 2026-11-04 · Ben")
     assert not any(c.startswith("app ") for c in t3.calls())
     assert opened == [[("open" if sys.platform == "darwin" else "xdg-open"), "t3code://threads/env-1/th-new"]]
     assert "thread started" in capsys.readouterr().out
@@ -390,18 +355,8 @@ def test_kickoff_without_goal_type_or_done_when(t3, sync):
     assert "Goal: bare" in sync.kickoff_prompt(str(d))
 
 
-def test_kickoff_falls_back_to_t3s_default_instance(t3, sync, monkeypatch, capsys):
-    d = t3.request("2026/11/04/10-00-00_x", {"ticket": "Other", "name": "x", "profile": "personal"})
-    t3.server()
-    t3.instances(work_i="~/.claude-work")
-    _no_open(sync, monkeypatch)
-    sync.open_in_t3(str(d), kickoff=True)
-    assert t3.calls()[-1].endswith("--title Other · 2026-11-04 · x")
-    assert "no T3 Claude instance uses ~/.claude-personal; T3 uses the project's default" in capsys.readouterr().out
-
-
-def test_kickoff_without_a_profile_leaves_the_instance_to_t3(t3, sync, monkeypatch):
-    d = t3.request("2026/11/04/11-00-00_y", {"ticket": "Other", "name": "y"})
+def test_kickoff_leaves_the_instance_to_t3_even_with_an_old_profile(t3, sync, monkeypatch):
+    d = t3.request("2026/11/04/11-00-00_y", {"ticket": "Other", "name": "y", "profile": "personal"})
     t3.server()
     _no_open(sync, monkeypatch)
     sync.open_in_t3(str(d), kickoff=True)

@@ -53,247 +53,160 @@ def test_claude_new_menu_is_not_capped():
 
 
 def run_new(root, args, **env):
-    """claude-new with its own HOME, returning the finished process (it may fail)."""
+    """claude-new with its own HOME, returning the finished process (it may fail). Nothing opens it
+    unless the test sets CWS_OPEN_CMD, and claude-area doesn't run unless it sets CWS_AFTER_NEW_CMD
+    (None removes a variable, for the defaults a config without the line gets)."""
     e = dict(os.environ, CLAUDE_WORK_ROOT=str(root), CWS_CONFIG=os.devnull, ZDOTDIR=str(root),
-             HOME=str(root), CWS_PROFILES="personal work ops", CWS_DEFAULT_PROFILE="personal",
-             CWS_SHARED_PROFILE="personal", **env)
+             HOME=str(root))
+    e.setdefault("CWS_AFTER_NEW_CMD", "")
+    for k in ("CWS_OPEN", "CWS_OPEN_CMD", "CWS_PROFILES"):
+        e.pop(k, None)
+    e.update(env)
+    e = {k: v for k, v in e.items() if v is not None}
     src = 'source "{}/shell/worksessions.zsh"\nclaude-new {}'.format(REPO, args)
     return subprocess.run(["zsh", "-fc", src], env=e, capture_output=True, text=True,
                           stdin=subprocess.DEVNULL)
 
 
-def test_list_profiles_shows_every_configured_profile(tmp_path):
-    (tmp_path / ".claude-personal").mkdir()
-    (tmp_path / ".claude-work").mkdir()
-    r = run_new(tmp_path, "-L", CWS_PROFILE_work_DESC="gateway",
-                CWS_PROFILE_work_BASE_URL="https://gw.example.com")
-    assert r.returncode == 0
-    lines = r.stdout.splitlines()
-    assert [ln.split()[0] for ln in lines] == ["personal", "work", "ops"]
-    assert "default shared" in lines[0]
-    assert "gateway  [https://gw.example.com]" in lines[1]
-    assert "(no ~/.claude-ops)" in lines[2]
-
-
-def test_profile_flag_takes_any_configured_name(tmp_path):
-    (tmp_path / ".claude-ops").mkdir()
+def args_stub(tmp_path, name):
+    """A command that writes each argument it gets on its own line, in brackets, to ~/<name>.log."""
     stub = tmp_path / "bin"
-    stub.mkdir()
-    (stub / "claude").write_text('#!/bin/sh\necho "$CLAUDE_CONFIG_DIR" > "$HOME/launched"\n')
-    (stub / "claude").chmod(0o755)
-    r = run_new(tmp_path, "-p ops -t Other -T tooling demo",
-                PATH=str(stub) + os.pathsep + os.environ["PATH"])
-    assert r.returncode == 0, r.stderr
-    assert (tmp_path / "launched").read_text().strip() == str(tmp_path / ".claude-ops")
-    meta = next(tmp_path.glob("[0-9]*/*/*/*/.session.json"))
-    assert json.loads(meta.read_text())["profile"] == "ops"
-
-
-def test_code_flag_opens_vscode_instead_of_claude(tmp_path):
-    (tmp_path / ".claude-work").mkdir()
-    stub = tmp_path / "bin"
-    stub.mkdir()
-    (stub / "code").write_text('#!/bin/sh\necho "$*" > "$HOME/opened"\n')
-    (stub / "claude").write_text('#!/bin/sh\ntouch "$HOME/launched"\n')
-    for f in stub.iterdir():
-        f.chmod(0o755)
-    r = run_new(tmp_path, "-c -p work -t Other -T tooling demo",
-                PATH=str(stub) + os.pathsep + os.environ["PATH"])
-    assert r.returncode == 0, r.stderr
-    meta = next(tmp_path.glob("[0-9]*/*/*/*/.session.json"))
-    assert (tmp_path / "opened").read_text().split() == ["-n", str(meta.parent)]
-    assert not (tmp_path / "launched").exists()
-    d = json.loads(meta.read_text())
-    assert d["profile"] == "work" and d["ended_at"] is None
-
-
-def t3_stubs(tmp_path):
-    """A claude-t3-sync stub that records what it was asked to open, and a claude that must not run."""
-    stub = tmp_path / "bin"
-    stub.mkdir()
-    (stub / "claude-t3-sync").write_text('#!/bin/sh\necho "$*" > "$HOME/t3-opened"\n')
-    (stub / "claude").write_text('#!/bin/sh\ntouch "$HOME/launched"\n')
-    for f in stub.iterdir():
-        f.chmod(0o755)
+    stub.mkdir(exist_ok=True)
+    (stub / name).write_text('#!/bin/sh\nfor a in "$@"; do printf "[%s]\\n" "$a"; done > "$HOME/{}.log"\n'.format(name))
+    (stub / name).chmod(0o755)
     return str(stub) + os.pathsep + os.environ["PATH"]
 
 
-@pytest.mark.parametrize("flags, env", [("--t3", {}), ("", {"CWS_OPEN": "t3"})])
-def test_t3_opens_the_request_in_t3_code(tmp_path, flags, env):
-    (tmp_path / ".claude-work").mkdir()
-    r = run_new(tmp_path, flags + " -p work -t PROJ-1 -T tooling demo", PATH=t3_stubs(tmp_path), **env)
+def test_open_cmd_is_filled_in_and_run(tmp_path):
+    r = run_new(tmp_path, '-t Other -T tooling --prompt "say \'hi\' now" demo',
+                CWS_OPEN_CMD="echo OPEN {dir} {prompt}")
     assert r.returncode == 0, r.stderr
     meta = next(tmp_path.glob("[0-9]*/*/*/*/.session.json"))
-    assert (tmp_path / "t3-opened").read_text().split() == ["--open", str(meta.parent), "--profile", "work"]
-    assert not (tmp_path / "launched").exists()
+    assert r.stdout.splitlines()[-1] == "OPEN {} say 'hi' now".format(meta.parent)
+    d = json.loads(meta.read_text())
+    assert "profile" not in d and d["ended_at"] is None
+
+
+def test_open_cmd_keeps_each_value_one_argument(tmp_path):
+    r = run_new(tmp_path, '-t Other -T tooling --prompt "two  words; \\$HOME" "my demo"',
+                CWS_OPEN_CMD="opener --title {title} {prompt} {dir}", PATH=args_stub(tmp_path, "opener"))
+    assert r.returncode == 0, r.stderr
+    meta = next(tmp_path.glob("[0-9]*/*/*/*/.session.json"))
+    assert (tmp_path / "opener.log").read_text().splitlines() == [
+        "[--title]", "[my demo]", "[two  words; $HOME]", "[{}]".format(meta.parent)]
+
+
+def test_empty_open_cmd_prints_the_folder(tmp_path):
+    r = run_new(tmp_path, "-t Other -T tooling demo", CWS_OPEN_CMD="", CWS_OPEN="t3")
+    assert r.returncode == 0, r.stderr
+    meta = next(tmp_path.glob("[0-9]*/*/*/*/.session.json"))
+    assert r.stdout.splitlines()[-1] == str(meta.parent)
+
+
+def test_no_open_cmd_at_all_prints_the_folder(tmp_path):
+    r = run_new(tmp_path, "-t Other -T tooling demo")
+    assert r.returncode == 0, r.stderr
+    meta = next(tmp_path.glob("[0-9]*/*/*/*/.session.json"))
+    assert r.stdout.splitlines()[-1] == str(meta.parent)
+
+
+def t3_stubs(tmp_path):
+    """A claude-t3-sync stub that records what it was asked to open."""
+    stub = tmp_path / "bin"
+    stub.mkdir(exist_ok=True)
+    (stub / "claude-t3-sync").write_text('#!/bin/sh\necho "$*" > "$HOME/t3-opened"\n')
+    (stub / "claude-t3-sync").chmod(0o755)
+    return str(stub) + os.pathsep + os.environ["PATH"]
+
+
+@pytest.mark.parametrize("env", [{"CWS_OPEN": "t3"},                     # a config from before 3.1
+                                 {"CWS_OPEN_CMD": "claude-t3-sync --open {dir} --prompt {prompt}"}])
+def test_t3_opens_the_request_in_t3_code(tmp_path, env):
+    r = run_new(tmp_path, "-t PROJ-1 -T tooling demo", PATH=t3_stubs(tmp_path), **env)
+    assert r.returncode == 0, r.stderr
+    meta = next(tmp_path.glob("[0-9]*/*/*/*/.session.json"))
+    # no --profile: T3 picks the Claude instance
+    assert (tmp_path / "t3-opened").read_text().split() == ["--open", str(meta.parent), "--prompt"]
     assert json.loads(meta.read_text())["ended_at"] is None
 
 
-def test_t3_with_a_prompt_starts_a_thread_on_the_profile(tmp_path):
-    (tmp_path / ".claude-work").mkdir()
-    r = run_new(tmp_path, '--t3 -p work -t Other -T reporting --prompt "/weekly-review 2026-10-26" demo',
-                PATH=t3_stubs(tmp_path))
+def test_t3_with_a_prompt_starts_a_thread(tmp_path):
+    r = run_new(tmp_path, '-t Other -T reporting --prompt "/weekly-review 2026-10-26" demo',
+                PATH=t3_stubs(tmp_path), CWS_OPEN="t3")
     assert r.returncode == 0, r.stderr
     meta = next(tmp_path.glob("[0-9]*/*/*/*/.session.json"))
     assert (tmp_path / "t3-opened").read_text().strip() == \
-        "--open {} --profile work --prompt /weekly-review 2026-10-26".format(meta.parent)
+        "--open {} --prompt /weekly-review 2026-10-26".format(meta.parent)
 
 
-def test_cli_flag_overrides_cws_open(tmp_path):
-    (tmp_path / ".claude-work").mkdir()
-    r = run_new(tmp_path, "--cli -p work -t Other -T tooling demo", PATH=t3_stubs(tmp_path), CWS_OPEN="t3")
-    assert r.returncode == 0, r.stderr
-    assert (tmp_path / "launched").exists()
-    assert not (tmp_path / "t3-opened").exists()
-
-
-@pytest.mark.parametrize("args, env, message", [
-    ("", {"CWS_OPEN": "emacs"}, "CWS_OPEN must be cli, code or t3"),
-])
-def test_t3_option_errors(tmp_path, args, env, message):
-    (tmp_path / ".claude-work").mkdir()
-    r = run_new(tmp_path, args + " -p work -t Other -T tooling demo", PATH=t3_stubs(tmp_path), **env)
+def test_a_failing_open_cmd_fails_claude_new(tmp_path):
+    r = run_new(tmp_path, "-t Other -T tooling demo", CWS_OPEN_CMD="false")
     assert r.returncode == 1
-    assert message in r.stderr
-    assert not list(tmp_path.glob("[0-9]*"))
+    assert list(tmp_path.glob("[0-9]*/*/*/*/.session.json"))      # the folder is still there
 
 
-def test_t3_needs_claude_t3_sync(tmp_path):
-    (tmp_path / ".claude-work").mkdir()
-    r = run_new(tmp_path, "--t3 -p work -t Other -T tooling demo", PATH="/usr/bin:/bin")
-    assert r.returncode == 1
-    assert "needs claude-t3-sync on PATH" in r.stderr
-
-
-def test_code_flag_needs_the_code_command(tmp_path):
-    (tmp_path / ".claude-work").mkdir()
-    r = run_new(tmp_path, "-c -p work -t Other -T tooling demo", PATH="/usr/bin:/bin")
-    assert r.returncode == 1
-    assert "needs VS Code's 'code' command" in r.stderr
-    assert not list(tmp_path.glob("[0-9]*"))
-
-
-def run_wrapper(home, cwd):
-    """bin/claude-vscode wrapping a stub claude that reports its config dir and args."""
-    stub = home / "stub-claude"
-    stub.write_text('#!/bin/sh\necho "${CLAUDE_CONFIG_DIR:-unset} $*"\n')
-    stub.chmod(0o755)
-    env = {k: v for k, v in os.environ.items() if k != "CLAUDE_CONFIG_DIR"}
-    env.update(HOME=str(home), PWD=str(cwd))
-    return subprocess.run([os.path.join(REPO, "bin", "claude-vscode"), str(stub), "--x", "a b"],
-                          cwd=cwd, env=env, capture_output=True, text=True)
-
-
-@pytest.mark.parametrize("meta,sub,expected", [
-    ({"profile": "work"}, "", ".claude-work"),               # the session's profile
-    ({"profile": "work"}, "src/deep", ".claude-work"),       # found from a subfolder
-    ({"profile": "ops"}, "", "unset"),                       # no ~/.claude-ops: left alone
-    ({"profile": "../x"}, "", "unset"),                      # not a profile name
-    (None, "", "unset"),                                     # not a request folder
-])
-def test_vscode_wrapper_follows_the_session_profile(tmp_path, meta, sub, expected):
-    (tmp_path / ".claude-work").mkdir()
-    folder = tmp_path / "ws" / "2026" / "09" / "22" / "10-00-00_demo"
-    (folder / sub).mkdir(parents=True)
-    if meta is not None:
-        (folder / ".session.json").write_text(json.dumps(meta, indent=2))
-    r = run_wrapper(tmp_path, folder / sub)
-    assert r.returncode == 0, r.stderr
-    cfg, args = r.stdout.strip().split(" ", 1)
-    assert cfg == (str(tmp_path / expected) if expected != "unset" else "unset")
-    assert args == "--x a b"
-
-
-def test_vscode_wrapper_without_a_command(tmp_path):
-    r = subprocess.run([os.path.join(REPO, "bin", "claude-vscode")], capture_output=True, text=True)
-    assert r.returncode == 2 and "claudeProcessWrapper" in r.stderr
-
-
-def test_profile_flag_rejects_unknown_name(tmp_path):
-    r = run_new(tmp_path, "-p nope -t Other demo")
-    assert r.returncode == 1
-    assert "unknown profile 'nope'" in r.stderr
-    assert "personal work ops" in r.stderr
-
-
-def test_profile_flag_needs_a_value(tmp_path):
-    r = run_new(tmp_path, "-p -t Other demo")
-    assert r.returncode == 1
-    assert "-p needs a profile name" in r.stderr
-
-
-@pytest.mark.parametrize("flag", ["-w", "--work", "--personal", "-P"])
-def test_old_profile_shortcuts_are_gone(tmp_path, flag):
-    r = run_new(tmp_path, flag + " demo")
+@pytest.mark.parametrize("flag", ["-p work", "-L", "-c", "--code", "--cli", "--t3", "-w", "--work", "-P"])
+def test_removed_options_are_rejected(tmp_path, flag):
+    r = run_new(tmp_path, flag + " -t Other demo")
     assert r.returncode == 1
     assert "unknown option" in r.stderr
+    assert not list(tmp_path.glob("[0-9]*"))
+
+
+def test_claude_vscode_is_gone():
+    assert not os.path.exists(os.path.join(REPO, "bin", "claude-vscode"))
+
+
+def test_claude_homes_default_and_backward_compat(tmp_path):
+    def homes(**env):
+        e = dict(os.environ, CWS_CONFIG=os.devnull, HOME=str(tmp_path), ZDOTDIR=str(tmp_path))
+        for k in ("CWS_CLAUDE_HOMES", "CWS_PROFILES"):
+            e.pop(k, None)
+        e.update(env)
+        src = 'source "{}/shell/worksessions.zsh"\nprint -r -- "$CWS_CLAUDE_HOMES"'.format(REPO)
+        return subprocess.run(["zsh", "-fc", src], env=e, capture_output=True, text=True).stdout.strip()
+    assert homes() == str(tmp_path / ".claude")
+    assert homes(CWS_PROFILES="personal work") == "{0}/.claude-personal {0}/.claude-work".format(tmp_path)
+    assert homes(CWS_CLAUDE_HOMES="~/a ~/b", CWS_PROFILES="x") == "~/a ~/b"
+
+
+def test_claude_new_no_longer_sets_the_config_dir(tmp_path):
+    e = {k: v for k, v in os.environ.items() if k != "CLAUDE_CONFIG_DIR"}
+    e.update(CWS_CONFIG=os.devnull, HOME=str(tmp_path), ZDOTDIR=str(tmp_path), CWS_PROFILES="personal")
+    src = 'source "{}/shell/worksessions.zsh"\nprint -r -- "${{CLAUDE_CONFIG_DIR:-unset}}"'.format(REPO)
+    out = subprocess.run(["zsh", "-fc", src], env=e, capture_output=True, text=True).stdout.strip()
+    assert out == "unset"
 
 
 def run_resume(root, args):
     """claude-resume with a stub claude that records its config dir and arguments."""
     stub = root / "bin"
     stub.mkdir(exist_ok=True)
-    (stub / "claude").write_text('#!/bin/sh\necho "$CLAUDE_CONFIG_DIR $*" > "$HOME/launched"\n')
+    (stub / "claude").write_text('#!/bin/sh\necho "${CLAUDE_CONFIG_DIR:-unset} $*" > "$HOME/launched"\n')
     (stub / "claude").chmod(0o755)
-    e = dict(os.environ, CWS_CONFIG=os.devnull, ZDOTDIR=str(root), HOME=str(root),
-             CWS_PROFILES="personal work ops", CWS_DEFAULT_PROFILE="personal",
+    e = {k: v for k, v in os.environ.items() if k != "CLAUDE_CONFIG_DIR"}
+    e.update(CWS_CONFIG=os.devnull, ZDOTDIR=str(root), HOME=str(root),
              PATH=str(stub) + os.pathsep + os.environ["PATH"])
     src = 'source "{}/shell/worksessions.zsh"\nclaude-resume {}'.format(REPO, args)
     return subprocess.run(["zsh", "-fc", src], env=e, capture_output=True, text=True)
 
 
 @pytest.mark.parametrize("args,expected", [
-    ("-p ops --resume abc", ".claude-ops --resume abc"),
-    ("-p ops", ".claude-ops --resume"),
-    ("", ".claude-personal --resume"),
-    ("-c", ".claude-personal -c"),
-    ("-p ops -- -p hello", ".claude-ops -p hello"),
+    ("--resume abc", "unset --resume abc"),
+    ("", "unset --resume"),
+    ("-c", "unset -c"),
+    ("-- -p hello", "unset -p hello"),
+    ("-p hello", "unset -p hello"),          # -p is claude's own again (print mode)
 ])
-def test_claude_resume_picks_profile_and_passes_the_rest(tmp_path, args, expected):
-    for p in ("personal", "ops"):
-        (tmp_path / (".claude-" + p)).mkdir()
+def test_claude_resume_passes_everything_to_claude(tmp_path, args, expected):
     r = run_resume(tmp_path, args)
     assert r.returncode == 0, r.stderr
-    assert (tmp_path / "launched").read_text().strip() == str(tmp_path) + "/" + expected
-
-
-def test_claude_resume_rejects_unknown_profile(tmp_path):
-    r = run_resume(tmp_path, "-p nope --resume abc")
-    assert r.returncode == 1
-    assert "claude-resume: unknown profile 'nope'" in r.stderr
-    assert not (tmp_path / "launched").exists()
-
-
-def test_claude_resume_needs_the_config_dir(tmp_path):
-    r = run_resume(tmp_path, "-p work")
-    assert r.returncode == 1
-    assert "config dir" in r.stderr
+    assert (tmp_path / "launched").read_text().strip() == expected
 
 
 def test_per_profile_aliases_are_gone(tmp_path):
     out = zsh("alias", tmp_path)
     assert "claude-personal=" not in out and "claude-work=" not in out
-
-
-@pytest.mark.parametrize("profiles,ok", [("personal my_work", True), ("personal my-work", False)])
-def test_install_rejects_dashed_profile_names(tmp_path, profiles, ok):
-    # CWS_PROFILE_<name>_DESC / _BASE_URL can't hold a dash, so such a profile's
-    # settings would be silently dropped; install.sh must refuse it instead.
-    conf = tmp_path / "ws" / "_config" / "config.env"
-    conf.parent.mkdir(parents=True)
-    conf.write_text('CWS_WORK_ROOT="{}/ws"\nCWS_PROFILES="{}"\n'.format(tmp_path, profiles))
-    link = tmp_path / ".config" / "claude-worksessions" / "config.env"
-    link.parent.mkdir(parents=True)
-    link.symlink_to(conf)
-    env = {k: v for k, v in os.environ.items() if not k.startswith("CWS_")}
-    env.update(HOME=str(tmp_path), ZDOTDIR=str(tmp_path))
-    r = subprocess.run(["zsh", os.path.join(REPO, "install.sh"), "--dry-run", "--yes"], env=env,
-                       capture_output=True, text=True, stdin=subprocess.DEVNULL)
-    if ok:
-        assert "profiles   personal my_work" in r.stdout
-    else:
-        assert r.returncode == 1
-        assert "profile 'my-work' in CWS_PROFILES is not valid" in r.stderr
 
 
 def test_install_prints_no_stray_assignments(tmp_path):
@@ -317,7 +230,7 @@ def dry_install(tmp_path, os_name, path=None, shell="/bin/zsh"):
     """install.sh --dry-run --yes as if on `os_name`, against a throwaway home."""
     conf = tmp_path / "ws" / "_config" / "config.env"
     conf.parent.mkdir(parents=True, exist_ok=True)
-    conf.write_text('CWS_WORK_ROOT="{}/ws"\nCWS_PROFILES="personal work"\n'.format(tmp_path))
+    conf.write_text('CWS_WORK_ROOT="{}/ws"\nCWS_CLAUDE_HOMES="~/.claude-personal $HOME/.claude-work"\n'.format(tmp_path))
     link = tmp_path / ".config" / "claude-worksessions" / "config.env"
     link.parent.mkdir(parents=True, exist_ok=True)
     if not link.exists():
@@ -336,21 +249,37 @@ def dry_install(tmp_path, os_name, path=None, shell="/bin/zsh"):
     ("wsl", ".vscode-server/data/Machine"),
 ])
 @pytest.mark.parametrize("settings,expected", [
-    (None, "no VS Code settings in"),
-    ("", "[dry-run] set claudeCode.claudeProcessWrapper"),
-    ('{"editor.fontSize": 13}', "[dry-run] set claudeCode.claudeProcessWrapper"),
-    ('{"claudeCode.claudeProcessWrapper": "HOME/.local/bin/claude-vscode"}', "ok claudeCode.claudeProcessWrapper"),
-    ('{\n  // a comment\n  "editor.fontSize": 13,\n}', "isn't plain JSON"),
+    (None, None),
+    ("", None),
+    ('{"editor.fontSize": 13}', None),
+    ('{"claudeCode.claudeProcessWrapper": "/opt/my-wrapper"}', None),          # someone else's: kept
+    ('{"claudeCode.claudeProcessWrapper": "HOME/.local/bin/claude-vscode"}',
+     "[dry-run] removed claudeCode.claudeProcessWrapper (claude-vscode)"),
+    ('{\n  // a comment\n  "editor.fontSize": 13,\n}', None),
+    ('{\n  // a comment\n  "claudeCode.claudeProcessWrapper": "HOME/.local/bin/claude-vscode",\n}',
+     "isn't plain JSON — remove its claudeCode.claudeProcessWrapper line"),
 ])
-def test_install_sets_the_vscode_wrapper(tmp_path, os_name, vsdir, settings, expected):
+def test_install_takes_out_the_old_vscode_wrapper(tmp_path, os_name, vsdir, settings, expected):
     if settings is not None:
         d = tmp_path / vsdir
         d.mkdir(parents=True)
         (d / "settings.json").write_text(settings.replace("HOME", str(tmp_path)))
     r = dry_install(tmp_path, os_name)
-    assert expected in r.stdout + r.stderr
+    out = r.stdout + r.stderr
+    assert r.returncode == 0, out
+    if expected:
+        assert expected in out
+    else:
+        assert "claudeProcessWrapper" not in out
     if settings is not None:   # a dry run changes nothing
         assert (tmp_path / vsdir / "settings.json").read_text() == settings.replace("HOME", str(tmp_path))
+
+
+def test_install_reads_the_claude_dirs_from_the_config(tmp_path):
+    r = dry_install(tmp_path, "mac")
+    assert "claude dirs ~/.claude-personal ~/.claude-work" in r.stdout, r.stdout + r.stderr
+    assert "[dry-run] ~/.claude-work: keep transcripts 3650 days" in r.stdout
+    assert "profile" not in r.stdout.lower()
 
 
 HAS_BREW = any(os.access(p, os.X_OK) for p in (
@@ -479,9 +408,9 @@ def run_new_tty(root, args, typed, env=None):
     stub.mkdir(exist_ok=True)
     (stub / "claude").write_text("#!/bin/sh\nexit 0\n")
     (stub / "claude").chmod(0o755)
-    e = dict(os.environ, CLAUDE_WORK_ROOT=str(root), CWS_CONFIG=os.devnull, ZDOTDIR=str(root),
-             HOME=str(root), CWS_PROFILES="personal", CWS_DEFAULT_PROFILE="personal",
-             PATH=str(stub) + os.pathsep + os.environ["PATH"], **(env or {}))
+    e = {k: v for k, v in os.environ.items() if k not in ("CWS_OPEN", "CWS_OPEN_CMD", "CWS_PROFILES")}
+    e.update(CLAUDE_WORK_ROOT=str(root), CWS_CONFIG=os.devnull, ZDOTDIR=str(root), HOME=str(root),
+             CWS_AFTER_NEW_CMD="", PATH=str(stub) + os.pathsep + os.environ["PATH"], **(env or {}))
     src = 'source "{}/shell/worksessions.zsh"\nclaude-new {}'.format(REPO, args)
     try:
         r = subprocess.run(["zsh", "-fc", src], env=e, stdin=slave, capture_output=True, text=True, timeout=20)
@@ -529,29 +458,24 @@ def test_claude_new_without_a_terminal_counts_the_session(tmp_path):
     stub.mkdir()
     (stub / "claude").write_text("#!/bin/sh\nexit 0\n")
     (stub / "claude").chmod(0o755)
-    r = run_new(tmp_path, "-p personal -t Other -T tooling demo",
+    r = run_new(tmp_path, "-t Other -T tooling demo",
                 PATH=str(stub) + os.pathsep + os.environ["PATH"])
     assert r.returncode == 0, r.stderr
     assert json.loads(next(tmp_path.glob("[0-9]*/*/*/*/.session.json")).read_text())["audit"] is True
 
 
-def test_claude_new_prompt_starts_claude_with_it(tmp_path):
-    (tmp_path / ".claude-personal").mkdir()
-    stub = tmp_path / "bin"
-    stub.mkdir()
-    (stub / "claude").write_text('#!/bin/sh\necho "$# $*" > "$HOME/args"\n')
-    (stub / "claude").chmod(0o755)
-    path = str(stub) + os.pathsep + os.environ["PATH"]
-    r = run_new(tmp_path, "-p personal -t Other -T tooling --prompt '/weekly-review now' demo", PATH=path)
+def test_claude_new_prompt_goes_to_the_open_cmd(tmp_path):
+    path = args_stub(tmp_path, "opener")
+    r = run_new(tmp_path, "-t Other -T tooling --prompt '/weekly-review now' demo", PATH=path,
+                CWS_OPEN_CMD="opener {prompt}")
     assert r.returncode == 0, r.stderr
-    assert (tmp_path / "args").read_text() == "1 /weekly-review now\n"
-    r = run_new(tmp_path, "-p personal -t Other -T tooling demo2", PATH=path)
-    assert (tmp_path / "args").read_text() == "0 \n"     # no prompt: claude gets no arguments
+    assert (tmp_path / "opener.log").read_text() == "[/weekly-review now]\n"
+    r = run_new(tmp_path, "-t Other -T tooling demo2", PATH=path, CWS_OPEN_CMD="opener {prompt}")
+    assert (tmp_path / "opener.log").read_text() == "[]\n"     # no prompt: an empty argument
 
 
 @pytest.mark.parametrize("args,err", [
     ("--prompt", "--prompt needs the text"),
-    ("-c --prompt /x -p personal -t Other -T tooling demo", "can't be used with -c"),
 ])
 def test_claude_new_prompt_errors(tmp_path, args, err):
     (tmp_path / ".claude-personal").mkdir()
@@ -560,9 +484,9 @@ def test_claude_new_prompt_errors(tmp_path, args, err):
 
 
 @pytest.mark.parametrize("settings,expected", [
-    (None, "[dry-run] personal: keep transcripts 3650 days"),
-    ('{"model": "x"}', "[dry-run] personal: keep transcripts 3650 days"),
-    ('{"cleanupPeriodDays": true}', "[dry-run] personal: keep transcripts 3650 days"),
+    (None, "[dry-run] ~/.claude-personal: keep transcripts 3650 days"),
+    ('{"model": "x"}', "[dry-run] ~/.claude-personal: keep transcripts 3650 days"),
+    ('{"cleanupPeriodDays": true}', "[dry-run] ~/.claude-personal: keep transcripts 3650 days"),
     ('{"cleanupPeriodDays": 30}', "personal: cleanupPeriodDays is 30"),
     ('{"cleanupPeriodDays": 5000}', "personal: transcripts kept 3650+ days"),
     ("{not json", "isn't valid JSON"),
@@ -641,9 +565,10 @@ def test_install_removes_the_old_hooks_and_installs_no_plugin(tmp_path):
     own = tmp_path / ".claude-personal" / "skills" / "weekly-review"
     own.mkdir(parents=True)
     (own / "SKILL.md").write_text("mine")
-    # a claude-plan link into the checkout, from before 3.0.0, is dropped
+    # claude-plan and claude-vscode links into the checkout, from before 3.0.0 / 3.1.0, are dropped
     os.makedirs(bin_)
-    os.symlink(os.path.join(REPO, "bin", "claude-plan"), os.path.join(bin_, "claude-plan"))
+    for b in ("claude-plan", "claude-vscode"):
+        os.symlink(os.path.join(REPO, "bin", b), os.path.join(bin_, b))
     log = tmp_path / "claude.log"
     env = {k: v for k, v in os.environ.items() if not k.startswith("CWS_")}
     env.update(HOME=str(tmp_path), ZDOTDIR=str(tmp_path), CWS_OS="mac", PATH="/usr/bin:/bin")
@@ -664,8 +589,12 @@ def test_install_removes_the_old_hooks_and_installs_no_plugin(tmp_path):
     assert s["cleanupPeriodDays"] == 3650
     assert "hooks" not in json.loads((tmp_path / ".claude-work" / "settings.json").read_text())
     assert (own / "SKILL.md").read_text() == "mine" and not list(own.parent.glob("*.bak-*"))
-    assert not os.path.lexists(os.path.join(bin_, "claude-plan"))
-    assert "claude-plan is gone since 3.0.0" in r.stdout
+    for b in ("claude-plan", "claude-vscode"):
+        assert not os.path.lexists(os.path.join(bin_, b))
+        assert "removed {}/{} (no longer part of claude-worksessions)".format(bin_, b) in r.stdout
+    # no profile set-up any more: nothing linked between the config dirs, no ~/.claude link
+    assert not os.path.islink(tmp_path / ".claude-work" / "projects")
+    assert not os.path.lexists(tmp_path / ".claude")
     assert (tmp_path / "ws" / "_config" / "guard-rules.md").read_text().startswith("<!-- claude-guard")
     hook = str(tmp_path / ".local" / "bin" / "claude-hook-notfound")
     assert os.path.islink(hook) and os.path.islink(tmp_path / ".local" / "bin" / "claude-retro")
@@ -706,13 +635,13 @@ def test_claude_new_records_goal_and_done_when(tmp_path):
     (stub / "claude").write_text("#!/bin/sh\nexit 0\n")
     (stub / "claude").chmod(0o755)
     path = str(stub) + os.pathsep + os.environ["PATH"]
-    r = run_new(tmp_path, "-p personal -t Other -T tooling -g 'list the sources' --done 'a table of sources' demo",
+    r = run_new(tmp_path, "-t Other -T tooling -g 'list the sources' --done 'a table of sources' demo",
                 PATH=path)
     assert r.returncode == 0, r.stderr
     d = json.loads(next(tmp_path.glob("[0-9]*/*/*/*/.session.json")).read_text())
     assert (d["goal"], d["done_when"]) == ("list the sources", "a table of sources")
     shutil.rmtree(next(tmp_path.glob("[0-9]*")))
-    r = run_new(tmp_path, "-p personal -t Other -T tooling other thing", PATH=path)   # not a terminal: the name
+    r = run_new(tmp_path, "-t Other -T tooling other thing", PATH=path)   # not a terminal: the name
     d = json.loads(next(tmp_path.glob("[0-9]*/*/*/*/.session.json")).read_text())
     assert (d["goal"], d["done_when"]) == ("other thing", "")
 
@@ -726,13 +655,13 @@ def test_path_declares_scope(tmp_path):
     (tmp_path / "repo one").mkdir()
     (tmp_path / "docs").mkdir()
     path = str(stub) + os.pathsep + os.environ["PATH"]
-    r = run_new(tmp_path, "-p personal -t Other -T tooling --path '{}' --path ~/docs demo".format(tmp_path / "repo one"),
+    r = run_new(tmp_path, "-t Other -T tooling --path '{}' --path ~/docs demo".format(tmp_path / "repo one"),
                 PATH=path)
     assert r.returncode == 0, r.stderr
     meta = next(tmp_path.glob("[0-9]*/*/*/*/.session.json"))
     d = json.loads(meta.read_text())
     assert d["paths"] == [str(tmp_path / "repo one"), str(tmp_path / "docs")]
-    r = run_new(tmp_path, "-p personal -t Other -T tooling --path /no/such/dir x", PATH=path)
+    r = run_new(tmp_path, "-t Other -T tooling --path /no/such/dir x", PATH=path)
     assert r.returncode == 1 and "--path needs an existing folder" in r.stderr
     # claude-goal adds paths without re-anchoring, and shows them
     goal = lambda args: zsh('cd "{}" && claude-goal {}'.format(meta.parent, args), tmp_path)
@@ -845,9 +774,9 @@ def test_continuing_in_a_recent_folder_opens_it_in_t3(tmp_path):
     stub.mkdir()
     (stub / "claude-t3-sync").write_text('#!/bin/sh\necho "$*" > "$HOME/t3-opened"\n')
     (stub / "claude-t3-sync").chmod(0o755)
-    r = run_new_tty(tmp_path, "--t3 -t PROJ-1 -T tooling -a second look", "\n")
+    r = run_new_tty(tmp_path, "-t PROJ-1 -T tooling -a second look", "\n", env={"CWS_OPEN": "t3"})
     assert r.returncode == 0, r.stderr
-    assert (tmp_path / "t3-opened").read_text().split() == ["--open", str(d), "--profile", "personal"]
+    assert (tmp_path / "t3-opened").read_text().split() == ["--open", str(d), "--prompt"]
 
 
 def test_recent_folder_age_counts_calendar_days(tmp_path):
@@ -876,19 +805,44 @@ def area_stubs(tmp_path):
 
 
 def test_claude_new_picks_the_area_before_t3_sees_the_folder(tmp_path):
+    # a config from before 3.1: no CWS_AFTER_NEW_CMD line, so claude-area runs when installed
     path, log = area_stubs(tmp_path)
-    r = run_new(tmp_path, '-p personal -n --new -t Other -T tooling -g goal --t3 "x"', PATH=path)
+    r = run_new(tmp_path, '-n --new -t Other -T tooling -g goal "x"', PATH=path, CWS_OPEN="t3",
+                CWS_AFTER_NEW_CMD=None)
     assert r.returncode == 0, r.stderr
     lines = log.read_text().splitlines()
-    assert lines[0].startswith("claude-area [--dir] ") and lines[0].endswith(" [--pick]")
+    assert lines[0].startswith("claude-area [--dir] ") and lines[0].endswith(" [--pick] [] [--type] []")
     assert lines[1].startswith("claude-t3-sync [--open] ")
 
 
 def test_claude_new_project_and_type_flags_pass_through(tmp_path):
     path, log = area_stubs(tmp_path)
-    r = run_new(tmp_path, '-p personal -n --new -t Other -T tooling -g goal -A contact360 -F data --t3 "x"', PATH=path)
+    r = run_new(tmp_path, '-n --new -t Other -T tooling -g goal -A contact360 -F data "x"', PATH=path,
+                CWS_OPEN="t3", CWS_AFTER_NEW_CMD=None)
     assert r.returncode == 0, r.stderr
     assert log.read_text().splitlines()[0].endswith(" [--pick] [contact360] [--type] [data]")
+
+
+def test_after_new_cmd_is_filled_in_with_separate_arguments(tmp_path):
+    path, log = area_stubs(tmp_path)
+    r = run_new(tmp_path, '-n --new -t Other -T tooling -A "big project" -F data "x y"', PATH=path,
+                CWS_AFTER_NEW_CMD="claude-area {project} --type {type} --title {title}")
+    assert r.returncode == 0, r.stderr
+    assert log.read_text().splitlines() == ["claude-area [big project] [--type] [data] [--title] [x y]"]
+
+
+def test_empty_after_new_cmd_runs_nothing(tmp_path):
+    path, log = area_stubs(tmp_path)
+    r = run_new(tmp_path, '-n --new -t Other -T tooling "x"', PATH=path, CWS_AFTER_NEW_CMD="", CWS_OPEN="t3")
+    assert r.returncode == 0, r.stderr
+    assert [ln.split()[0] for ln in log.read_text().splitlines()] == ["claude-t3-sync"]
+
+
+def test_a_failing_after_new_cmd_doesnt_stop_the_open(tmp_path):
+    r = run_new(tmp_path, '-n --new -t Other -T tooling "x"', CWS_AFTER_NEW_CMD="false",
+                CWS_OPEN_CMD="echo OPENED")
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.splitlines()[-1] == "OPENED"
 
 
 def type_session(root):

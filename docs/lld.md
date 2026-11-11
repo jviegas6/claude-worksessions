@@ -11,7 +11,7 @@ in each section's title.
 
 - [1. Repository layout and conventions](#1-repository-layout-and-conventions)
 - [2. Configuration](#2-configuration)
-- [3. Installation and profiles](#3-installation-and-profiles)
+- [3. Installation](#3-installation)
 - [4. Shell functions](#4-shell-functions-shellworksessionszsh)
 - [5. Data formats](#5-data-formats)
 - [6. claude-audit](#6-claude-audit)
@@ -32,7 +32,7 @@ in each section's title.
 
 | Path | Contents |
 |---|---|
-| `bin/` | the commands. Python 3 (standard library only) except `claude-vscode` (zsh). Symlinked into `~/.local/bin` |
+| `bin/` | the commands. Python 3 (standard library only). Symlinked into `~/.local/bin` |
 | `shell/worksessions.zsh` | zsh functions, sourced from a managed block in `~/.zshrc` |
 | `install.sh`, `uninstall.sh` | zsh; set up and remove everything outside the repo |
 | `config/*.example.*` | seeds for `<work root>/_config/` |
@@ -87,13 +87,11 @@ A missing file leaves the defaults.
 | `CWS_TICKET_EXAMPLE` | `PROJ-123` | `claude-new` prompts, `CLAUDE.md`, skills |
 | `CWS_JIRA_CLOUD_ID` | empty | weekly-review skill |
 | `CWS_TASK_TYPES` | `permissions, job errors, new features, security, investigation, data quality, tooling, documentation` | `claude-new` task-type menu |
-| `CWS_PROFILES` | `personal work` | shell, installer, Python transcript discovery |
-| `CWS_DEFAULT_PROFILE` | first profile | bare `claude`, `claude-new` menu default, `claude-resume` |
-| `CWS_SHARED_PROFILE` | first profile | installer (symlink target, skills), extension (watched `projects`) |
-| `CWS_PROFILE_<name>_DESC` | — | `claude-new` menu and `-L` |
-| `CWS_PROFILE_<name>_BASE_URL` | — | installer (gateway env; no sign-in), `claude-new -L` |
+| `CWS_CLAUDE_HOMES` | `~/.claude` (else `~/.claude-<p>` per name in an old `CWS_PROFILES`) | transcript discovery (Python, shell, extension), installer (retention, hooks per dir), extension (watchers, skills) |
+| `CWS_OPEN_CMD` | T3 (`claude-t3-sync --open {dir} --prompt {prompt}`) when an old `CWS_OPEN="t3"` is set and the line is missing; else empty | `claude-new`; `claude-search` (opens in T3 when it names `claude-t3-sync`) |
+| `CWS_AFTER_NEW_CMD` | `claude-area --dir {dir} --pick {project} --type {type}` when the line is missing and `claude-area` is on PATH | `claude-new` |
 | `CWS_INSTALL_YAZI` | `1` | installer |
-| `CWS_GUARD_MODE`, `CWS_GUARD_MODEL`, `CWS_GUARD_PROFILE`, `CWS_GUARD_JUDGE_TIMEOUT`, `CWS_GUARD_IGNORE_NAMES`, `CWS_GUARD_MAX_EXTENSIONS` | `off` (`off`/`shadow`/`warn`/`enforce`), `haiku`, —, `25`, —, `2` | `claude-guard` ([LLD §2](guard/lld.md#2-configuration)) |
+| `CWS_GUARD_MODE`, `CWS_GUARD_MODEL`, `CWS_GUARD_CONFIG_DIR`, `CWS_GUARD_JUDGE_TIMEOUT`, `CWS_GUARD_IGNORE_NAMES`, `CWS_GUARD_MAX_EXTENSIONS` | `off` (`off`/`shadow`/`warn`/`enforce`), `haiku`, —, `25`, —, `2` | `claude-guard` ([LLD §2](guard/lld.md#2-configuration)) |
 
 Environment-only: `CWS_CONFIG`, `CWS_PYTHON` (interpreter for shell JSON helpers), `CWS_OS`
 (OS override), `CWS_CACHE_DIR`, `CWS_TRASH_DIR`, `XDG_CACHE_HOME`, `XDG_DATA_HOME`,
@@ -112,7 +110,7 @@ Seeds are copied only when the file is missing.
 
 ---
 
-## 3. Installation and profiles
+## 3. Installation
 
 ### 3.1 `install.sh` flags
 
@@ -122,7 +120,7 @@ Seeds are copied only when the file is missing.
 | `--dry-run` | print `[dry-run] …` instead of changing anything |
 | `--no-brew` | skip package and curl installs |
 | `--no-bootstrap` | install nothing; report what's missing |
-| `--profiles` / `--reconfigure` | re-ask the profile questions |
+| `--reconfigure` | ask the basic settings again |
 | `--update [vX.Y.Z]` | move the checkout to a release, then install |
 | `--edge` | follow `main` |
 | `--yes` / `-y` | never prompt |
@@ -140,13 +138,9 @@ backed up.
 2. **Configuration.** Resolves the config (existing link, `--config`, or asks for the work root).
    On first run copies the example with `CWS_WORK_ROOT` set, then (unless `--yes`/`--dry-run`)
    `configure_basics` (org, role, time zone, Windows zone name, example ticket, Atlassian cloud
-   id, yazi extras) and `configure_profiles`:
-   - names must match `^[a-z0-9][a-z0-9_]*$`, unique;
-   - type 1 subscription or 2 gateway (asks the base URL);
-   - a description; with several profiles, the default and the shared profile;
-   - rewrites every `CWS_PROFILE_*` line, `CWS_PROFILES`, `CWS_DEFAULT_PROFILE`, `CWS_SHARED_PROFILE`.
-   It then links `~/.config/claude-worksessions/config.env`, sources the shell file, validates
-   profile names, and exports the render variables (`HOME`, `CWS_WORK_ROOT`, `CWS_ORG`,
+   id, yazi extras, `CWS_CLAUDE_HOMES`).
+   It then links `~/.config/claude-worksessions/config.env`, sources the shell file, takes the
+   Claude config dirs from `CWS_CLAUDE_HOMES` (`~` expanded), and exports the render variables (`HOME`, `CWS_WORK_ROOT`, `CWS_ORG`,
    `CWS_USER_ROLE`, `CWS_TIMEZONE`, `CWS_TIMEZONE_WINDOWS`, `CWS_TICKET_EXAMPLE`, `CWS_JIRA_CLOUD_ID`).
 3. **Prerequisites.** Wants `fzf pandoc` (+ `yazi glow` if `CWS_INSTALL_YAZI`, + `curl` off macOS),
    Command Line Tools and Homebrew on macOS, and Claude Code. One confirmation, then:
@@ -156,47 +150,41 @@ backed up.
    missing.
 4. **Work root.** Creates the root, `_audit`, `_config`, `_daily`; seeds `_config/*.md`; renders
    `CLAUDE.md` with `CONTEXT=$(<_config/context.md)`.
-5. **Profiles** (§3.3), **retention**, **hooks** (§3.4).
-6. **Sign in.** For each subscription profile without `<dir>/.cws-signed-in`: offers to run
-   `CLAUDE_CONFIG_DIR=<dir> claude`, then touches the marker. Gateway profiles are skipped.
-7. **Commands.** Symlinks `claude-audit claude-search claude-sessions claude-vscode claude-md-email
-   claude-delete claude-hook-notfound claude-hook-vague claude-guard claude-retro` into `~/.local/bin`.
-8. **VS Code.** Sets `claudeCode.claudeProcessWrapper = ~/.local/bin/claude-vscode` in the user
-   `settings.json` (macOS `~/Library/Application Support/Code/User`, WSL
-   `~/.vscode-server/data/Machine`, else `~/.config/Code/User`; JSONC files are reported, not
-   edited). Installs the extension when `code --list-extensions --show-versions` differs from
-   `VERSION` (§13.7).
-9. **Hooks.** No plugin and no skills since 3.0.0; a `~/.local/bin/claude-plan` link into the
-   checkout is removed. With `CWS_HOOKS=1` the six
-   prompt-quality and guard entries are written into each profile's `settings.json` (an older
+5. **Claude config dirs** (§3.3): for each, **retention** and **hooks** (§3.4). Nothing is linked
+   between them and nobody is signed in: logins are the app's (T3 Code's providers, an IDE).
+6. **Commands.** Symlinks `claude-audit claude-search claude-sessions claude-md-email
+   claude-delete claude-hook-notfound claude-hook-vague claude-guard claude-retro claude-t3-sync
+   claude-area` into `~/.local/bin`; removes `claude-plan` and `claude-vscode` links into the
+   checkout (gone in 3.0.0 / 3.1.0).
+7. **VS Code.** Removes `claudeCode.claudeProcessWrapper` from the user `settings.json` when it
+   still names `~/.local/bin/claude-vscode` (macOS `~/Library/Application Support/Code/User`, WSL
+   `~/.vscode-server/data/Machine`, else `~/.config/Code/User`; a JSONC file naming it is
+   reported, not edited). Installs the extension when `code --list-extensions --show-versions`
+   differs from `VERSION` (§13.7).
+8. **Hooks.** No plugin and no skills since 3.0.0. With `CWS_HOOKS=1` the six
+   prompt-quality and guard entries are written into each config dir's `settings.json` (an older
    group holding only our hook is brought up to date); off, ours are removed.
-10. **yazi** (if enabled). Renders `yazi.toml`, copies the glow styles, `md-email.css`,
+9. **yazi** (if enabled). Renders `yazi.toml`, copies the glow styles, `md-email.css`,
     `md2html.sh`; installs the `piper` plugin.
-11. **`~/.zshrc`.** A block between `# >>> claude-worksessions >>>` and `# <<< claude-worksessions <<<`
+10. **`~/.zshrc`.** A block between `# >>> claude-worksessions >>>` and `# <<< claude-worksessions <<<`
     with `PATH=$HOME/.local/bin:$PATH` and `source <repo>/shell/worksessions.zsh`. Identical →
     "block up to date"; different → replaced; absent → appended. Warns about legacy lines.
-12. **Done.** Once a day, fetches tags and prints a notice when a newer release exists; warns if the
+11. **Done.** Once a day, fetches tags and prints a notice when a newer release exists; warns if the
     login shell isn't zsh.
 
 **Rendering** (`render SRC DST`): replaces `{{KEY}}` (`[A-Z_]+`) from the environment. A missing
 key aborts that file and leaves the target untouched. Identical output → "unchanged"; otherwise
 back up and write.
 
-### 3.3 Profiles
+### 3.3 Claude config dirs
 
-Each profile is `~/.claude-<name>`. The shared profile holds real `SHARED_ITEMS`: `projects
-sessions session-env history.jsonl file-history shell-snapshots skills plugins mcp` (created if
-missing). Every other profile gets each item as a symlink to the shared one; a real file or folder
-in the way is left alone with a warning. `~/.claude` is linked to the shared profile only if it
-doesn't exist.
-
-**Gateway profiles** (`CWS_PROFILE_<p>_BASE_URL` set): `settings.json` `env.ANTHROPIC_BASE_URL`,
-and `env.ANTHROPIC_AUTH_TOKEN` if given at the (hidden) prompt; file mode `600`.
+Each dir in `CWS_CLAUDE_HOMES` is created if missing and otherwise left as it is: links between
+them made by releases before 3.1 (shared `projects`, `history.jsonl`, …) and `~/.claude` stay.
 
 **Retention:** `cleanupPeriodDays` is set to 3650 where absent; a shorter explicit value is left
 and warned about.
 
-### 3.4 Hooks registered in every profile's `settings.json`
+### 3.4 Hooks registered in every config dir's `settings.json`
 
 | Event | Matcher | Command | Timeout (s) |
 |---|---|---|---|
@@ -213,12 +201,13 @@ Written atomically; invalid JSON is reported and left alone.
 
 ### 3.5 `uninstall.sh`
 
-Removes: the ten `~/.local/bin` links that point into the repo; the `~/.zshrc` block (after a
-backup); the VS Code wrapper setting where it equals the wrapper path; the extension; the pre-2.35 hook
-commands from every `~/.claude-*/settings.json` (dropping empty groups, events and `hooks`); a
-`worksessions` plugin left by 2.35–2.38 and its marketplace, from every profile; the config link. Keeps: the work root, `_config/`,
-profiles and history, shared-item links, `~/.claude`, gateway env, retention, sign-in markers,
-yazi config, packages.
+Removes: the `~/.local/bin` links that point into the repo (old `claude-plan`/`claude-vscode`
+ones too); the `~/.zshrc` block (after a backup); the VS Code wrapper setting where it equals the
+old `claude-vscode` path; the extension; our hook commands from `~/.claude/settings.json` and
+every `~/.claude-*/settings.json` (dropping empty groups, events and `hooks`); a `worksessions`
+plugin left by 2.35–2.38 and its marketplace, from every config dir; the config link. Keeps: the
+work root, `_config/`, the Claude config dirs and history, links between them, retention, yazi
+config, packages.
 
 ---
 
@@ -226,8 +215,9 @@ yazi config, packages.
 
 On sourcing: loads the config (§2.2); sets `CWS_PYTHON` (`/usr/bin/python3`, else `python3`),
 `CWS_CONFIG`, `CLAUDE_WORK_ROOT` (`CWS_WORK_ROOT` → `CLAUDE_WORK_ROOT` → `~/work_sessions`);
-defaults `CWS_PROFILES`, `CWS_DEFAULT_PROFILE`, `CWS_TICKET_EXAMPLE`, `CWS_TASK_TYPES`; exports
-`CLAUDE_CONFIG_DIR=~/.claude-$CWS_DEFAULT_PROFILE` so a bare `claude` uses the default profile.
+resolves `CWS_CLAUDE_HOMES` (else `~/.claude-<p>` per old `CWS_PROFILES` name, else `~/.claude`);
+defaults `CWS_TICKET_EXAMPLE`, `CWS_TASK_TYPES`. It doesn't touch `CLAUDE_CONFIG_DIR` (before 3.1
+it exported the default profile's).
 
 ### 4.1 `claude-new`
 
@@ -235,16 +225,15 @@ defaults `CWS_PROFILES`, `CWS_DEFAULT_PROFILE`, `CWS_TICKET_EXAMPLE`, `CWS_TASK_
 
 | Option | Effect |
 |---|---|
-| `-p/--profile NAME` | must be in `CWS_PROFILES` (`_cws_check_profile`) |
 | `-t/--ticket T` | ticket |
 | `-T/--type T` | task type |
 | `-g/--goal G`, `--done TEXT` | goal and done-when |
 | `--path DIR` (repeatable) | a folder outside the request that is part of the work; must exist; stored absolute in `paths` |
 | `-n/--no-audit`, `-a/--audit` | audit off; don't ask |
-| `-c/--code` | open VS Code instead of starting Claude |
-| `--prompt TEXT` | first prompt (not with `-c`) |
-| `-l/--list` | 15 newest request folders with `[profile] ticket type no-audit` |
-| `-L/--profiles` | profiles with `default`/`shared` tags, description, gateway URL, missing-dir warning |
+| `-A/--project P`, `-F/--front T` | `{project}`, `{type}` in `CWS_AFTER_NEW_CMD` (T3 sidebar placement) |
+| `--prompt TEXT` | `{prompt}` in `CWS_OPEN_CMD` |
+| `--new` | no offer to continue in a recent folder on the ticket |
+| `-l/--list` | 15 newest request folders with `ticket type no-audit` |
 | `-h/--help` | usage |
 
 A first word shaped like a ticket (`^[A-Z][A-Z0-9]+-[0-9]+$`) is taken as the ticket when `-t` is
@@ -256,21 +245,22 @@ absent. The rest is the name.
 2. `Jira ticket (e.g. <example>, or Other):` — normalised by `_claude_new_ticket` (uppercased,
    spaces removed; `OTHER`/`NONE`/`-` → `Other`; else must match the ticket regex). Loops on a
    terminal; fails without one.
-3. Profile menu (more than one profile, no `-p`): number or name; default `CWS_DEFAULT_PROFILE`.
-   Then `~/.claude-<profile>` must exist; `-c` needs `code` on PATH.
-4. Task type (no `-T`): the guess from `_cws_guess_type` and the list from `_cws_task_types`
+3. Task type (no `-T`): the guess from `_cws_guess_type` and the list from `_cws_task_types`
    (types used in past folders, newest first, then the seeds). Enter = guess, number = pick, `-` =
    none, other text = literal. Without a terminal: the guess.
-5. `Goal — what should this session deliver? [name]:` and `Done when (Enter to skip):` (terminal
+4. `Goal — what should this session deliver? [name]:` and `Done when (Enter to skip):` (terminal
    only, no `-g`). Blank goal = name.
-6. `Count it in the weekly review and daily recap? [Y/n]:` (terminal only, neither `-n` nor `-a`).
+5. `Count it in the weekly review and daily recap? [Y/n]:` (terminal only, neither `-n` nor `-a`).
 
 **Folder:** `$CLAUDE_WORK_ROOT/$(date +%Y/%m/%d/%H-%M-%S)_<slug>`. Slug: lowercase, non-`[a-z0-9]`
 → `-`, runs collapsed, trimmed, cut to 60, `session` if empty. An existing name gets `-2`, `-3`, …
 
-**`.session.json`** (§5.1) written with indent 2. Prints `→ <profile> <ticket> [<type>] <relpath>`,
-`cd`s in, then either `code -n <dir>` (`-c`) or
-`CLAUDE_CONFIG_DIR=~/.claude-<profile> claude [<prompt>]`, and on exit writes `ended_at`.
+**`.session.json`** (§5.1) written with indent 2. Prints `→ <ticket> [<type>] <relpath>`, `cd`s
+in, runs `CWS_AFTER_NEW_CMD` (failure ignored), then `CWS_OPEN_CMD` (its status is `claude-new`'s;
+empty → prints the folder path). `_cws_run_template` replaces `{dir} {title} {prompt} {project}
+{type}` with `${(q)…}`-quoted values and `eval`s the result, so each value is one word and an
+empty one is `''`. Continuing in a recent folder runs `CWS_OPEN_CMD` only. `ended_at` is never
+written: nothing waits for the app. Removed in 3.1.0: `-p`, `-L`, `-c/--code`, `--cli`, `--t3`.
 
 `_cws_guess_type` substring rules: permission/access/rbac/grant/entitlement → `permissions`;
 error/fail/debug/broken/timeout/incident/outage → `job errors`; secret/security/vulnerab/gdpr/masking
@@ -278,11 +268,10 @@ error/fail/debug/broken/timeout/incident/outage → `job errors`; secret/securit
 setup/new → `new features`; doc/guide/runbook → `documentation`; investigat/analys/analyz/check/
 audit/why → `investigation`.
 
-### 4.2 `claude-resume [-p PROFILE] [--] [claude args…]`
+### 4.2 `claude-resume [--] [claude args…]`
 
-Only the first argument is checked for `-p`; a following `--` is dropped. No remaining arguments
-→ `--resume` (the picker). Needs `~/.claude-<profile>`. Runs
-`CLAUDE_CONFIG_DIR=<dir> command claude "$@"`.
+A leading `--` is dropped. No remaining arguments → `--resume` (the picker). Runs
+`command claude "$@"` with the shell's own `CLAUDE_CONFIG_DIR`.
 
 ### 4.3 `claude-type`
 
@@ -320,7 +309,7 @@ folder's `.scope.json`, and appends a `goal` event to `.quality.jsonl`. See
 | Field | Set by | Notes |
 |---|---|---|
 | `name`, `slug` | `claude-new` | |
-| `profile` | `claude-new` | the only source of a session's profile for audit and `claude-vscode` |
+| `profile` | `claude-new` before 3.1 | ignored since 3.1 (the app picks the login) |
 | `ticket` | `claude-new` | `PREFIX-123` or `Other` |
 | `task_type` | `claude-new`, `claude-type --folder`, sidebar | the folder default |
 | `session_types` | `claude-type`, sidebar | `{session id: type}`; wins over `task_type` |
@@ -385,14 +374,15 @@ Every run lists weekdays up to today with no activity file.
 | summary | the tracker's 14 headers (`REVIEW_COLUMNS`, including its own spelling "Refernce Architectures"), first header `Day` or `Week`, + `Task Type` unless `--no-type` |
 | breakdown | row_id, week, task, ticket, utilization, hours (rounded up to 0.5 h), hours_exact, sessions, meetings, emails, chats, confirmed, declared, auto_mapped, inferred, standalone, flags_from, jira_status, flag_evidence, comments_from, task_types, subject_ids, subjects |
 | `--detail` | date, weekday, start, end, source, task, ticket, task_type, title, subject, duration, duration_exact, worked, scheduled, counterparties, detail, cost_usd, event_id, subject_id, session_id, row_id |
-| `--sessions` | date, weekday, start, end, worked_h, worked_exact, elapsed, profile, ticket, task_type, title, folder, git_branch, turns, cost_usd, lines_added, lines_removed, models, last_prompt, session_id, cli_version |
+| `--sessions` | date, weekday, start, end, worked_h, worked_exact, elapsed, ticket, task_type, title, folder, git_branch, turns, cost_usd, lines_added, lines_removed, models, last_prompt, session_id, cli_version |
 | `--by-type` | task_type, sessions, hours, hours_exact, share, tickets, titles |
 | `--reconcile` | side, status, ticket, task, summary, jira_status, updated, hours, activities, note |
 
 ### 6.3 Transcripts → session rows (`gather`)
 
-1. `transcript_files()` — `*.jsonl` under each `~/.claude-<profile>/projects` (links followed,
-   `agent-*` skipped, de-duplicated by real path). Ids in `no-audit.txt` are skipped.
+1. `transcript_files()` — `*.jsonl` under each `CLAUDE_HOMES` dir's `projects` (links followed,
+   `agent-*` skipped; a projects dir reached twice is walked once, a real path read once, and a
+   session id already found in an earlier home skipped). Ids in `no-audit.txt` are skipped.
 2. `read_session` — timestamps (tz-aware, sorted), turn starts (earliest timestamp per
    `promptId`), last `cost-state`, `aiTitle`, `lastPrompt`, the opening prompt and up to 40 prompts
    × 400 chars (for matching), first `cwd`/`gitBranch`/`version`; `cwd` through `moved_path`.
@@ -407,7 +397,7 @@ Every run lists weekdays up to today with no activity file.
 turn's last event to the next turn's start, up to `read_cap` (120 s); the last turn gets no reading
 credit; fewer than two events = 0. `worked_h` is rounded up to `--round-to`.
 
-**Attribution:** profile only from `.session.json` (else `unknown`); `task_type` =
+**Attribution:** ticket and type only from `.session.json`; `task_type` =
 `session_types[id]` else the folder's; a declared `Other` ticket = none; declared tickets in
 `ignore_tickets` are dropped.
 
@@ -503,10 +493,10 @@ through `moved_path` (else the project folder name); sorted newest first.
 ```
 { work_root,
   sessions: [{ id, mtime, cwd, in_work_root, title, last_prompt, first_prompt|null, started|null,
-               written:[abs], request: null | {path, name, started, ticket, task_type, profile,
+               written:[abs], request: null | {path, name, started, ticket, task_type,
                files:[rel], files_truncated}, audited, artifacts:[abs],
                deletable:{ok, why:[], blocked:[]} }],
-  requests: [{ path, name, started, ticket, task_type, profile, files, files_truncated, mtime }] }
+  requests: [{ path, name, started, ticket, task_type, files, files_truncated, mtime }] }
 ```
 
 - `title`/`last_prompt` from the transcript's tail (last 512 KiB; whole file if either is missing);
@@ -566,8 +556,10 @@ haiku` (stdin, cwd temp dir, 240 s); keeps Claude's picks with its reason; on fa
 local ranking.
 
 **Output:** header, per result rank/level/time span/worked/task·ticket/title/why/snippet (220 chars)
-and `cd <folder> && claude-resume -p <profile> --resume <id>`. On a terminal (no `--no-pick`) it
-offers to resume one (`os.execvp("claude", …)` with the profile's `CLAUDE_CONFIG_DIR`). CSV columns:
+and `cd <folder> && [CLAUDE_CONFIG_DIR=<home>] claude --resume <id>`: the home its transcript is in
+(`home_of`), named only when it isn't what a bare `claude` uses (`resume_config_dir`). On a
+terminal (no `--no-pick`) it offers to resume one (`os.execvp("claude", …)` with that
+`CLAUDE_CONFIG_DIR`), or, when `CWS_OPEN_CMD` opens in T3 (or `--t3`), opens its T3 thread. CSV columns:
 rank, level, score, session_id, start, end, worked, task, ticket, title, folder, why, snippet,
 resume.
 
@@ -583,7 +575,7 @@ resume.
 request folder goes when empty; restorable) → `--check` stops → confirm (`y`/`yes`; no TTY without
 `--yes` refuses) → `delete()`.
 
-**`delete()`** moves `leftovers(sid)` from every profile — `projects/*/<sid>.jsonl`,
+**`delete()`** moves `leftovers(sid)` from every Claude config dir — `projects/*/<sid>.jsonl`,
 `projects/*/<sid>/`, `file-history/<sid>`, `session-env/<sid>` (de-duplicated by real path) — plus
 the request folder when `empty_request` (no visible files, only session, strictly inside the root),
 then removes the session's pin. Files the session wrote are never touched.
@@ -679,14 +671,7 @@ fragment to stdout.
 Stylesheet: Calibri/Arial 11pt black; h1–h3 16/14/12pt; tables collapsed, 1px #999 borders, header
 background #e8eef7; code Consolas 10pt on #f3f3f3.
 
-### 12.2 `claude-vscode`
-
-`claude-vscode <claude> [args…]`, set as the Claude extension's `claudeCode.claudeProcessWrapper`.
-Walks up from `$PWD` to the first readable `.session.json`, matches
-`"profile"\s*:\s*"([A-Za-z0-9_]+)"`, and if `~/.claude-<profile>` exists exports
-`CLAUDE_CONFIG_DIR` to it; then `exec "$@"`. No arguments: exit 2.
-
-### 12.3 yazi
+### 12.2 yazi
 
 `yazi.toml` (rendered) adds a Markdown preview with glow (via the `piper` plugin), `Enter` on `.md`
 → `md2html.sh` (`pandoc -s` with `md-email.css` as a `<style>` block, opened in the browser), and
@@ -710,7 +695,7 @@ and a tree `claudeWorksessions.sessions`.
 coalesces concurrent calls, reloads pins, relinks tabs and re-renders.
 
 Triggers: the Refresh command; setting changes; file watchers (debounced 1 500 ms) on
-`~/.claude-<shared>/projects/**/*.jsonl` and `<work root>/[0-9]*/*/*/*/**`; a bin watcher on
+each `CWS_CLAUDE_HOMES` dir's `projects/**/*.jsonl` (real paths, deduplicated) and `<work root>/[0-9]*/*/*/*/**`; a bin watcher on
 `*/manifest.json` (re-render only); a pins watcher on `_config/pinned.json` (reload pins); after
 set-type, delete, restore, purge.
 
@@ -736,7 +721,7 @@ names. Context keys `claudeWorksessions.filtered` / `filtering` drive the toolba
   sessions `claude-sessions` marks `active` (a live Claude process has them open).
 - **Sorts**: `activity` (mtime), `started`, `name` (locale, numeric).
 - **Search** (`matches`): every word must appear in the session's title, prompts, id, or its
-  request's name, ticket, type, profile, path or file names.
+  request's name, ticket, type, path or file names.
 - **Files** (`shownFiles`): narrowed only by words that match nothing but file names; the label
   shows `shown of total` when narrowed, and the size (`request.size`, or the sum of the listed
   files when narrowed). `fileChildren` builds one folder level at a time.
@@ -755,14 +740,14 @@ change.
 | Command | Action |
 |---|---|
 | New request | pending tab running `claude-new` in the work root |
-| Open (session click) | focus its tab, else `claude-resume [-p <profile>] --resume <id>` in its cwd |
-| New session in this request | pending tab running `CLAUDE_CONFIG_DIR=~/.claude-<profile> claude` in the folder |
+| Open (session click) | focus its tab, else `[CLAUDE_CONFIG_DIR=<config_dir>] claude-resume --resume <id>` in its cwd (`config_dir` from `claude-sessions`) |
+| New session in this request | pending tab running `claude` in the folder (the terminal's login) |
 | Search… / with Claude… | `claude-search <q> --csv - --no-pick --limit 25 [--ai]` → quick pick |
 | Audit… | period and view → `claude-audit …` in a terminal |
 | Recent sessions… | quick pick of visible sessions |
 | Set task type… | writes `.session.json` directly (`M.setTaskType`) for a request or a session |
 | Go to request… | open in a new window, reveal, or new session |
-| Run skill… | skills from `~/.claude-<shared>/skills` then each profile's; `claude-new --prompt '/<skill>' '<name>'` |
+| Run skill… | skills from each `CWS_CLAUDE_HOMES` dir's `skills`; `claude-new --prompt '/<skill>' '<name>'` |
 | Resume session by id… | `claude-resume --resume <id>` |
 | Filter… / Clear filters / Sort… / Change grouping / Refresh / Clear search / Focus search | view state |
 | Pin / Unpin | toggle in `pinned.json` |
@@ -820,18 +805,16 @@ From reading the code; each is a candidate for an issue.
    `OneDrive - <org>` path); with no request folders the glob errors.
 4. `claude-type` identifies "this session" as the folder's most recently modified transcript; two
    concurrent sessions in one folder can be mislabelled.
-5. `ended_at` is never written for `claude-new -c`, or if the shell dies.
-6. Stale references: the shell header and `config.example.env` still mention per-profile
-   `claude-<name>` aliases (removed); `folder-layout.md` and `context.example.md` say `CLAUDE.md`
-   imports `context.md` (it inlines it).
+5. `ended_at` is never written: nothing waits for the app `CWS_OPEN_CMD` opens.
+6. Stale references: `folder-layout.md` and `context.example.md` say `CLAUDE.md` imports
+   `context.md` (it inlines it).
 7. `--no-brew` doesn't stop the Command Line Tools, Homebrew or Claude Code installs; `--yes` on a
-   first run leaves the example profiles and descriptions.
+   first run leaves the example `CWS_CLAUDE_HOMES`.
 8. Rendered files (`CLAUDE.md`, skills, yazi) lag the repo until `install.sh` runs.
 
 **claude-audit**
 
-9. Profile comes only from `.session.json`; a session outside a request folder is `unknown` even
-   though its profile dir is known.
+9. Which Claude login ran a session isn't recorded; resume lines take the home its transcript is in.
 10. `audit: false` is checked on the cwd only, not on a folder assigned via `session-folders.json`.
 11. `moved_path` takes the first matching prefix in file order, not the longest.
 12. `(unmapped)` rows take a share of utilisation but aren't pasted, so pasted percentages can sum
@@ -855,15 +838,15 @@ From reading the code; each is a candidate for an issue.
 19. `claude-retro`: `ASKS` includes "or", so most trailing questions with "or" count.
 20. `claude-md-email`: a self-closing tag with no CSS rule is rewritten with a doubled slash
     (`<br />` → `<br //>`); only simple tag selectors are supported.
-21. `claude-vscode`: stops at the nearest `.session.json` even if it has no profile.
+21. `claude-new` runs `CWS_OPEN_CMD` / `CWS_AFTER_NEW_CMD` with `eval`: the templates are your
+    own config, trusted like a shell alias.
 22. Hooks: counter files in the temp dir are never cleaned; `claude-hook-vague` counts confirmations
     and slash commands towards its two prompts; `does not exist` in a non-Bash tool's normal output
     still triggers `claude-hook-notfound`.
 
 **VS Code extension**
 
-23. Watchers are bound to the configured work root at activation, and only the shared profile's
-    `projects` is watched.
+23. Watchers are bound to the configured work root and Claude config dirs at activation.
 24. Tabs are renamed only when active; relinking after reload is by terminal name.
 25. Set task type writes `.session.json` itself (not atomic, no trailing newline) instead of calling
     `claude-type`.
@@ -908,6 +891,6 @@ the branch; merging releases.
 | `test_quality.py` | hooks, `claude-retro` signals, judging, report, history |
 | `test_guard.py` | [guard LLD §18](guard/lld.md#18-tests) |
 | `test_md_email.py` | CSS parsing, inlining, rendering, clipboard per OS |
-| `test_shell.py` | `claude-new`, `claude-resume`, `claude-type`, `claude-goal`, `claude-vscode`, install and uninstall (hooks, wrapper, extension, profiles) |
+| `test_shell.py` | `claude-new` (open/after-new templates, removed options), `claude-resume`, `claude-type`, `claude-goal`, install and uninstall (hooks, old wrapper, extension, Claude config dirs) |
 | `test_vscode.py` + `vscode/test/*.js` | the extension model and UI, packaging |
 | `test_smoke.py` | the Python scripts load as modules |

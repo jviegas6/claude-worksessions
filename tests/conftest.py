@@ -34,7 +34,7 @@ def home(tmp_path, monkeypatch):
     root.mkdir(parents=True)
     conf = h / ".config" / "claude-worksessions" / "config.env"
     conf.parent.mkdir(parents=True)
-    conf.write_text('CWS_WORK_ROOT="{}"\nCWS_PROFILES="personal work"\n'.format(root))
+    conf.write_text('CWS_WORK_ROOT="{}"\nCWS_CLAUDE_HOMES="~/.claude-personal ~/.claude-work"\n'.format(root))
     for k in list(os.environ):
         if k.startswith("CWS_") or k == "CLAUDE_WORK_ROOT":
             monkeypatch.delenv(k)

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""claude-sessions: the most recent Claude sessions across every profile, newest first.
+"""claude-sessions: the most recent Claude sessions across every Claude home (CWS_CLAUDE_HOMES), newest first.
 
   claude-sessions          the 30 most recent
   claude-sessions 50       the 50 most recent
   claude-sessions -a       all of them
   claude-sessions --json   the same as JSON, with each session's title, last prompt, the files
                            it wrote, whether a Claude process has it open (active), and its
-                           request folder (ticket, task type, profile, files and their size)
+                           request folder (ticket, task type, files and their size)
                            -- for the VS Code sidebar. Its "requests" are the request folders
                            no listed session with a prompt belongs to, so new and
                            session-less requests show too
@@ -201,7 +201,7 @@ def waiting_of(raw):
 
 
 def request_info(folder, sid):
-    """Name, ticket, task type, profile and waiting flag of a request folder, from its .session.json."""
+    """Name, ticket, task type and waiting flag of a request folder, from its .session.json."""
     meta = CA.session_meta(folder)
     try:
         with open(os.path.join(folder, ".session.json")) as fh:
@@ -214,7 +214,6 @@ def request_info(folder, sid):
             "started": request_started(folder, when if isinstance(when, str) else None),
             "ticket": meta["ticket"],
             "task_type": meta["session_types"].get(sid) or meta["task_type"],
-            "profile": "" if meta["profile"] == "unknown" else meta["profile"],
             "waiting": waiting_of(raw)}
 
 
@@ -334,7 +333,7 @@ def alive(pid):
 
 def running_sessions():
     """Ids of sessions a live Claude process has open: from Claude Code's own records
-    (~/.claude-*/sessions/<pid>.json), and from command lines that name a session
+    (<home>/sessions/<pid>.json), and from command lines that name a session
     (claude --resume ID), which covers the moment before a record is written."""
     ids = set()
     for cfg in CA.CONFIG_DIRS:
@@ -440,6 +439,8 @@ def as_json(rows):
                 sizes[folder] = files_size(folder, request["files"])
             request["size"] = sizes[folder]
         out.append({"id": sid, "mtime": mtime, "cwd": cwd,
+                    # CLAUDE_CONFIG_DIR to resume it with ("": the default one)
+                    "config_dir": CA.resume_config_dir(CA.home_of(path)),
                     "in_work_root": cwd == root or cwd.startswith(root + os.sep),
                     "title": title, "last_prompt": last,
                     "first_prompt": None if first == "(no prompt)" else first,
@@ -495,8 +496,8 @@ def main():
         if cwd == HOME or cwd.startswith(HOME + os.sep):
             cwd = "~" + cwd[len(HOME):]
         print("{}  {}  {:<45}  {}".format(when, sid, cwd, first[:70]))
-    print("\n{} session(s). Resume one with:  claude-resume --resume <session-id>"
-          "   (from any profile)".format(len(rows)))
+    print("\n{} session(s). Resume one, in its folder, with:  claude-resume --resume <session-id>"
+          .format(len(rows)))
 
 
 if __name__ == "__main__":

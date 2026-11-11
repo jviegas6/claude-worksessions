@@ -1,5 +1,35 @@
 # Changelog
 
+## [3.1.0] — 2026-11-11
+
+- **No profiles.** The app that runs Claude picks the login: T3 Code's providers (one config dir
+  each), or the IDE. Gone: `claude-new -p` / `-L` and its profile menu, `claude-resume -p`,
+  `CWS_PROFILES`, `CWS_DEFAULT_PROFILE`, `CWS_SHARED_PROFILE`, `CWS_PROFILE_<name>_DESC` /
+  `_BASE_URL`, the export of `CLAUDE_CONFIG_DIR` in the shell, `install.sh --profiles`, its
+  gateway-token and sign-in steps, the `~/.claude` link and the links between `~/.claude-*` dirs
+  (existing ones are left as they are), and `claude-t3-sync --profile` / `CWS_T3_MODEL` (T3 uses
+  its default instance and model). `.session.json` no longer gets `profile`; older files keep it
+  and it is ignored, as is the `profile` column of `claude-audit --sessions`, now gone.
+- **Opening a request is one config line.** `CWS_OPEN_CMD` is the command `claude-new` runs once the
+  folder exists, with `{dir}`, `{title}`, `{prompt}`, `{project}` and `{type}` filled in,
+  shell-quoted; the default is T3 Code (`claude-t3-sync --open {dir} --prompt {prompt}`), and
+  `code {dir}` or any other app is a config change, not code. Empty: `claude-new` prints the
+  folder's path. `CWS_AFTER_NEW_CMD` runs first (the default places the request in T3's sidebar
+  with `claude-area`); empty runs nothing. Replaces `CWS_OPEN` and `claude-new -c` / `--cli` /
+  `--t3`; with `CWS_OPEN="t3"` and no `CWS_OPEN_CMD` line, the T3 default applies, and with no
+  `CWS_AFTER_NEW_CMD` line `claude-area` runs when installed, as before.
+- **`CWS_CLAUDE_HOMES`** lists the Claude config dirs whose transcripts `claude-audit`,
+  `claude-search`, `claude-sessions`, `claude-delete` and the sidebar read, and where `install.sh`
+  sets transcript retention and the hooks. Without it: `~/.claude-<name>` for each name in an old
+  `CWS_PROFILES`, else `~/.claude`. A projects dir two of them share through a link is read once,
+  and a session id already found in an earlier dir is not counted again.
+- **No `claude-vscode`.** `install.sh` takes `claudeCode.claudeProcessWrapper` out of VS Code's
+  settings when it still names the wrapper, and removes its link. The sidebar resumes a session on
+  the login it ran on (`config_dir` in `claude-sessions --json`), and `claude-search` prints
+  `CLAUDE_CONFIG_DIR=<dir> claude --resume <id>` when that isn't `~/.claude`.
+- `CWS_GUARD_PROFILE` is now `CWS_GUARD_CONFIG_DIR`, a path (the old name still works); the
+  judge journal records `judge_home` instead of `profile`.
+
 ## [3.0.0] — 2026-11-11
 
 - **No plugin, no skills.** The `worksessions` Claude Code plugin (`.claude-plugin/`) and its

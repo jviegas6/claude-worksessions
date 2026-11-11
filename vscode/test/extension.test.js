@@ -129,11 +129,11 @@ test("activates, renders every grouping and opens sessions in tabs", async () =>
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cws-ext-"));
   const root = path.join(dir, "ws");
   const A = { path: path.join(root, "2026/09/22/10-00-00_a"), name: "demo", ticket: "DATA-1",
-              task_type: "security", profile: "work" };
+              task_type: "security" };
   fs.mkdirSync(A.path, { recursive: true });
   const now = Date.now() / 1000;
   const data = { work_root: root, sessions: [
-    { id: "s1", mtime: now - 60, cwd: A.path, in_work_root: true, title: "Fix *the* job",
+    { id: "s1", mtime: now - 60, cwd: A.path, in_work_root: true, title: "Fix *the* job", config_dir: "/h/.claude-work",
       first_prompt: "first", last_prompt: "last", request: A },
     { id: "s0", mtime: now - 7200, cwd: root, in_work_root: true, title: null,
       first_prompt: "in the root", last_prompt: null, request: null },
@@ -155,22 +155,22 @@ test("activates, renders every grouping and opens sessions in tabs", async () =>
                                   "Work root — no request folder", "in the root"]);
   const [, s1] = items.find(([c]) => c.session && c.session.id === "s1");
   assert.match(s1.tooltip.value, /Fix \*the\* job/);
-  assert.match(s1.tooltip.value, /DATA-1 · security · work · 1m ago/);
+  assert.match(s1.tooltip.value, /DATA-1 · security · 1m ago/);
 
-  // open → a terminal tab running claude-resume with the profile; opening again reuses it
+  // open → a terminal tab resuming it on the login it ran on; opening again reuses it
   await fake.commands.get("claudeWorksessions.open")(items.find(([c]) => c.session?.id === "s1")[0]);
   assert.strictEqual(fake.terminals.length, 1);
   const t = fake.terminals[0];
   assert.strictEqual(t.name, "DATA-1 · Fix *the* job");
   assert.strictEqual(t.location, 2);
-  assert.deepStrictEqual(t.sent, ["claude-resume -p 'work' --resume 's1'"]);
+  assert.deepStrictEqual(t.sent, ["CLAUDE_CONFIG_DIR='/h/.claude-work' claude-resume --resume 's1'"]);
   await fake.commands.get("claudeWorksessions.open")(items.find(([c]) => c.session?.id === "s1")[0]);
   assert.strictEqual(fake.terminals.length, 1);
   items = allItems(p);
   assert.strictEqual(items.find(([c]) => c.session?.id === "s1")[1].iconPath.id, "terminal");
   assert.strictEqual(items.find(([c]) => c.kind === "request" && !c.request.root)[1].iconPath.id, "folder-active");
 
-  // a root session opens with no profile and no ticket in its name
+  // a root session on the default login: no CLAUDE_CONFIG_DIR, and no ticket in its name
   await fake.commands.get("claudeWorksessions.open")(items.find(([c]) => c.session?.id === "s0")[0]);
   assert.deepStrictEqual(fake.terminals[1].sent, ["claude-resume --resume 's0'"]);
   assert.strictEqual(fake.terminals[1].name, "in the root");
@@ -202,7 +202,7 @@ test("activates, renders every grouping and opens sessions in tabs", async () =>
   const reqEl = { kind: "request", request: { ...A, sessions: [] } };
   await fake.commands.get("claudeWorksessions.addSession")(reqEl);
   const nt = fake.terminals[2];
-  assert.deepStrictEqual(nt.sent, ['CLAUDE_CONFIG_DIR="$HOME/.claude-work" claude']);
+  assert.deepStrictEqual(nt.sent, ["claude"]);          // the app's own login
   assert.strictEqual(nt.name, "DATA-1 · demo");
   data.sessions.push({ id: "s2", mtime: Date.now() / 1000, cwd: A.path, in_work_root: true,
                        title: "New work", first_prompt: "go", last_prompt: "go", request: A });
@@ -249,14 +249,14 @@ async function world(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cws-cmd-"));
   const root = path.join(dir, "ws"), bin = path.join(dir, "bin");
   const A = { path: path.join(root, "2026/09/22/10-00-00_a"), name: "demo", ticket: "DATA-1",
-              task_type: "security", profile: "work" };
+              task_type: "security" };
   fs.mkdirSync(A.path, { recursive: true });
   fs.mkdirSync(bin);
   fs.writeFileSync(path.join(A.path, ".session.json"), JSON.stringify({ name: "demo", task_type: "security" }));
   const now = Date.now() / 1000;
   const data = { work_root: root, sessions: [
     { id: "s1", mtime: now - 60, cwd: A.path, in_work_root: true, title: "Fix the firewall",
-      first_prompt: "first", last_prompt: "open port 443", request: A },
+      config_dir: "/h/.claude-work", first_prompt: "first", last_prompt: "open port 443", request: A },
     { id: "s0", mtime: now - 7200, cwd: root, in_work_root: true, title: "Root chat",
       first_prompt: "hi", last_prompt: null, request: null },
   ] };
@@ -265,7 +265,7 @@ async function world(t) {
   fs.writeFileSync(path.join(dir, "search.csv"),
     'rank,level,score,session_id,start,end,worked,task,ticket,title,folder,why,snippet,resume\n' +
     `1,strong,9,s1,2026-09-22T10:00,,,,DATA-1,Fix the firewall,${A.path},"title: firewall","you: ""open port"""` +
-    `,cd x && claude-resume -p work --resume s1\n` +
+    `,cd x && CLAUDE_CONFIG_DIR=~/.claude-work claude --resume s1\n` +
     `2,likely,3,zz-outside,2026-09-01T10:00,,,,,Elsewhere,/repo,why,snip,cd /repo && claude-resume --resume zz-outside\n`);
   fs.writeFileSync(path.join(bin, "claude-search"),
     `#!/bin/sh\necho "$*" >> "${dir}/search.log"\ncase "$*" in *nothing*) exit 0;; *broken*) echo bad >&2; exit 1;; esac\ncat "${dir}/search.csv"\n`,
@@ -323,7 +323,7 @@ test("the search box filters the tree, counts matches and searches contents on E
   // the search runs claude-search in the background: wait for its tab, not a fixed time
   for (let i = 0; i < 100 && !w.fake.terminals.length; i++) await new Promise(r => setTimeout(r, 50));
   assert.match(fs.readFileSync(path.join(w.dir, "search.log"), "utf8"), /^firewall --csv - --no-pick --limit 25$/m);
-  assert.deepStrictEqual(w.fake.terminals.at(-1).sent, ["claude-resume -p 'work' --resume 's1'"]);
+  assert.deepStrictEqual(w.fake.terminals.at(-1).sent, ["CLAUDE_CONFIG_DIR='/h/.claude-work' claude-resume --resume 's1'"]);
 
   // clear: the box is told, the tree shows everything again
   await w.run("clearFilter");
@@ -426,14 +426,14 @@ test("recent sessions, go to request, skills, resume by id, new window", async t
     return items[0];
   });
   await w.run("recentSessions");
-  assert.deepStrictEqual(w.fake.terminals.at(-1).sent, ["claude-resume -p 'work' --resume 's1'"]);
+  assert.deepStrictEqual(w.fake.terminals.at(-1).sent, ["CLAUDE_CONFIG_DIR='/h/.claude-work' claude-resume --resume 's1'"]);
   w.fake.answers.push(undefined);
   await w.run("recentSessions");
 
   for (const [how, check] of [
     ["window", () => assert.deepStrictEqual(w.fake.executed.at(-1), ["vscode.openFolder", { fsPath: w.A.path }])],
     ["explorer", () => assert.deepStrictEqual(w.fake.executed.at(-1), ["revealInExplorer", { fsPath: w.A.path }])],
-    ["session", () => assert.deepStrictEqual(w.fake.terminals.at(-1).sent, ['CLAUDE_CONFIG_DIR="$HOME/.claude-work" claude'])],
+    ["session", () => assert.deepStrictEqual(w.fake.terminals.at(-1).sent, ["claude"])],
   ]) {
     w.fake.answers.push(items => { assert.deepStrictEqual(items.map(i => i.label), ["demo"]); return items[0]; },
                         items => items.find(i => i.how === how));

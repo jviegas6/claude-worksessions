@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """claude-guard: keeps a session on the request it was given. Claude Code hooks, registered
-by install.sh in each profile's settings.json, plus a report for reviewing what they saw.
+by install.sh in each Claude home's settings.json (CWS_CLAUDE_HOMES), plus a report for reviewing what they saw.
 
     claude-guard prompt     UserPromptSubmit: is this prompt a continuation of the session's
                             goal, a wider version of it, or a new objective (pivot)?
@@ -19,7 +19,7 @@ by install.sh in each profile's settings.json, plus a report for reviewing what 
 
 Every judge decision -- what it saw and what it said -- is also kept in
 <work root>/_audit/guard/judge.jsonl; your review marks go to reviews.jsonl next to it.
-CWS_GUARD_PROFILE picks the profile the judge runs under (default: the session's own).
+CWS_GUARD_CONFIG_DIR picks the Claude config dir the judge runs with (default: the session's own).
 
 The rules are plain and deterministic; only the prompt check asks a judge -- a separate,
 clean `claude -p` on a small model that sees the goal and done-when, the request folder's
@@ -176,8 +176,18 @@ def settings(conf):
     except ValueError:
         max_ext = 2
     return {"mode": mode if mode in MODES else "off", "model": conf.get("CWS_GUARD_MODEL") or "haiku", "ignore": ignore,
-            "timeout": timeout, "root": os.path.realpath(root), "profile": (conf.get("CWS_GUARD_PROFILE") or "").strip(),
+            "timeout": timeout, "root": os.path.realpath(root), "judge_home": judge_home_setting(conf),
             "max_ext": max_ext}
+
+
+def judge_home_setting(conf):
+    """The Claude config dir the judge runs with: CWS_GUARD_CONFIG_DIR, or ~/.claude-<name> for the
+    older CWS_GUARD_PROFILE; empty = the session's own (inherited CLAUDE_CONFIG_DIR)."""
+    d = (conf.get("CWS_GUARD_CONFIG_DIR") or "").strip()
+    if d:
+        return os.path.expanduser(d)
+    name = (conf.get("CWS_GUARD_PROFILE") or "").strip()
+    return os.path.join(HOME, ".claude-" + name) if name else ""
 
 
 def now():
@@ -398,23 +408,22 @@ def rules_text(root):
         return DEFAULT_RULES
 
 
-def judge_profile(cfg):
-    """The profile the judge runs under, and its environment: CWS_GUARD_PROFILE when set, else
-    the session's own (inherited CLAUDE_CONFIG_DIR). Returns (name, env, error)."""
+def judge_home(cfg):
+    """The Claude config dir the judge runs with, and its environment: cfg["judge_home"] when set,
+    else the session's own (inherited CLAUDE_CONFIG_DIR). Returns (dir or "inherited", env, error)."""
     env = dict(os.environ, **{JUDGE_ENV: "1"})
-    if cfg.get("profile"):
-        d = os.path.join(HOME, ".claude-" + cfg["profile"])
+    d = cfg.get("judge_home")
+    if d:
         if not os.path.isdir(d):
-            return cfg["profile"], env, "judge profile dir {} not found".format(d)
+            return d, env, "judge config dir {} not found".format(d)
         env["CLAUDE_CONFIG_DIR"] = d
-        return cfg["profile"], env, None
-    name = os.path.basename(os.environ.get("CLAUDE_CONFIG_DIR") or "").replace(".claude-", "", 1)
-    return name or "default", env, None
+        return d, env, None
+    return os.environ.get("CLAUDE_CONFIG_DIR") or "inherited", env, None
 
 
 def judge(job, cfg):
     """Ask the judge about one prompt. Returns (answer dict or None, error or None, ms)."""
-    profile, env, perr = judge_profile(cfg)
+    _home, env, perr = judge_home(cfg)
     if perr:
         return None, perr, 0
     first = not (job.get("recent") or job.get("literal"))
@@ -426,7 +435,7 @@ def judge(job, cfg):
         job.get("goal") or "(none)", job.get("done_when") or "(not stated)",
         ", ".join(job.get("files") or []) or "(none)", recent, answer, job["prompt"][:4000],
         "This is the session's first request: it defines the scope, so the verdict is continuation." if first else "")
-    # The profile's settings are loaded (a gateway profile keeps its URL and token there) with every
+    # That config dir's settings are loaded (a gateway login keeps its URL and token there) with every
     # hook switched off, so the judge never runs the guard or any other hook
     cmd = ["claude", "-p", "--settings", json.dumps({"disableAllHooks": True}), "--strict-mcp-config", "--model", cfg["model"], "--tools", "",
            "--no-session-persistence", "--system-prompt", rules_text(cfg["root"]) + "\nAnswer only via the JSON schema.",
@@ -518,7 +527,7 @@ def journal(sdir, job, cfg, ans, err, ms, blocked):
     tuned from them."""
     entry = {"id": decision_id(job), "ts": now(), "folder": os.path.relpath(sdir, cfg["root"]),
              "session_id": job["sid"], "prompt_no": job["no"], "mode": cfg["mode"], "model": cfg["model"],
-             "profile": judge_profile(cfg)[0], "judge_ms": ms, "goal": job.get("goal", ""),
+             "judge_home": judge_home(cfg)[0], "judge_ms": ms, "goal": job.get("goal", ""),
              "done_when": job.get("done_when", ""),
              "scope_before": "\n".join(job.get("recent") or []) or job.get("literal", ""),
              "prompt": job["prompt"][:4000], "enforced": blocked}

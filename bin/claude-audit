@@ -18,7 +18,7 @@ ticket per week, with the phase columns, Leave, Meetings & Interactions and a
 utilisation %. The detail is every session, meeting, email and chat behind it;
 each detail row's row_id names the summary row it rolls up into.
 
-Sessions come from the Claude transcripts (~/.claude-*/projects). Meetings, mail,
+Sessions come from the Claude transcripts (<home>/projects for each CWS_CLAUDE_HOMES dir). Meetings, mail,
 chats and out-of-office come from the day files Claude writes to _audit/activity/
 during a daily recap or weekly review -- this script cannot reach Microsoft 365
 itself. Days without a file show Claude sessions only, and the output says so.
@@ -74,8 +74,60 @@ def load_config():
 
 
 CONFIG = load_config()
-PROFILES = (CONFIG.get("CWS_PROFILES") or "personal work").split()
-CONFIG_DIRS = [os.path.join(HOME, ".claude-" + p) for p in PROFILES]
+
+
+def claude_homes(conf):
+    """The Claude config dirs whose transcripts are read: CWS_CLAUDE_HOMES (space-separated),
+    else ~/.claude-<name> for each name in the older CWS_PROFILES, else ~/.claude."""
+    homes = (conf.get("CWS_CLAUDE_HOMES") or "").split()
+    if homes:
+        return [os.path.expanduser(h) for h in homes]
+    names = (conf.get("CWS_PROFILES") or "").split()
+    if names:
+        return [os.path.join(HOME, ".claude-" + n) for n in names]
+    return [os.path.join(HOME, ".claude")]
+
+
+CLAUDE_HOMES = claude_homes(CONFIG)
+CONFIG_DIRS = CLAUDE_HOMES   # the name the other tools use
+
+# How claude-new opens a request (CWS_OPEN_CMD) and what it runs first (CWS_AFTER_NEW_CMD).
+# A config from before 3.1 has neither: CWS_OPEN="t3" means T3's command, and claude-area
+# placed every request, so those are the defaults when the line is missing altogether.
+T3_OPEN_CMD = "claude-t3-sync --open {dir} --prompt {prompt}"
+T3_AFTER_NEW_CMD = "claude-area --dir {dir} --pick {project} --type {type}"
+
+
+def open_cmd(conf=None):
+    conf = CONFIG if conf is None else conf
+    if "CWS_OPEN_CMD" in conf:
+        return conf["CWS_OPEN_CMD"]
+    return T3_OPEN_CMD if conf.get("CWS_OPEN") == "t3" else ""
+
+
+def opens_in_t3(conf=None):
+    return "claude-t3-sync" in open_cmd(conf)
+
+
+def home_of(transcript):
+    """The Claude home a transcript lives under (the part before /projects/), as listed in
+    CLAUDE_HOMES when one of them resolves to it."""
+    real = os.path.realpath(transcript)
+    root = real.split(os.sep + "projects" + os.sep)[0] if (os.sep + "projects" + os.sep) in real else ""
+    for h in CLAUDE_HOMES:
+        if root and os.path.realpath(h) == root:
+            return h
+    return root
+
+
+def resume_config_dir(home):
+    """The CLAUDE_CONFIG_DIR to resume a session from `home` with: "" when a bare `claude` uses
+    that dir anyway (~/.claude, or a link to the same place)."""
+    if not home or os.path.realpath(home) == os.path.realpath(os.path.join(HOME, ".claude")):
+        return ""
+    return home
+
+
 DEFAULT_ROOT = CONFIG.get("CWS_WORK_ROOT") or os.environ.get("CLAUDE_WORK_ROOT") or os.path.join(
     HOME, "work_sessions")
 # Exports live in their own folder; the root of CLAUDE_WORK_ROOT holds only session folders.
@@ -104,20 +156,27 @@ def hms(seconds):
 
 
 def transcript_files():
-    """All session transcripts, deduped by real path across both config dirs."""
-    seen, out = set(), []
+    """All session transcripts across CLAUDE_HOMES: a projects dir reached twice (one home
+    linking to another's) is read once, and a session id already found in an earlier home
+    is skipped, so a copied transcript isn't counted twice."""
+    seen, walked, earlier_ids, out = set(), set(), set(), []
     for cfg in CONFIG_DIRS:
         projects = os.path.join(cfg, "projects")
-        if not os.path.isdir(projects):
+        if not os.path.isdir(projects) or os.path.realpath(projects) in walked:
             continue
+        walked.add(os.path.realpath(projects))
+        ids = set()
         for dirpath, _dirnames, filenames in os.walk(projects, followlinks=True):
             for fn in filenames:
                 if not fn.endswith(".jsonl") or fn.startswith("agent-"):
                     continue  # subagent transcripts overlap their parent session
                 real = os.path.realpath(os.path.join(dirpath, fn))
-                if real not in seen:
-                    seen.add(real)
-                    out.append(real)
+                if real in seen or fn[:-6] in earlier_ids:
+                    continue
+                seen.add(real)
+                ids.add(fn[:-6])
+                out.append(real)
+        earlier_ids |= ids
     return out
 
 
@@ -136,9 +195,10 @@ def thread_title(d):
 
 
 def session_meta(cwd):
-    """Profile, Jira ticket and task type recorded by `claude-new` in the session folder."""
+    """Jira ticket and task type recorded by `claude-new` in the session folder; `found` says
+    whether it has a .session.json at all. A `profile` key in older files is ignored."""
     if not cwd:
-        return {"profile": "unknown", "ticket": "", "task_type": "", "session_types": {}, "audit": True}
+        return {"found": False, "ticket": "", "task_type": "", "session_types": {}, "audit": True}
     if cwd not in _meta_cache:
         found = {}
         meta = os.path.join(cwd, ".session.json")
@@ -148,7 +208,7 @@ def session_meta(cwd):
                     found = json.load(fh)
             except (ValueError, OSError):
                 found = {}
-        _meta_cache[cwd] = {"profile": found.get("profile") or "unknown",
+        _meta_cache[cwd] = {"found": bool(found),
                             "ticket": (found.get("ticket") or "").strip(),
                             # what kind of work this is: permissions, job errors, ...
                             # the folder's default, then per-session overrides by id
@@ -181,7 +241,7 @@ def meta_for(cwd, session_id):
     """A session's metadata: from the folder it ran in, or from the request folder it
     was assigned to."""
     meta = session_meta(cwd)
-    if meta["ticket"] or meta["task_type"] or meta["profile"] != "unknown":
+    if meta["ticket"] or meta["task_type"] or meta["found"]:
         return meta
     assigned = session_folder(session_id)
     return session_meta(assigned) if assigned else meta
@@ -198,10 +258,6 @@ def no_audit_ids(path=NO_AUDIT_PATH):
             return {ln.split("#")[0].strip() for ln in fh} - {""}
     except OSError:
         return set()
-
-
-def profile_for(cwd):
-    return session_meta(cwd)["profile"]
 
 
 def first_prompt_text(message):
@@ -597,7 +653,6 @@ def build_row(session, busy_cap, read_cap, slot):
         "worked_h": round(round_up(worked, slot) / 3600.0, 2),
         "worked_exact": hms(worked),
         "elapsed": hms((end - start).total_seconds()),
-        "profile": meta_for(info["cwd"], sid)["profile"],
         "ticket": meta_for(info["cwd"], sid)["ticket"],
         # a session's own type wins over the folder's default: one request folder can
         # hold sessions that went different ways
@@ -626,7 +681,7 @@ def build_row(session, busy_cap, read_cap, slot):
 
 
 COLUMNS = [
-    "date", "weekday", "start", "end", "worked_h", "worked_exact", "elapsed", "profile", "ticket",
+    "date", "weekday", "start", "end", "worked_h", "worked_exact", "elapsed", "ticket",
     "task_type", "title",
     "folder", "git_branch", "turns", "cost_usd", "lines_added", "lines_removed",
     "models", "last_prompt", "session_id", "cli_version",
@@ -1901,9 +1956,9 @@ def print_by_type_table(rows):
 
 
 def print_session_table(rows):
-    heads = ["Date", "Start", "End", "Worked", "Profile", "Ticket", "Type", "Title"]
+    heads = ["Date", "Start", "End", "Worked", "Ticket", "Type", "Title"]
     print_grid(heads, [[r["date"], r["start"][11:16], r["end"][11:16], r["worked_exact"],
-                        r["profile"], r["ticket"] or "-", cut(r["task_type"] or "-", 16),
+                        r["ticket"] or "-", cut(r["task_type"] or "-", 16),
                         cut(r["title"], 52)] for r in rows])
 
 
@@ -2630,7 +2685,7 @@ def main():
                              "'-' for stdout)")
     extra = ap.add_argument_group("advanced -- used by the weekly-review skill" if show_all else None)
     extra.add_argument("--sessions", action="store_true",
-                       help=adv("view: one row per Claude session per day, with profile, ticket, "
+                       help=adv("view: one row per Claude session per day, with ticket, "
                                 "cost and models (the original session export)"))
     extra.add_argument("--with-type", dest="with_type", action="store_true",
                        help=adv("include the Task Type column in --copy too (for a tracker "

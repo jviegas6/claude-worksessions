@@ -15,9 +15,9 @@ below, `_audit/` exports, ledger and maps), not requests.
 
 ## How a session starts
 
-`claude-new -t TICKET "topic"` creates the folder, records the profile, the **Jira ticket**
+`claude-new -t TICKET "topic"` creates the folder, records the **Jira ticket**
 (`PREFIX-123` such as `{{CWS_TICKET_EXAMPLE}}`, or `Other`) and the **task type** in
-`.session.json`, and launches Claude there. With a ticket that already has a recent folder it
+`.session.json`, and opens it (CWS_OPEN_CMD: T3 by default). With a ticket that already has a recent folder it
 offers to continue in it. `-n` keeps the session out of the audit and the weekly review.
 
 The ticket puts the session on the right tracker row in the weekly review. If a request has no
@@ -52,7 +52,7 @@ and a running thread is not affected. The `.git` file in a request folder is wha
 isn't a repository to work in, so don't commit there or remove it.
 
 When an investigation finds work to do, offer in one line to spin it off. On yes, start a request
-for it with `zsh -ic 'claude-new -p PROFILE -a --new -t TICKET -T "TASK TYPE" -A PROJECT -F TYPE -g "GOAL" --prompt "WHAT WAS FOUND, AND THIS FOLDER" "NAME"'`
+for it with `zsh -ic 'claude-new -a --new -t TICKET -T "TASK TYPE" -A PROJECT -F TYPE -g "GOAL" --prompt "WHAT WAS FOUND, AND THIS FOLDER" "NAME"'`
 and say what you started.
 
 ## Finding and reviewing

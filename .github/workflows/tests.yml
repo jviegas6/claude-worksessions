@@ -34,14 +34,15 @@ jobs:
       - name: Config
         run: |
           mkdir -p "$HOME/ws/_config"
-          printf 'CWS_WORK_ROOT="%s"\nCWS_PROFILES="personal work"\nCWS_INSTALL_YAZI="1"\n' "$HOME/ws" > "$HOME/ws/_config/config.env"
+          printf 'CWS_WORK_ROOT="%s"\nCWS_CLAUDE_HOMES="%s/.claude"\nCWS_INSTALL_YAZI="1"\n' "$HOME/ws" "$HOME" > "$HOME/ws/_config/config.env"
       - name: Install
         run: zsh ./install.sh --yes --config "$HOME/ws/_config/config.env"
       - name: Commands load
         shell: zsh -il {0}
         run: |
           set -e
-          claude-new -L
+          claude-new -h >/dev/null
+          claude-new -l
           claude-resume -h
           claude-audit --help >/dev/null
           claude-search --help >/dev/null

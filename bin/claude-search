@@ -185,7 +185,8 @@ def build_index():
         with open(tmp, "w") as fh:
             json.dump({"version": INDEX_VERSION, "entries": fresh}, fh)
         os.replace(tmp, CACHE)
-    return [e["doc"] for e in fresh.values()], changed
+    # where each transcript lives: the Claude home its session resumes from
+    return [dict(e["doc"], home=CA.home_of(path)) for path, e in fresh.items()], changed
 
 
 def linked_activity(ledger):
@@ -339,7 +340,6 @@ def search(query, docs, ledger, jira, linked):
             matched = [label for label, text in doc["_linked"] if terms(text).keys() & hits["linked"]]
             why.append("linked: " + "; ".join(matched[:2]))
         results.append({"doc": doc, "score": score, "tier": tier, "why": why,
-                        "profile": meta.get("profile") or "unknown",
                         "snippet": snippet(doc, {s for s in hits["prompts"] | hits["assistant"]} or set(weight))})
 
     results.sort(key=lambda r: (-r["tier"] if keys else 0, -r["score"], r["doc"]["start"]))
@@ -404,8 +404,14 @@ def shell_path(path):
     return head + re.sub(r"([^\w@%+=:,./-])", r"\\\1", rest)
 
 
+def config_dir(r):
+    """The CLAUDE_CONFIG_DIR a session resumes with: its transcript's home (see CA.resume_config_dir)."""
+    return CA.resume_config_dir(r["doc"].get("home") or "")
+
+
 def launcher(r):
-    return "claude-resume -p " + r["profile"] if r["profile"] in CA.PROFILES else "claude"
+    home = config_dir(r)
+    return "CLAUDE_CONFIG_DIR={} claude".format(shell_path(home)) if home else "claude"
 
 
 def resume_cmd(r):
@@ -434,8 +440,8 @@ def pick_and_resume(results, opener="cli"):
         sys.stdout.flush()
         os.execvp("claude-t3-sync", ["claude-t3-sync", "--thread", d["session_id"], "--fallback", d["cwd"]])
         return
-    if r["profile"] in CA.PROFILES:  # what claude-resume -p does
-        os.environ["CLAUDE_CONFIG_DIR"] = os.path.join(HOME, ".claude-" + r["profile"])
+    if config_dir(r):
+        os.environ["CLAUDE_CONFIG_DIR"] = config_dir(r)
     os.chdir(d["cwd"])
     print(resume_cmd(r))
     sys.stdout.flush()
@@ -456,7 +462,7 @@ def main():
     ap.add_argument("--no-pick", action="store_true", help="just list; don't offer to resume one")
     where = ap.add_mutually_exclusive_group()
     where.add_argument("--t3", dest="opener", action="store_const", const="t3",
-                       help="the session picked opens in T3 Code (default when CWS_OPEN is t3)")
+                       help="the session picked opens in T3 Code (default when CWS_OPEN_CMD opens in T3)")
     where.add_argument("--cli", dest="opener", action="store_const", const="cli",
                        help="the session picked resumes in this terminal")
     ap.add_argument("--csv", nargs="?", const="-", metavar="FILE", help="write CSV (to stdout by default)")
@@ -526,7 +532,7 @@ def main():
         print("    " + resume_cmd(r))
         print()
     if not args.no_pick and sys.stdin.isatty() and sys.stdout.isatty():
-        pick_and_resume(results, args.opener or ("t3" if CA.CONFIG.get("CWS_OPEN") == "t3" else "cli"))
+        pick_and_resume(results, args.opener or ("t3" if CA.opens_in_t3() else "cli"))
 
 
 if __name__ == "__main__":

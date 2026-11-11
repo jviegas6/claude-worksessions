@@ -177,12 +177,13 @@ def test_json_output(sessions, home, monkeypatch, capsys):
         assert (x["request"].pop("files"), x["request"].pop("files_truncated"), x["request"].pop("size")) == ([], False, 0)
         x["request"].pop("started")
     assert (a["id"], a["title"], a["first_prompt"], a["last_prompt"]) == ("a", "Title A", "first", "last A")
+    assert a["config_dir"] == str(home / ".claude-personal")      # no ~/.claude here: it is named
     assert a["request"] == {"path": str(req), "name": "demo work", "ticket": "DATA-1",
-                            "task_type": "security", "profile": "work", "waiting": None}
+                            "task_type": "security", "waiting": None}
     assert b["request"]["task_type"] == "permissions"          # per-session override
     assert c["first_prompt"] is None
     assert c["request"] == {"path": str(bare), "name": "09-00-00_bare", "ticket": "",
-                            "task_type": "", "profile": "", "waiting": None}
+                            "task_type": "", "waiting": None}
     assert d["request"] is None and d["in_work_root"] is True
     assert gone["in_work_root"] is False and gone["title"] is None
 

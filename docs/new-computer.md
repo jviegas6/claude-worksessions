@@ -8,8 +8,8 @@ What lives where decides what you need to carry:
 | your skills | wherever you keep them (e.g. a Skillshare source) | install them as that tool says |
 | your config, context, review rules | `<work root>/_config/` | arrives with the synced work root |
 | request folders, `_audit/` (ledger, activity) | `<work root>/` | arrives with the synced work root |
-| Claude history (transcripts) | `~/.claude-<shared profile>/projects/` | **copy it** — the audit and search are built from it |
-| logins, gateway token | `~/.claude-<profile>/.claude.json`, `settings.json` | log in again; `install.sh` asks for the token |
+| Claude history (transcripts) | `<dir>/projects/` for each `CWS_CLAUDE_HOMES` dir | **copy it** — the audit and search are built from it |
+| logins, gateway token | each Claude config dir's `.claude.json`, `settings.json` | sign in again in the app that runs Claude (T3 Code's providers, an IDE) |
 
 ## Steps
 
@@ -29,9 +29,9 @@ What lives where decides what you need to carry:
    cd ~/Repos/claude-worksessions
    ./install.sh --config "<work root>/_config/config.env"
    ```
-4. Sign in when `install.sh` offers to open each profile (a gateway profile needs no
-   login — its token is enough). Your claude.ai connectors come back with the login;
-   re-add any local MCP servers you use.
+4. Sign in to Claude in the app you use (in T3 Code: *Settings > Providers*, one config dir per
+   login, the same dirs as `CWS_CLAUDE_HOMES`). Your claude.ai connectors come back with the
+   login; re-add any local MCP servers you use.
 5. Check: `claude-new -l`, `claude-audit --week`, `claude-search <something you know>`.
 
 Moving between a Mac and Linux/WSL always changes the path (`~/Library/CloudStorage/…`
@@ -40,5 +40,5 @@ becomes `/mnt/c/Users/…/OneDrive - …`), so the next paragraph applies.
 If the work root ends up at a **different path** (e.g. a different OneDrive tenant
 name), set `CWS_WORK_ROOT` in `config.env` and record old → new in
 `_audit/moved-folders.json` for the folders you care about (see
-[folder-layout.md](folder-layout.md)); without it the audit loses profile and ticket
+[folder-layout.md](folder-layout.md)); without it the audit loses the ticket and type
 for those sessions.

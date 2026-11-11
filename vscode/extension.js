@@ -1,5 +1,5 @@
 // claude-worksessions for VS Code: a sidebar of requests and their Claude sessions, each
-// session opened as a terminal tab in the editor area, in its own folder and profile, plus
+// session opened as a terminal tab in the editor area, in its own folder, plus
 // the terminal commands (claude-sessions, claude-search, claude-audit, claude-type, ...) and
 // the skills in the Command Palette. The data comes from `claude-sessions -a --json`; the
 // logic lives in model.js.
@@ -24,6 +24,16 @@ function config() {
     }
   } catch {}
   return out;
+}
+
+// The Claude config dirs (CWS_CLAUDE_HOMES; ~/.claude-<name> for the older CWS_PROFILES;
+// else ~/.claude): where sessions' transcripts, running-session records and skills are.
+function claudeHomes(conf = config()) {
+  const expand = h => h.startsWith("~") ? HOME + h.slice(1) : h;
+  const homes = (conf.CWS_CLAUDE_HOMES || "").split(/\s+/).filter(Boolean).map(expand);
+  if (homes.length) return homes;
+  const names = (conf.CWS_PROFILES || "").split(/\s+/).filter(Boolean);
+  return names.length ? names.map(n => path.join(HOME, ".claude-" + n)) : [path.join(HOME, ".claude")];
 }
 
 function sessionsCommand() {
@@ -199,9 +209,10 @@ class Sidebar {
   open(session, request = this.requestOf(session.id)) {
     const open = this.tabs.get(session.id);
     if (open && vscode.window.terminals.includes(open)) return open.show();
-    const profile = request && request.profile ? `-p ${shq(request.profile)} ` : "";
+    // the login it ran on, when that isn't the default one (claude-sessions says which)
+    const env = session.config_dir ? `CLAUDE_CONFIG_DIR=${shq(session.config_dir)} ` : "";
     const t = this.terminal(M.tabName(request && !request.root ? request : null, M.sessionLabel(session)),
-                            session.cwd, `claude-resume ${profile}--resume ${shq(session.id)}`);
+                            session.cwd, `${env}claude-resume --resume ${shq(session.id)}`);
     this.tabs.set(session.id, t);
     this.save();
     this.emitter.fire();
@@ -222,8 +233,7 @@ class Sidebar {
   }
 
   addSession(request) {
-    const env = request.profile ? `CLAUDE_CONFIG_DIR="$HOME/.claude-${request.profile}" ` : "";
-    this.startPending("request", request.path, M.tabName(request, request.name), env + "claude");
+    this.startPending("request", request.path, M.tabName(request, request.name), "claude");
   }
 
   // --- tree ---------------------------------------------------------------------------
@@ -331,7 +341,7 @@ class Sidebar {
       const w = M.waitingOf(r);
       it.contextValue = r.root ? "root" : pinnedReq ? "request-pinned" : "request";
       it.description = [pinnedReq && !el.inPinned && "pinned", this.grouping !== "ticket" && r.ticket,
-                        r.task_type, r.profile, M.ago(r.mtime, now)].filter(Boolean).join(" · ");
+                        r.task_type, M.ago(r.mtime, now)].filter(Boolean).join(" · ");
       const live = r.sessions.some(s => this.isOpen(s.id) || s.active);
       it.iconPath = new vscode.ThemeIcon(live ? "folder-active" : "folder");
       const md = new vscode.MarkdownString();
@@ -341,7 +351,7 @@ class Sidebar {
           .appendMarkdown("  \n").appendText([w.where, w.since ? "since " + w.since.slice(0, 16).replace("T", " ") : ""]
                                                .filter(Boolean).join(" · ")).appendMarkdown("\n\n");
       }
-      for (const [k, v] of [["ticket", r.ticket], ["type", r.task_type], ["profile", r.profile],
+      for (const [k, v] of [["ticket", r.ticket], ["type", r.task_type],
                             ["sessions", String(r.sessions.length)], ["last activity", M.ago(r.mtime, now) + " ago"]]) {
         md.appendMarkdown(`${k}: `).appendText(v || "—").appendMarkdown("  \n");
       }
@@ -405,7 +415,7 @@ class Sidebar {
       .appendMarkdown(open ? " — *open in a tab*\n\n" : live ? " — *active*\n\n" : "\n\n");
     md.appendMarkdown("**Last prompt:** ").appendText(clip(s.last_prompt)).appendMarkdown("\n\n");
     md.appendMarkdown("**First prompt:** ").appendText(clip(s.first_prompt)).appendMarkdown("\n\n");
-    md.appendText([r && !r.root ? r.ticket || "no ticket" : "no request", r && r.task_type, r && r.profile,
+    md.appendText([r && !r.root ? r.ticket || "no ticket" : "no request", r && r.task_type,
                    M.ago(s.mtime, now) + " ago"].filter(Boolean).join(" · ")).appendMarkdown("\n\n");
     const wrote = s.written || [];
     if (wrote.length) {
@@ -646,15 +656,12 @@ const openInWindow = r => vscode.commands.executeCommand("vscode.openFolder", vs
                                                          { forceNewWindow: true });
 
 function skillDirs() {
-  const conf = config();
-  const profiles = (conf.CWS_PROFILES || "personal").split(/\s+/).filter(Boolean);
-  const shared = conf.CWS_SHARED_PROFILE || profiles[0];
-  return [shared, ...profiles].map(p => path.join(HOME, ".claude-" + p, "skills"));
+  return claudeHomes().map(h => path.join(h, "skills"));
 }
 
 async function runSkill(bar) {
   const skills = M.readSkills(skillDirs());
-  if (!skills.length) return vscode.window.showInformationMessage("No skills found in ~/.claude-*/skills.");
+  if (!skills.length) return vscode.window.showInformationMessage("No skills found in the Claude config dirs (CWS_CLAUDE_HOMES).");
   const pick = await vscode.window.showQuickPick(skills.map(s => ({ label: "/" + s.name, detail: s.description, skill: s })),
                                                  { placeHolder: "Run a skill — it starts a new request", matchOnDetail: true });
   if (!pick) return;
@@ -969,12 +976,12 @@ function activate(context) {
   // Transcripts and .session.json files change as sessions run: refresh shortly after.
   let timer;
   const soon = () => { clearTimeout(timer); timer = setTimeout(() => bar.refresh(), 1500); };
-  const conf = config();
-  const shared = conf.CWS_SHARED_PROFILE || (conf.CWS_PROFILES || "personal").split(/\s+/)[0];
-  let projects = path.join(HOME, ".claude-" + shared, "projects");
-  try { projects = fs.realpathSync(projects); } catch {}
+  const homes = claudeHomes();
+  const real = p => { try { return fs.realpathSync(p); } catch { return p; } };
+  const projects = [...new Set(homes.map(h => real(path.join(h, "projects"))))];
+  // transcripts in every Claude config dir (one projects dir reached twice is watched once), and
   // request folders: .session.json edits, and files added or removed (the Files entries)
-  for (const [dir, glob] of [[projects, "**/*.jsonl"], [bar.data.work_root, "[0-9]*/*/*/*/**"]]) {
+  for (const [dir, glob] of [...projects.map(p => [p, "**/*.jsonl"]), [bar.data.work_root, "[0-9]*/*/*/*/**"]]) {
     const w = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(vscode.Uri.file(dir), glob));
     w.onDidChange(soon); w.onDidCreate(soon); w.onDidDelete(soon);
     context.subscriptions.push(w);
@@ -993,9 +1000,9 @@ function activate(context) {
   pinWatch.onDidDelete(() => bar.reloadPins());
   context.subscriptions.push(pinWatch);
   // sessions start and stop (Active): Claude Code keeps one record per running process
-  for (const p of new Set([shared, ...(conf.CWS_PROFILES || "").split(/\s+/).filter(Boolean)])) {
+  for (const d of new Set(homes.map(h => real(path.join(h, "sessions"))))) {
     const w = vscode.workspace.createFileSystemWatcher(
-      new vscode.RelativePattern(vscode.Uri.file(path.join(HOME, ".claude-" + p, "sessions")), "*.json"));
+      new vscode.RelativePattern(vscode.Uri.file(d), "*.json"));
     w.onDidCreate(soon); w.onDidDelete(soon);
     context.subscriptions.push(w);
   }

@@ -377,25 +377,35 @@ def test_report(guard, sdir, home):
     assert "prompt   pivot   block        1" in text
 
 
-# --- judge profile, journal and review ------------------------------------------------------
-def test_judge_profile(guard, home, monkeypatch):
+# --- judge config dir, journal and review ---------------------------------------------------
+def test_judge_home(guard, home, monkeypatch):
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(home / ".claude-work"))
-    name, env, err = guard.judge_profile(cfg(guard))
-    assert (name, err) == ("work", None) and env["CWS_GUARD_JUDGE"] == "1"
+    name, env, err = guard.judge_home(cfg(guard))
+    assert (name, err) == (str(home / ".claude-work"), None) and env["CWS_GUARD_JUDGE"] == "1"
     (home / ".claude-personal").mkdir()
-    name, env, err = guard.judge_profile(cfg(guard, profile="personal"))
-    assert name == "personal" and env["CLAUDE_CONFIG_DIR"] == str(home / ".claude-personal") and err is None
-    name, env, err = guard.judge_profile(cfg(guard, profile="nope"))
+    name, env, err = guard.judge_home(cfg(guard, judge_home=str(home / ".claude-personal")))
+    assert env["CLAUDE_CONFIG_DIR"] == str(home / ".claude-personal") and err is None
+    name, env, err = guard.judge_home(cfg(guard, judge_home=str(home / "nope")))
     assert "not found" in err
     monkeypatch.delenv("CLAUDE_CONFIG_DIR")
-    assert guard.judge_profile(cfg(guard))[0] == "default"
+    assert guard.judge_home(cfg(guard))[0] == "inherited"
 
 
-def test_a_missing_judge_profile_fails_open(guard, sdir, monkeypatch):
+@pytest.mark.parametrize("conf,want", [
+    ({"CWS_GUARD_CONFIG_DIR": "~/.claude-gw"}, ".claude-gw"),
+    ({"CWS_GUARD_PROFILE": "work"}, ".claude-work"),          # the setting before 3.1
+    ({}, ""),
+])
+def test_judge_home_setting(guard, home, conf, want):
+    got = guard.judge_home_setting(conf)
+    assert got == (str(home / want) if want else "")
+
+
+def test_a_missing_judge_config_dir_fails_open(guard, sdir, monkeypatch):
     calls = []
     fake_judge(monkeypatch, guard, {}, calls=calls)
-    assert prompt(guard, sdir, "fix the row filter function", cfg(guard, "enforce", profile="nope")) is None
-    assert calls == [] and "judge profile dir" in records(sdir)[-1]["reason"]
+    assert prompt(guard, sdir, "fix the row filter function", cfg(guard, "enforce", judge_home="/nope")) is None
+    assert calls == [] and "judge config dir" in records(sdir)[-1]["reason"]
 
 
 def test_journal_and_review(guard, sdir, home, monkeypatch):

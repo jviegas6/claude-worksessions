@@ -1,7 +1,7 @@
 {
   "name": "claude-worksessions",
   "displayName": "Claude work sessions",
-  "description": "Your claude-worksessions requests and Claude sessions in a sidebar; each session opens as a tab in its own folder and profile.",
+  "description": "Your claude-worksessions requests and Claude sessions in a sidebar; each session opens as a tab in its own folder.",
   "version": "0.0.0",
   "publisher": "jviegas6",
   "license": "MIT",

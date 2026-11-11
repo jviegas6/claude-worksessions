@@ -7,7 +7,7 @@
 #   ./install.sh --dry-run            print what would change, change nothing
 #   ./install.sh --no-brew            don't install packages (Homebrew, apt, dnf, ...)
 #   ./install.sh --no-bootstrap       don't install anything missing, just report it
-#   ./install.sh --profiles           add/remove/rename profiles, then install
+#   ./install.sh --reconfigure        ask the basic settings again, then install
 #   ./install.sh --update [vX.Y.Z]    move the checkout to the newest (or named) release
 #   ./install.sh --edge               move the checkout to main, then install
 #   ./install.sh --yes                don't prompt (tokens are then skipped)
@@ -27,7 +27,7 @@ while (( $# )); do
     --dry-run) DRY=1; shift ;;
     --no-brew) BREW=0; shift ;;
     --no-bootstrap) NOBOOT=1; BREW=0; shift ;;
-    --profiles|--reconfigure) RECONF=1; shift ;;
+    --reconfigure) RECONF=1; shift ;;
     --update)  UPDATE=1; shift
                if [[ "$1" == v* ]]; then TARGET="$1"; shift; fi ;;
     --edge)    UPDATE=1; EDGE=1; shift ;;
@@ -107,7 +107,7 @@ windows_timezone() {
 newest_tag() { git -C "$REPO" tag -l 'v*' 2>/dev/null | sort -V | tail -1 }
 
 # Move the checkout to a newer release (or to main with --edge). Config, work folders,
-# profiles and history are never touched — only the checkout and what is rendered from it.
+# Claude config dirs and history are never touched — only the checkout and what is rendered from it.
 update_repo() {
   local target="$1" from="$VERSION" to=""
   command -v git >/dev/null 2>&1 || { warn "git is not installed — update by hand"; return 1; }
@@ -218,81 +218,7 @@ PY
   fi
 }
 
-# Ask about profiles and write them to config.env. Any number; each is either a
-# Claude subscription login or an Anthropic-compatible inference gateway.
-configure_profiles() {
-  local file="$1"
-  local -a names=() kinds=() descs=() urls=()
-  local name kind desc url current="${CWS_PROFILES:-}"
-  print -r -- ""
-  print -r -- "  A profile is a separate Claude Code login with its own config dir"
-  print -r -- "  (~/.claude-<name>), run with claude-resume -p <name>. They share history,"
-  print -r -- "  projects and skills, so every session shows up in claude-audit."
-  [[ -n "$current" ]] && print -r -- "  Current: $current"
-  print -r -- ""
-  while true; do
-    if (( ${#names} )); then
-      read "name?  Another profile name (Enter to finish): "
-      [[ -z "$name" ]] && break
-    else
-      read "name?  First profile name [personal]: "
-      name="${name:-personal}"
-    fi
-    # No dashes: the name goes into CWS_PROFILE_<name>_DESC / _BASE_URL, and a dash is not
-    # valid in a variable name, so those settings would be silently ignored.
-    if [[ ! "$name" =~ '^[a-z0-9][a-z0-9_]*$' ]]; then
-      warn "use lowercase letters, digits and underscores (no dashes)"; continue
-    fi
-    if (( ${names[(Ie)$name]} )); then warn "'$name' already added"; continue; fi
-    print -r -- "    1) Claude subscription (Pro/Max/Team) — sign in with your account"
-    print -r -- "    2) Inference gateway / API — an Anthropic-compatible base URL and token"
-    read "kind?    Type for '$name' [1]: "; kind="${kind:-1}"
-    url=""
-    if [[ "$kind" == 2 ]]; then
-      while [[ -z "$url" ]]; do read "url?    Base URL (e.g. https://gateway.example.com): "; done
-      desc_default="inference gateway"
-    else
-      desc_default="Claude subscription"
-    fi
-    read "desc?    One-line description [$desc_default]: "; desc="${desc:-$desc_default}"
-    names+=("$name"); kinds+=("$kind"); descs+=("$desc"); urls+=("$url")
-  done
-
-  local def="${names[1]}" shared="${names[1]}"
-  if (( ${#names} > 1 )); then
-    read "def?  Default profile (a bare \`claude\`) [${names[1]}]: "; def="${def:-${names[1]}}"
-    (( ${names[(Ie)$def]} )) || { warn "unknown profile '$def' — using ${names[1]}"; def="${names[1]}"; }
-    print -r -- "  One profile owns the shared history, projects, skills, plugins and MCP;"
-    print -r -- "  the others link to it. Pick the one you use most (usually the default)."
-    read "shared?  Shared profile [$def]: "; shared="${shared:-$def}"
-    (( ${names[(Ie)$shared]} )) || { warn "unknown profile '$shared' — using $def"; shared="$def"; }
-  fi
-
-  # Drop settings for profiles that are no longer listed, then write the new ones
-  "$PY" - "$file" <<'PY'
-import re, sys
-path = sys.argv[1]
-s = open(path).read()
-s = re.sub(r"(?m)^CWS_PROFILE_[A-Za-z0-9_]+_(DESC|BASE_URL)=.*\n", "", s)
-open(path, "w").write(s)
-PY
-  cws_set CWS_PROFILES "${names[*]}" "$file"
-  cws_set CWS_DEFAULT_PROFILE "$def" "$file"
-  cws_set CWS_SHARED_PROFILE "$shared" "$file"
-  local i
-  for i in {1..${#names}}; do
-    cws_set "CWS_PROFILE_${names[$i]}_DESC" "${descs[$i]}" "$file"
-    [[ -n "${urls[$i]}" ]] && cws_set "CWS_PROFILE_${names[$i]}_BASE_URL" "${urls[$i]}" "$file"
-  done
-  say "profiles written to $file: ${names[*]}"
-  # Data is never deleted: say what is now unused rather than removing it
-  local old
-  for old in ${=current}; do
-    (( ${names[(Ie)$old]} )) || say "'$old' is no longer listed — ~/.claude-$old is left as it is"
-  done
-}
-
-# Ask for the rest of the settings. Defaults come from the current config.
+# Ask for the settings. Defaults come from the current config.
 configure_basics() {
   local file="$1" ans tz wtz
   local org="${CWS_ORG:-}" role="${CWS_USER_ROLE:-data/platform engineer}"
@@ -306,6 +232,10 @@ configure_basics() {
   read "ans?  An example ticket key, for prompts [$ticket]: "; ticket="${ans:-$ticket}"
   local jira="${CWS_JIRA_CLOUD_ID:-}"
   read "ans?  Atlassian cloud id for the weekly review, if any [${jira:-none}]: "; jira="${ans:-$jira}"
+  local homes="${CWS_CLAUDE_HOMES:-\$HOME/.claude}"
+  print -r -- "  Claude keeps each login's sessions in a config dir (~/.claude, or one per login an app"
+  print -r -- "  such as T3 runs). claude-audit and claude-search read the transcripts of all of them."
+  read "ans?  Claude config dirs, space-separated [$homes]: "; homes="${ans:-$homes}"
   local yazi="${CWS_INSTALL_YAZI:-1}"
   read "ans?  Install the yazi/glow/pandoc Markdown extras? [Y/n]: "
   [[ "${${ans:-y}:l}" == y* ]] && yazi=1 || yazi=0
@@ -316,6 +246,7 @@ configure_basics() {
   cws_set CWS_TICKET_EXAMPLE "$ticket" "$file"
   cws_set CWS_JIRA_CLOUD_ID "$jira" "$file"
   cws_set CWS_INSTALL_YAZI "$yazi" "$file"
+  cws_set CWS_CLAUDE_HOMES "${homes//$HOME/\$HOME}" "$file"
 }
 
 # Symlink dst → src unless it already points there
@@ -359,7 +290,7 @@ if [[ -z "$CONFIG" ]]; then
   if [[ ! -f "$CONFIG" ]]; then
     [[ -n "$PY" ]] || { print -u2 "install.sh: no python3 yet — run: xcode-select --install (Mac) or install python3 with your package manager"; exit 1; }
     run mkdir -p "${CONFIG:h}"
-    if (( DRY )); then say "[dry-run] would create $CONFIG and ask about profiles"; exit 0; fi
+    if (( DRY )); then say "[dry-run] would create $CONFIG and ask for the settings"; exit 0; fi
     sed "s|^CWS_WORK_ROOT=.*|CWS_WORK_ROOT=\"${root/#$HOME/\$HOME}\"|" "$REPO/config/config.example.env" > "$CONFIG"
     say "created $CONFIG"
     FIRST_RUN=1
@@ -368,15 +299,14 @@ fi
 [[ -f "$CONFIG" ]] || { print -u2 "install.sh: config $CONFIG not found"; exit 1; }
 say "using $CONFIG"
 
-# First run, or --profiles: ask instead of making them edit the file
+# First run, or --reconfigure: ask instead of making them edit the file
 if (( FIRST_RUN || RECONF )) && (( ! DRY && ! YES )); then
   # current values as defaults
   CWS_CONFIG="$CONFIG" source "$REPO/shell/worksessions.zsh" >/dev/null 2>&1
   unalias -m 'claude-*' 2>/dev/null || true
   # Answers overwrite the file, so keep the previous one
   (( FIRST_RUN )) || backup "$CONFIG"
-  (( FIRST_RUN )) && configure_basics "$CONFIG"
-  configure_profiles "$CONFIG"
+  configure_basics "$CONFIG"
 fi
 [[ "$CONFIG" == "${LINK:A}" ]] || link "$CONFIG" "$LINK"
 
@@ -384,18 +314,13 @@ fi
 export CWS_CONFIG="$CONFIG"
 source "$REPO/shell/worksessions.zsh" || { print -u2 "install.sh: could not load $REPO/shell/worksessions.zsh"; exit 1; }
 unalias -m 'claude-*' 2>/dev/null || true
-typeset -a PROFILES=(${=CWS_PROFILES})
-for pname in $PROFILES; do
-  [[ "$pname" =~ '^[a-z0-9][a-z0-9_]*$' ]] && continue
-  print -u2 -r -- "install.sh: profile '$pname' in CWS_PROFILES is not valid -- use lowercase letters, digits and underscores (no dashes); run install.sh --profiles or edit $CONFIG"
-  exit 1
-done
-: ${CWS_SHARED_PROFILE:=${PROFILES[1]}}
+# The Claude config dirs (worksessions.zsh resolved CWS_CLAUDE_HOMES, or the older CWS_PROFILES)
+typeset -a HOMES=("${(@)${=CWS_CLAUDE_HOMES}/#\~/$HOME}")
 : ${CWS_ORG:=} ${CWS_USER_ROLE:=} ${CWS_TIMEZONE:=UTC} ${CWS_TIMEZONE_WINDOWS:=UTC} ${CWS_JIRA_CLOUD_ID:=} ${CWS_INSTALL_YAZI:=1} ${CWS_HOOKS:=0}
 export HOME CWS_WORK_ROOT="$CLAUDE_WORK_ROOT" CWS_ORG CWS_USER_ROLE CWS_TIMEZONE CWS_TIMEZONE_WINDOWS \
        CWS_TICKET_EXAMPLE CWS_JIRA_CLOUD_ID
 say "work root  $CWS_WORK_ROOT"
-say "profiles   ${PROFILES[*]} (default $CWS_DEFAULT_PROFILE, shared $CWS_SHARED_PROFILE)"
+say "claude dirs ${${HOMES[*]}//$HOME/~}"
 
 # --- 2. prerequisites --------------------------------------------------------------------
 # Nothing here is assumed to be present. A clean Mac gets the Command Line Tools,
@@ -550,60 +475,15 @@ done
 # not expanded for sessions running in sub-folders, which is where every session runs.
 CONTEXT="$(<"$CWS_WORK_ROOT/_config/context.md")" render "$REPO/templates/CLAUDE.md.tmpl" "$CWS_WORK_ROOT/CLAUDE.md"
 
-# --- 4. Claude Code profiles ----------------------------------------------------------
-step "Claude Code profiles"
-SHARED="$HOME/.claude-$CWS_SHARED_PROFILE"
-typeset -a SHARED_ITEMS=(projects sessions session-env history.jsonl file-history shell-snapshots skills plugins mcp)
-[[ -d "$SHARED" ]] || { run mkdir -p "$SHARED"; say "created $SHARED"; }
-local item p pdir
-for item in $SHARED_ITEMS; do
-  if [[ ! -e "$SHARED/$item" ]]; then
-    if [[ "$item" == *.jsonl ]]; then run touch "$SHARED/$item"; else run mkdir -p "$SHARED/$item"; fi
-  fi
-done
+# --- 4. Claude config dirs ----------------------------------------------------------------
+# Each dir in CWS_CLAUDE_HOMES keeps its transcripts long and has the hooks on or off as set.
+# Which login a session uses is the app's business (T3, an IDE); nothing is linked or shared here.
+step "Claude config dirs"
 # Declared once: a `local` inside the loop would print its value on the second pass
-local keep=3650 kstate="" hstate=""
-for p in $PROFILES; do
-  pdir="$HOME/.claude-$p"
-  [[ -d "$pdir" ]] || { run mkdir -p "$pdir"; say "created $pdir"; }
-  if [[ "$p" != "$CWS_SHARED_PROFILE" ]]; then
-    for item in $SHARED_ITEMS; do
-      if [[ -L "$pdir/$item" && "$(readlink "$pdir/$item")" == "$SHARED/$item" ]]; then continue; fi
-      if [[ -e "$pdir/$item" && ! -L "$pdir/$item" ]]; then
-        warn "$pdir/$item is a real file/dir, not shared — left alone (merge it into $SHARED/$item, then re-run)"
-        continue
-      fi
-      link "$SHARED/$item" "$pdir/$item"
-    done
-  fi
-  # Optional API gateway for this profile
-  local urlvar="CWS_PROFILE_${p}_BASE_URL"
-  local url="${(P)urlvar:-}"
-  if [[ -n "$url" ]]; then
-    local settings="$pdir/settings.json" has_token token=""
-    has_token=$("$PY" -c 'import json,sys
-try: print(1 if json.load(open(sys.argv[1])).get("env",{}).get("ANTHROPIC_AUTH_TOKEN") else 0)
-except Exception: print(0)' "$settings")
-    if (( ! has_token && ! YES && ! DRY )); then
-      read -s "token?  Token for the $p profile's gateway ($url), Enter to skip: "; print
-    fi
-    if (( DRY )); then say "[dry-run] set ANTHROPIC_BASE_URL in $settings"
-    else
-      TOKEN="$token" URL="$url" "$PY" - "$settings" <<'PY'
-import json, os, sys
-p = sys.argv[1]
-try: d = json.load(open(p))
-except Exception: d = {}
-env = d.setdefault("env", {})
-env["ANTHROPIC_BASE_URL"] = os.environ["URL"]
-if os.environ.get("TOKEN"): env["ANTHROPIC_AUTH_TOKEN"] = os.environ["TOKEN"]
-json.dump(d, open(p, "w"), indent=2)
-os.chmod(p, 0o600)
-PY
-      say "$p: gateway $url${token:+ (token saved)}"
-      (( has_token || ${#token} )) || warn "$p: no token set — re-run install.sh to add one"
-    fi
-  fi
+local keep=3650 kstate="" hstate="" p pdir
+for pdir in $HOMES; do
+  p="${pdir/#$HOME/~}"
+  [[ -d "$pdir" ]] || { run mkdir -p "$pdir"; say "created $p"; }
   # Transcript retention: Claude Code deletes transcripts after cleanupPeriodDays (default
   # 30), and they are the audit trail. Set it long where it isn't set; a shorter value set
   # on purpose is left alone, with a warning.
@@ -743,50 +623,20 @@ PY
     esac
   fi
 done
-if [[ ! -e "$HOME/.claude" ]]; then link ".claude-$CWS_SHARED_PROFILE" "$HOME/.claude"
-else say "kept ~/.claude"; fi
-
-# --- 4b. sign in -----------------------------------------------------------------------
-# Each config dir has its own login, and there is no documented way to ask Claude Code
-# whether one is signed in, so we offer to open each profile once and note that we did.
-step "Sign in"
-for p in $PROFILES; do
-  pdir="$HOME/.claude-$p"
-  local urlvar2="CWS_PROFILE_${p}_BASE_URL" marker="$pdir/.cws-signed-in"
-  if [[ -n "${(P)urlvar2:-}" ]]; then
-    say "$p: uses the gateway token — no login needed"
-    continue
-  fi
-  if [[ -f "$marker" ]]; then say "$p: signed in earlier (delete $marker to redo)"; continue; fi
-  if (( DRY )); then say "[dry-run] would offer to sign in to $p"; continue; fi
-  if (( YES )) || ! command -v claude >/dev/null 2>&1; then
-    warn "$p: not signed in yet — run: CLAUDE_CONFIG_DIR=$pdir claude"
-    continue
-  fi
-  local ans2=""
-  read "ans2?  Open Claude now to sign in to the '$p' profile? [Y/n]: "
-  if [[ "${${ans2:-y}:l}" == y* ]]; then
-    say "starting Claude — sign in if asked, then type /exit to come back"
-    CLAUDE_CONFIG_DIR="$pdir" command claude || true
-    touch "$marker"
-    say "$p: done"
-  else
-    warn "$p: skipped — run later: CLAUDE_CONFIG_DIR=$pdir claude"
-  fi
-done
-
 # --- 5. commands -----------------------------------------------------------------
 step "Commands"
 local b
-for b in claude-audit claude-search claude-sessions claude-vscode claude-md-email claude-delete claude-hook-notfound claude-hook-vague claude-guard claude-retro claude-t3-sync claude-area; do link "$REPO/bin/$b" "$HOME/.local/bin/$b"; done
-# claude-plan was removed in 3.0.0: drop its link if it still points here
-if [[ -L "$HOME/.local/bin/claude-plan" && "$(readlink "$HOME/.local/bin/claude-plan")" == "$REPO/bin/claude-plan" ]]; then
-  run rm "$HOME/.local/bin/claude-plan"; say "removed $HOME/.local/bin/claude-plan (claude-plan is gone since 3.0.0)"
-fi
+for b in claude-audit claude-search claude-sessions claude-md-email claude-delete claude-hook-notfound claude-hook-vague claude-guard claude-retro claude-t3-sync claude-area; do link "$REPO/bin/$b" "$HOME/.local/bin/$b"; done
+# Removed commands (claude-plan in 3.0.0, claude-vscode in 3.1.0): drop a link that still points here
+for b in claude-plan claude-vscode; do
+  if [[ -L "$HOME/.local/bin/$b" && "$(readlink "$HOME/.local/bin/$b")" == "$REPO/bin/$b" ]]; then
+    run rm "$HOME/.local/bin/$b"; say "removed $HOME/.local/bin/$b (no longer part of claude-worksessions)"
+  fi
+done
 
 # --- 5a. VS Code ------------------------------------------------------------------------
-# The Claude extension's env setting is machine-wide, so it can't follow a session's profile.
-# Its process wrapper can: claude-vscode reads the profile from the folder's .session.json.
+# Releases before 3.1 pointed the Claude extension at claude-vscode, to follow a session's
+# profile. That wrapper is gone, so the setting comes out when it still names it.
 step "VS Code"
 local vsdir vsset vsstate wrapper="$HOME/.local/bin/claude-vscode"
 case $OS in
@@ -795,40 +645,26 @@ case $OS in
   *)   vsdir="$HOME/.config/Code/User" ;;
 esac
 vsset="$vsdir/settings.json"
-# vscode_wrapper check|write: prints "same", "set", "other:<old value>" or "unparsed"
-vscode_wrapper() {
-  WRAPPER="$wrapper" "$PY" - "$vsset" "$1" <<'PY'
+if [[ -f "$vsset" ]]; then
+  vsstate=$(WRAPPER="$wrapper" MODE=$(( DRY )) "$PY" - "$vsset" <<'PY'
 import json, os, sys
-p, mode = sys.argv[1:3]
-key, want = "claudeCode.claudeProcessWrapper", os.environ["WRAPPER"]
+p, key = sys.argv[1], "claudeCode.claudeProcessWrapper"
 try:
     d = json.load(open(p)) if os.path.getsize(p) else {}
-except FileNotFoundError:
-    d = {}
 except ValueError:          # comments or trailing commas: VS Code allows them, json doesn't
     print("unparsed"); raise SystemExit
-old = d.get(key)
-print("same" if old == want else "other:" + old if old else "set")
-if mode == "write" and old != want:
-    d[key] = want
+if d.get(key) != os.environ["WRAPPER"]:
+    print("ok"); raise SystemExit
+print("removed")
+if os.environ["MODE"] != "1":
+    del d[key]
     open(p, "w").write(json.dumps(d, indent=4) + "\n")
 PY
-}
-if [[ ! -d "$vsdir" ]]; then
-  say "no VS Code settings in $vsdir — skipped"
-else
-  vsstate="$(vscode_wrapper check)"
+  )
   case $vsstate in
-    same)     say "ok claudeCode.claudeProcessWrapper in $vsset" ;;
-    unparsed) warn "$vsset isn't plain JSON — add this line to it yourself:"
-              print -r -- "      \"claudeCode.claudeProcessWrapper\": \"$wrapper\"," ;;
-    *)        if (( DRY )); then say "[dry-run] set claudeCode.claudeProcessWrapper in $vsset"
-              else
-                backup "$vsset"
-                vscode_wrapper write >/dev/null
-                say "set claudeCode.claudeProcessWrapper in $vsset"
-                [[ $vsstate == other:* ]] && warn "it was ${vsstate#other:} before"
-              fi ;;
+    removed)  (( DRY )) || backup "$vsset"
+              say "${${DRY:#0}:+[dry-run] }removed claudeCode.claudeProcessWrapper (claude-vscode) from $vsset" ;;
+    unparsed) grep -qs claude-vscode "$vsset" && warn "$vsset isn't plain JSON — remove its claudeCode.claudeProcessWrapper line (claude-vscode is gone)" ;;
   esac
 fi
 
@@ -901,7 +737,7 @@ else
 fi
 # Things a manual setup may have left behind that now duplicate the package
 local legacy
-legacy=$(grep -nE "claude-new\.zsh|alias claude-(${(j:|:)PROFILES})=|^(y|ws)\(\) *\{" "$ZSHRC" 2>/dev/null | grep -v worksessions || true)
+legacy=$(grep -nE "claude-new\.zsh|^(y|ws)\(\) *\{" "$ZSHRC" 2>/dev/null | grep -v worksessions || true)
 if [[ -n "$legacy" ]]; then
   warn "~/.zshrc still has older definitions the package now provides — remove them:"
   print -r -- "$legacy" | sed 's/^/      /'

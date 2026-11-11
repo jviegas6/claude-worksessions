@@ -3,7 +3,7 @@
 starts with an underspecified request, and asks Claude to get the missing target, environment
 or outcome before doing substantial work -- unless the context already makes them clear.
 
-Registered by install.sh in each profile's settings.json. Only the first FIRST_PROMPTS prompts
+Registered by install.sh in each Claude home's settings.json (CWS_CLAUDE_HOMES). Only the first FIRST_PROMPTS prompts
 of a session are looked at: that is where vagueness costs the most, before any context exists.
 A prompt counts as vague when it asks for an action (check, fix, investigate, create, ...) and
 names nothing concrete: no path, URL, ticket, dotted or snake_case name, environment, file,

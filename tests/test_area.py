@@ -165,6 +165,14 @@ def test_pick_takes_the_project_from_the_ticket_and_the_type_from_the_model(home
     assert capsys.readouterr().out == "Group: sessions/contact360\n"
 
 
+def test_pick_with_empty_project_and_type_chooses_both(home, area, monkeypatch, capsys):
+    # claude-new's default CWS_AFTER_NEW_CMD passes {project} and {type} even when -A/-F weren't given
+    d = request(home)
+    monkeypatch.setattr(area, "from_model", lambda m: ("ad-hoc", "data"))
+    area.main(["--dir", str(d), "--pick", "", "--type", ""])
+    assert meta(d)["project"] == "ad-hoc" and meta(d)["front"] == "data"
+
+
 def test_pick_uses_the_model_for_a_ticketless_request(home, area, monkeypatch, capsys):
     d = request(home)
     monkeypatch.setattr(area, "from_model", lambda m: ("ad-hoc", "data"))
@@ -220,10 +228,11 @@ def run_model(area, monkeypatch, out=None, boom=None):
     return area.from_model({"name": "n", "goal": "g", "profile": "work"}), calls
 
 
-def test_model_answer_is_used_and_runs_on_the_profile(home, area, monkeypatch):
+def test_model_answer_is_used_and_runs_with_the_callers_login(home, area, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(home / ".claude-x"))
     got, calls = run_model(area, monkeypatch, json.dumps({"structured_output": {"project": "contact360", "type": "data"}}))
     assert got == ("contact360", "data")
-    assert calls["env"]["CLAUDE_CONFIG_DIR"].endswith(".claude-work")
+    assert calls["env"]["CLAUDE_CONFIG_DIR"] == str(home / ".claude-x")   # an old "profile" is ignored
     assert calls["stdin"] == subprocess.DEVNULL
 
 

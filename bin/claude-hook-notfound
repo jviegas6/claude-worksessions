@@ -3,7 +3,7 @@
 when a command or MCP tool reports that the thing asked about does not exist, and tells
 Claude to stop and check with the user before hunting for alternatives.
 
-Registered by install.sh in each profile's settings.json. Reads the hook payload on stdin;
+Registered by install.sh in each Claude home's settings.json (CWS_CLAUDE_HOMES). Reads the hook payload on stdin;
 prints a hookSpecificOutput with additionalContext, or nothing. Only clear "this resource
 does not exist" errors count -- generic "not found" / 404 noise from normal exploration
 does not -- and it speaks at most MAX_PER_SESSION times per session.

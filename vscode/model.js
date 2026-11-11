@@ -1,6 +1,6 @@
 // The sidebar's data model, kept free of the vscode API so `node --test` can check it.
 // Input is `claude-sessions -a --json`: { work_root, sessions: [{ id, mtime, cwd, in_work_root,
-// title, first_prompt, last_prompt, request: { path, name, ticket, task_type, profile } | null }],
+// config_dir, title, first_prompt, last_prompt, request: { path, name, ticket, task_type } | null }],
 // requests: [request folders no session with a prompt belongs to: { path, name, ..., files, mtime }] }
 
 const fs = require("fs");
@@ -37,24 +37,24 @@ const requestOrder = {
 const words = filter => (filter || "").toLowerCase().split(/\s+/).filter(Boolean);
 
 // Does a session match the search box? Every word must appear somewhere in its title,
-// prompts, id, or its request's name, ticket, task type, profile, folder or file names.
+// prompts, id, or its request's name, ticket, task type, folder or file names.
 function matches(s, filter) {
   const ws = words(filter);
   if (!ws.length) return true;
   const r = s.request || {};
   const hay = [s.title, s.first_prompt, s.last_prompt, s.id, r.name, r.ticket, r.task_type,
-               r.profile, r.path, ...(r.files || [])].filter(Boolean).join("\n").toLowerCase();
+               r.path, ...(r.files || [])].filter(Boolean).join("\n").toLowerCase();
   return ws.every(w => hay.includes(w));
 }
 
 // A request's files to show while searching. Only the words that matched nothing but file
-// names narrow the list: when the request was found by its name, ticket, type, profile, folder
+// names narrow the list: when the request was found by its name, ticket, type, folder
 // or one of its sessions, every file shows. Of those words, a file needs one; if no file has
 // any, all show.
 function shownFiles(request, filter) {
   const files = (request && request.files) || [];
   const r = request || {};
-  const own = [r.name, r.ticket, r.task_type, r.profile, r.path,
+  const own = [r.name, r.ticket, r.task_type, r.path,
                ...(r.sessions || []).flatMap(s => [s.title, s.first_prompt, s.last_prompt, s.id])]
     .filter(Boolean).join("\n").toLowerCase();
   const ws = words(filter).filter(w => !own.includes(w));
@@ -178,7 +178,7 @@ function requests(data, opts) {
       byPath.set(key, s.request
         ? { ...s.request, root: false, sessions: [] }
         : { path: data.work_root, name: "Work root — no request folder", ticket: "",
-            task_type: "", profile: "", root: true, sessions: [] });
+            task_type: "", root: true, sessions: [] });
     }
     byPath.get(key).sessions.push(s);
   }

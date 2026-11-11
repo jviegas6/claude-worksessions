@@ -20,13 +20,13 @@ were given. Nothing needs maintaining by hand.
 
 | # | Goal |
 |---|---|
-| G1 | One folder per request (`YYYY/MM/DD/HH-mm-ss_slug/`), created with its ticket, profile, task type and goal, so every piece of work is findable and attributable. |
-| G2 | Several Claude profiles (subscriptions, inference gateways) that share one history, skills and MCP configuration. |
+| G1 | One folder per request (`YYYY/MM/DD/HH-mm-ss_slug/`), created with its ticket, task type and goal, so every piece of work is findable and attributable. |
+| G2 | Every Claude login's sessions (subscriptions, inference gateways) in one audit and search, while the app that runs Claude (T3 Code by default) picks the login; opening a request in another app is a config line, not code. |
 | G3 | An audit of time worked per day, week and month, per ticket and task type, derived from the transcripts, with no timers. |
 | G4 | Search across every past session, with the command to resume it. |
 | G5 | Daily recap and weekly tracker filled from Claude sessions plus Teams, calendar, mail and Jira, with human decisions remembered in a ledger. |
 | G6 | Guard rails on how Claude works: ask when vague, stop when something doesn't exist, stay on the request. |
-| G7 | A VS Code sidebar over the same data, with each session in its own tab and profile. |
+| G7 | A VS Code sidebar over the same data, with each session in its own tab. |
 | G8 | One config file per user, in a synced work root, so the setup moves between machines. |
 | G9 | Agnostic to the user's data, platforms and organisation. Anything specific lives in configuration. |
 
@@ -35,7 +35,7 @@ were given. Nothing needs maintaining by hand.
 - Running or replacing Claude Code. The system wraps and configures it and reads its files.
 - Writing to Jira, Teams, mail or calendars. The skills read them; outputs are local files and the clipboard.
 - A server or shared database. Everything is local files plus a synced folder.
-- Multi-user use. One person's work root, profiles and history.
+- Multi-user use. One person's work root, Claude config dirs and history.
 
 ## 3. Context
 
@@ -43,9 +43,10 @@ were given. Nothing needs maintaining by hand.
 flowchart LR
   U[User] --> SH[zsh functions<br/>claude-new · claude-resume · claude-type · claude-goal · ws]
   U --> VS[VS Code<br/>Work sessions sidebar]
-  SH --> CC[Claude Code<br/>profiles ~/.claude-&lt;name&gt;]
+  SH -->|CWS_OPEN_CMD| APP[T3 Code or another app]
+  APP --> CC[Claude Code<br/>one config dir per login]
   VS --> CC
-  CC -->|transcripts .jsonl| T[(Shared history<br/>~/.claude-&lt;shared&gt;/projects)]
+  CC -->|transcripts .jsonl| T[(History<br/>CWS_CLAUDE_HOMES/*/projects)]
   CC -->|hooks| H[claude-hook-vague · claude-hook-notfound · claude-guard]
   SH --> W[(Work root<br/>request folders + _config + _audit)]
   H --> W
@@ -79,9 +80,9 @@ flowchart LR
 
 | Layer | Components | Responsibility |
 |---|---|---|
-| **Entry** | `claude-new`, `claude-resume`, `ws`, VS Code sidebar | start and resume work in the right folder with the right profile |
-| **Metadata** | `.session.json`, `claude-type`, `claude-goal` | what a request is: ticket, profile, task type, goal, audit flag |
-| **Agent configuration** | profiles, `install.sh`, rendered `CLAUDE.md`, optional hooks | how Claude runs: which account, which standing context, which rules |
+| **Entry** | `claude-new`, `claude-resume`, `ws`, VS Code sidebar | start and resume work in the right folder, opened in the configured app |
+| **Metadata** | `.session.json`, `claude-type`, `claude-goal` | what a request is: ticket, task type, goal, audit flag |
+| **Agent configuration** | `install.sh`, rendered `CLAUDE.md`, optional hooks; the login is the app's | how Claude runs: which standing context, which rules |
 | **Guard rails** | `claude-hook-vague`, `claude-hook-notfound`, `claude-guard` | live checks on prompts and tool calls |
 | **Derived data** | `claude-sessions`, `claude-audit`, `claude-search`, `claude-retro` | read-only views over transcripts and folders |
 | **Decisions** | weekly-review skill, `claude-audit --propose/--apply`, ledger | human decisions recorded once and reused |
@@ -92,8 +93,8 @@ flowchart LR
 
 | Component | Kind | Role |
 |---|---|---|
-| `shell/worksessions.zsh` | zsh, sourced from `~/.zshrc` | `claude-new`, `claude-resume`, `claude-type`, `claude-goal`, `ws`, `y`; loads the config; makes a bare `claude` use the default profile |
-| `install.sh` / `uninstall.sh` | zsh | set up and remove everything outside the repo: config, work root, profiles, hooks, links, VS Code, yazi, `~/.zshrc` block |
+| `shell/worksessions.zsh` | zsh, sourced from `~/.zshrc` | `claude-new`, `claude-resume`, `claude-type`, `claude-goal`, `ws`, `y`; loads the config; fills in and runs `CWS_AFTER_NEW_CMD` / `CWS_OPEN_CMD` |
+| `install.sh` / `uninstall.sh` | zsh | set up and remove everything outside the repo: config, work root, transcript retention and hooks per Claude config dir, links, VS Code, yazi, `~/.zshrc` block |
 | `bin/claude-audit` | Python | the core library and the time audit: transcripts → sessions → subjects → tracker rows; the ledger |
 | `bin/claude-sessions` | Python | session list, and the JSON feed for the sidebar (sessions, requests, files, deletability) |
 | `bin/claude-search` | Python | BM25 search over an incremental index, with ticket evidence and optional Claude re-ranking |
@@ -102,7 +103,6 @@ flowchart LR
 | `bin/claude-guard` | Python | scope, pivot and loop checks as hooks, with a judge and journal ([design](guard/hld.md)) |
 | `bin/claude-hook-vague`, `bin/claude-hook-notfound` | Python | prompt-quality hooks |
 | `bin/claude-md-email` | Python | Markdown → inline-styled HTML on the clipboard |
-| `bin/claude-vscode` | zsh | process wrapper that gives the VS Code Claude extension the request's profile |
 | `vscode/` | JavaScript extension | the Work sessions sidebar |
 | `templates/CLAUDE.md.tmpl` | template | the standing instructions every session reads |
 
@@ -121,7 +121,7 @@ flowchart LR
 
 `claude-audit` owns configuration loading, transcript discovery, `.session.json` reading, moved
 folders, the no-audit list, the ledger and the shared text utilities. `claude-guard`, the
-hooks, `claude-md-email` and `claude-vscode` are independent.
+hooks and `claude-md-email` are independent.
 
 ## 5. Data
 
@@ -132,7 +132,7 @@ hooks, `claude-md-email` and `claude-vscode` are independent.
 | Config | `<work root>/_config/config.env` (linked from `~/.config/claude-worksessions/config.env`) | `install.sh`, the user | everything |
 | Standing context | `_config/context.md` → inlined into `<work root>/CLAUDE.md` | the user, `install.sh` | every Claude session |
 | Request folder | `YYYY/MM/DD/HH-mm-ss_slug/` | `claude-new`, Claude, the user | everything |
-| Request metadata | `<request>/.session.json` | `claude-new`, `claude-type`, `claude-goal`, the sidebar | audit, sessions, search, delete, guard, `claude-vscode` |
+| Request metadata | `<request>/.session.json` | `claude-new`, `claude-type`, `claude-goal`, the sidebar | audit, sessions, search, delete, guard, `claude-t3-sync` |
 | Transcripts | `~/.claude-<shared>/projects/<encoded cwd>/<id>.jsonl` | Claude Code | audit, sessions, search, delete, retro |
 | Activity | `_audit/activity/YYYY-MM-DD.json` | the recap and review skills | `claude-audit`, `claude-search` |
 | Review ledger | `_audit/review/ledger.json` | `claude-audit --apply` only | audit, search, delete |
@@ -171,12 +171,11 @@ sequenceDiagram
   participant F as Work root
   participant C as Claude Code
   U->>N: claude-new -t PROJ-1 "topic"
-  N->>U: profile / type / goal / audit questions (only what's missing)
+  N->>U: type / goal / audit questions (only what's missing)
   N->>F: mkdir YYYY/MM/DD/HH-mm-ss_slug, write .session.json
-  N->>C: CLAUDE_CONFIG_DIR=~/.claude-<profile> claude (cwd = folder)
+  N->>N: CWS_AFTER_NEW_CMD (claude-area: T3 sidebar group)
+  N->>C: CWS_OPEN_CMD (claude-t3-sync --open: project + first thread, on T3's chosen login)
   C->>F: reads CLAUDE.md (standing context), writes outputs
-  C-->>N: exit
-  N->>F: ended_at
 ```
 
 ### 6.2 Audit and weekly review
@@ -201,10 +200,9 @@ sequenceDiagram
 ### 6.3 A session in VS Code
 
 The sidebar runs `claude-sessions -a --json`, and refreshes on file-watcher events (1.5 s
-debounce) under the shared `projects` folder and the work root. Opening a session starts an
-editor terminal running `claude-resume -p <profile> --resume <id>` in the request folder. A
-Claude extension window opened on a request folder gets the request's profile from the
-`claude-vscode` wrapper.
+debounce) under each Claude config dir's `projects` folder and the work root. Opening a session
+starts an editor terminal running `claude-resume --resume <id>` in the request folder, with the
+`CLAUDE_CONFIG_DIR` of the login it ran on when that isn't the default.
 
 ### 6.4 Guard rails during a session
 
@@ -212,21 +210,13 @@ Claude Code calls the hooks: `claude-hook-vague` and `claude-guard prompt` on ea
 `claude-guard tool` before reads, `claude-hook-notfound` after commands and MCP calls, and
 `claude-guard stop` at the end of each answer. See [claude-guard HLD](guard/hld.md).
 
-## 7. Profiles
+## 7. Claude logins
 
-```mermaid
-flowchart LR
-  P1[~/.claude-personal<br/>shared: real folders] --- I[(projects · sessions · session-env<br/>history.jsonl · file-history · shell-snapshots<br/>skills · plugins · mcp)]
-  P2[~/.claude-work<br/>gateway] -. symlinks .-> I
-  P3[~/.claude-other] -. symlinks .-> I
-  C[~/.claude] -. symlink .-> P1
-```
-
-Each profile is its own Claude Code config folder with its own login or gateway `env`,
-settings and hooks. The **shared** profile owns the history-bearing folders; every other profile
-links to them. So any session can be resumed, searched and audited from any profile; skills are
-installed separately (e.g. with Skillshare), not by this package. Which profile ran a session comes from `.session.json`, not from where its
-transcript sits (they all sit in the shared folder).
+The app that runs Claude owns the logins: in T3 Code, each provider instance has its own config
+dir (`homePath`), and T3 picks one per thread. worksessions only reads their transcripts, from
+the dirs in `CWS_CLAUDE_HOMES`. A projects dir two of them share through a link (as releases
+before 3.1 set up) is read once, and a session id already found is not counted again. Which
+login ran a session isn't recorded: what matters to the audit is the request folder.
 
 ## 8. Design decisions
 
@@ -235,12 +225,12 @@ transcript sits (they all sit in the shared folder).
 | D1 | A dated folder per request, named by local time without colons | one folder per ticket; free-form | chronological browsing; OneDrive rejects colons; a request is the unit of work, not the ticket |
 | D2 | Metadata in a small `.session.json` next to the work | a central database | travels with the folder, survives moves, readable by every tool and by Claude |
 | D3 | Time derived from transcript timestamps, with gaps capped | timers; calendar blocks | no discipline required; capped gaps (5 min in a turn, 2 min between) avoid counting idle time |
-| D4 | Profiles as separate config dirs sharing history by symlink | one account; separate histories | different billing and endpoints per piece of work, one searchable history |
+| D4 | The app picks the Claude login; worksessions reads every login's transcripts (`CWS_CLAUDE_HOMES`) and opens a request through one command template (`CWS_OPEN_CMD`) | profiles chosen by `claude-new` (before 3.1) | T3 already manages logins per thread; switching apps is a config line, not code |
 | D5 | Standard-library Python, scripts loading scripts | a package with dependencies | install is a symlink; nothing to pip-install; runs on the system Python |
 | D6 | Human decisions in a ledger changed only by `--apply` | editing the tracker directly | decisions are made once and replayed; weeks can be regenerated |
 | D7 | Skills do the connector work; commands stay offline | commands calling Microsoft 365 or Jira APIs | no credentials in the tool; connectors come with the Claude account |
 | D8 | Standing context inlined into the work root's `CLAUDE.md` | `@import` | a parent `@import` isn't expanded for sessions in sub-folders, which is where every session runs |
-| D9 | Hooks registered per profile, fail-open, deduplicated by command | a plugin | works with any Claude Code install; never blocks a session on its own failure |
+| D9 | Hooks registered per Claude config dir, fail-open, deduplicated by command | a plugin | works with any Claude Code install; never blocks a session on its own failure |
 | D10 | Sidebar data from a CLI (`claude-sessions --json`) | the extension reading transcripts itself | one implementation of the parsing, testable in Python |
 | D11 | Deletion to a local bin with a manifest | `rm` | reversible; refuses anything with value |
 | D12 | Releases from `VERSION` on `main` | manual tags | a merge that bumps `VERSION` is the release; the changelog section is required |
@@ -251,7 +241,7 @@ transcript sits (they all sit in the shared folder).
 |---|---|
 | Portability | macOS, Linux, WSL. OS detection in the installer, `claude-md-email`, `ws -o`. Package managers: Homebrew, apt, dnf, pacman, zypper |
 | Idempotency | every install step checks state first; anything replaced is backed up as `*.bak-<timestamp>`; CI re-runs the installer and requires "up to date" |
-| Safety | the installer never deletes profiles or data; `claude-delete` refuses anything booked, open, recent or with artifacts; hooks fail open |
+| Safety | the installer never deletes Claude config dirs or data; `claude-delete` refuses anything booked, open, recent or with artifacts; hooks fail open |
 | Privacy | everything local or in the user's synced folder; the only network calls are Claude's own (`claude -p` for search re-ranking, retro and the guard judge) and the skills' connectors |
 | Performance | incremental caches for written files and the search index; the sidebar debounces refreshes; the guard's tool hook is ~36 ms |
 | Testability | ~330 pytest tests plus node tests for the extension; a 95 % coverage gate on `bin/`; zsh tested by running it; a real Linux install in CI |
@@ -273,7 +263,7 @@ transcript sits (they all sit in the shared folder).
 | Claude Code changes its transcript or hook format | parsing is defensive (bad lines skipped); tests pin the fields used |
 | Transcripts deleted by retention | installer sets `cleanupPeriodDays` to 3650 and warns on shorter values |
 | A folder moved or renamed breaks attribution | `_audit/moved-folders.json` maps old to new paths for every reader |
-| Profile misattributed | profile comes only from `.session.json`; sessions should start with `claude-new` |
+| Session missing from the audit | its login's config dir isn't in `CWS_CLAUDE_HOMES`; the installer asks for them |
 | Sync conflicts on shared files (pins, ledger) | small files, atomic local writes; single user |
 | Hook misbehaviour interrupts work | every hook fails open; the guard ships `off` and has a shadow mode |
 

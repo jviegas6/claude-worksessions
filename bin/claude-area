@@ -297,9 +297,7 @@ def from_model(meta):
     cmd = ["claude", "-p", "--settings", json.dumps({"disableAllHooks": True}), "--strict-mcp-config",
            "--model", CA.CONFIG.get("CWS_AREA_MODEL") or "haiku", "--tools", "", "--no-session-persistence",
            "--system-prompt", WHY, "--output-format", "json", "--json-schema", json.dumps(schema), msg]
-    env = dict(os.environ)
-    if meta.get("profile"):
-        env["CLAUDE_CONFIG_DIR"] = os.path.join(HOME, ".claude-" + meta["profile"])
+    env = dict(os.environ)          # the Claude login of whoever runs it
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, env=env, cwd=tempfile.gettempdir(),
                            stdin=subprocess.DEVNULL, timeout=float(CA.CONFIG.get("CWS_AREA_TIMEOUT") or 20))

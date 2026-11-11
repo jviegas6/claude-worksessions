@@ -274,7 +274,6 @@ def test_search_ticket_tiers(search, home):
     assert "nothing" not in by
     assert by["declared"]["level"] == "on ticket"
     assert by["declared"]["why"][0] == "declared DATA-7 with claude-new"
-    assert by["declared"]["profile"] == "work"
     assert by["booked"]["why"][0] == "booked to DATA-7 in the weekly review"
     assert by["booked"]["doc"]["_task"] == "Infra"
     assert by["mentioned"]["why"][0] == "you mention DATA-7"
@@ -282,7 +281,6 @@ def test_search_ticket_tiers(search, home):
     assert by["linked"]["level"] == "mentioned"
     assert "linked: meeting Egress sync" in by["linked"]["why"]
     assert by["summary-words"]["level"] == "related"
-    assert by["summary-words"]["profile"] == "unknown"
     order = [r["level"] for r in results]
     assert order == sorted(order, key=["on ticket", "mentioned", "related"].index)
 
@@ -340,20 +338,22 @@ def test_pick_opens_in_t3(search, monkeypatch, capsys, home):
     _pick(search, monkeypatch, "1")
     calls = []
     monkeypatch.setattr(os, "execvp", lambda f, args: calls.append((f, args)))
-    search.pick_and_resume([{"profile": "work", "doc": {"cwd": str(folder), "session_id": "abc"}}], "t3")
+    search.pick_and_resume([{"doc": {"cwd": str(folder), "session_id": "abc"}}], "t3")
     assert calls == [("claude-t3-sync", ["claude-t3-sync", "--thread", "abc", "--fallback", str(folder)])]
 
 
 @pytest.mark.parametrize("flags, config, opener", [
-    ([], None, "cli"), ([], "t3", "t3"), ([], "code", "cli"), (["--cli"], "t3", "cli"), (["--t3"], None, "t3")])
+    ([], None, "cli"), ([], {"CWS_OPEN": "t3"}, "t3"), ([], {"CWS_OPEN": "code"}, "cli"),
+    ([], {"CWS_OPEN_CMD": "claude-t3-sync --open {dir}"}, "t3"), ([], {"CWS_OPEN_CMD": "code {dir}"}, "cli"),
+    (["--cli"], {"CWS_OPEN": "t3"}, "cli"), (["--t3"], None, "t3")])
 def test_main_picks_where_to_open(search, corpus, monkeypatch, flags, config, opener):
     class TTY(io.StringIO):
         def isatty(self):
             return True
     monkeypatch.setattr(sys, "stdin", TTY())
     monkeypatch.setattr(sys.stdout, "isatty", lambda: True, raising=False)
-    if config:
-        monkeypatch.setitem(search.CA.CONFIG, "CWS_OPEN", config)
+    for k, v in (config or {}).items():
+        monkeypatch.setitem(search.CA.CONFIG, k, v)
     picked = []
     monkeypatch.setattr(search, "pick_and_resume", lambda results, how: picked.append(how))
     run_main(search, monkeypatch, "firewall", *flags)
@@ -365,10 +365,14 @@ def test_paths_and_resume_cmd(search, home):
     assert search.short(str(home / "a")) == "~/a"
     assert search.shell_path(str(home / "My Docs" / "x(1)")) == r"~/My\ Docs/x\(1\)"
     assert search.shell_path("/opt/a b") == r"/opt/a\ b"
-    r = {"profile": "work", "doc": {"cwd": str(home / "w s"), "session_id": "abc"}}
-    assert search.launcher(r) == "claude-resume -p work"
-    assert search.resume_cmd(r) == r"cd ~/w\ s && claude-resume -p work --resume abc"
-    assert search.launcher({"profile": "unknown"}) == "claude"
+    r = {"doc": {"cwd": str(home / "w s"), "session_id": "abc", "home": str(home / ".claude-work")}}
+    assert search.launcher(r) == "CLAUDE_CONFIG_DIR=~/.claude-work claude"
+    assert search.resume_cmd(r) == r"cd ~/w\ s && CLAUDE_CONFIG_DIR=~/.claude-work claude --resume abc"
+    assert search.launcher({"doc": {}}) == "claude"
+    # a home that is what a bare `claude` uses needs no CLAUDE_CONFIG_DIR
+    (home / ".claude-personal").mkdir()
+    os.symlink(str(home / ".claude-personal"), str(home / ".claude"))
+    assert search.launcher({"doc": {"home": str(home / ".claude-personal")}}) == "claude"
 
 
 def _pick(search, monkeypatch, answer):
@@ -395,13 +399,13 @@ def test_pick_and_resume_rejects_bad_choice(search, monkeypatch, answer):
 
 def test_pick_and_resume_missing_folder(search, monkeypatch, home):
     _pick(search, monkeypatch, "1")
-    r = {"profile": "work", "doc": {"cwd": str(home / "gone"), "session_id": "abc"}}
+    r = {"doc": {"cwd": str(home / "gone"), "session_id": "abc"}}
     with pytest.raises(SystemExit, match="folder no longer exists: ~/gone"):
         search.pick_and_resume([r])
 
 
-@pytest.mark.parametrize("profile,config", [("personal", ".claude-personal"), ("unknown", None)])
-def test_pick_and_resume_execs_claude(search, monkeypatch, capsys, home, profile, config):
+@pytest.mark.parametrize("config", [".claude-personal", None])
+def test_pick_and_resume_execs_claude(search, monkeypatch, capsys, home, config):
     here = os.getcwd()
     folder = home / "sess"
     folder.mkdir()
@@ -410,7 +414,8 @@ def test_pick_and_resume_execs_claude(search, monkeypatch, capsys, home, profile
     calls = []
     monkeypatch.setattr(os, "execvp", lambda f, args: calls.append((f, args)))
     try:
-        search.pick_and_resume([{"profile": profile, "doc": {"cwd": str(folder), "session_id": "abc"}}])
+        doc = {"cwd": str(folder), "session_id": "abc", "home": str(home / config) if config else ""}
+        search.pick_and_resume([{"doc": doc}])
         assert os.getcwd() == os.path.realpath(folder)
     finally:
         os.chdir(here)
@@ -447,7 +452,7 @@ def test_main_prints_results(search, corpus, monkeypatch, capsys):
     assert out.startswith('claude-search "firewall" · 1 of 2 sessions')
     assert "Firewall for Databricks" in out
     assert "not booked yet" in out
-    assert "claude-resume -p work --resume fw1" in out
+    assert "CLAUDE_CONFIG_DIR=~/.claude-personal claude --resume fw1" in out
     assert "Thu 10 Sep" in out
 
 

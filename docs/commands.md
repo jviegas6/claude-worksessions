@@ -5,25 +5,24 @@ The flag-by-flag reference. For how to use them together see the [user guide](us
 ## claude-new
 
 ```
-claude-new [-p PROFILE] [-n|-a] [-c|--t3|--cli] [-t TICKET] [-T TYPE] [-A PROJECT] [-F TYPE] [-g GOAL] [--done TEXT] [--path DIR]... [--prompt TEXT] [--new] [name]
+claude-new [-n|-a] [-t TICKET] [-T TYPE] [-A PROJECT] [-F TYPE] [-g GOAL] [--done TEXT] [--path DIR]... [--prompt TEXT] [--new] [name]
 claude-new -l
-claude-new -L
 ```
 
 Creates `<work root>/YYYY/MM/DD/HH-mm-ss_slug/`, writes `.session.json` (name, slug,
-profile, ticket, goal, done-when, audit flag, start/end, host, path), cd's in and starts Claude with
-that profile. `ended_at` is filled in when Claude exits.
+ticket, task type, goal, done-when, audit flag, start, host, path), cd's in, runs
+`CWS_AFTER_NEW_CMD` and then opens the folder with `CWS_OPEN_CMD` — by default in T3 Code, as
+below; see [How a request opens](configuration.md#how-a-request-opens) for other apps. Which Claude
+login runs there is the app's choice. Nothing waits for the app, so `ended_at` stays empty.
 
 - **Ticket is mandatory**: `PREFIX-123` or `Other`. A ticket-shaped first word is taken
   as the ticket: `claude-new PROJ-123 cost pipeline`.
 - **A ticket with recent folders offers to continue there.** When the ticket has request
   folders from the last two weeks, `claude-new` lists the newest five and asks *Continue in
-  [1]:* — Enter starts Claude in the newest one (its recorded profile unless `-p` says
-  otherwise), the last number makes a new folder as usual. So a piece of work keeps one
+  [1]:* — Enter opens the newest one again (through `CWS_OPEN_CMD`), the last number makes a
+  new folder as usual. So a piece of work keeps one
   folder across its sessions instead of one per conversation. `--new` skips the offer;
   `Other` and a run without a terminal never get it.
-- `-p name` / `--profile name` picks the profile — any name in `CWS_PROFILES`, so a
-  new profile needs no code change. Left out, you get a menu. An unknown name is an error.
 - `-n` / `--no-audit` keeps the session out of `claude-audit` and the weekly review.
   `claude-search` still finds it. `-a` / `--audit` keeps it in. With neither, `claude-new`
   asks *Count it in the weekly review and daily recap? [Y/n]* — Enter keeps it in. Run
@@ -41,29 +40,20 @@ that profile. `ended_at` is filled in when Claude exits.
   judges each new prompt against them; [`claude-goal`](#claude-goal) changes them.
 - `--path DIR` (repeatable) declares a folder or repo outside the request as part of the work,
   so [`claude-guard`](#claude-guard) treats reads there as in scope. Stored in `.session.json`.
-- `-c` / `--code` opens the new folder in a new VS Code window instead of starting
-  Claude in the terminal. Start Claude from the extension there; it runs with the
-  session's profile through [`claude-vscode`](#claude-vscode). `ended_at` stays empty,
-  since nothing waits for VS Code to close.
-- `--t3` adds the new folder to [T3 Code](https://github.com/pingdotgg/t3code) as a project
-  titled `TICKET · YYYY-MM-DD · name` and opens it in the running app (through
-  [`claude-t3-sync --open`](#claude-t3-sync)). It also starts the request's first thread there,
-  on the profile's T3 Claude instance, with a short kickoff from `.session.json` (ticket, type,
-  goal, done-when; Claude reads `thread.md` if there is one, confirms the goal in one line and
-  waits): `t3` can't create a thread without a message, and a thread left unsent in the app is
-  lost. A folder whose project already has a thread just opens. With `--prompt`, that prompt
-  is the first message instead (see `claude-t3-sync --prompt`). Hooks,
-  the guard and the audit work as in the terminal, since they read the folder's `.session.json`.
-- `--cli` starts Claude in the terminal. With none of `-c`, `--t3`, `--cli`, `CWS_OPEN` in
-  `config.env` decides (`cli`, `code` or `t3`; default `cli`). Continuing in a recent folder
-  opens the same way.
-- `--prompt TEXT` starts Claude with `TEXT` as its first prompt — `--prompt /weekly-review`
-  opens the new request straight into that skill. With `--t3` it is the first message of a
-  thread started on the profile's T3 instance. Not with `-c`.
-- `-l` lists the 15 most recent sessions with profile, ticket and type.
-- `-L` / `--profiles` lists the configured profiles: which is the default and which is
-  shared, the description, the gateway URL if any, and a warning if `~/.claude-<name>`
-  is missing.
+- **In T3 Code** (the default `CWS_OPEN_CMD`, through [`claude-t3-sync --open`](#claude-t3-sync)):
+  the folder becomes a project titled `TICKET · YYYY-MM-DD · name` in the running app, and its
+  first thread starts with a short kickoff from `.session.json` (ticket, type, goal, done-when;
+  Claude reads `thread.md` if there is one, confirms the goal in one line and waits): `t3` can't
+  create a thread without a message, and a thread left unsent in the app is lost. A folder whose
+  project already has a thread just opens. Hooks, the guard and the audit work as in the
+  terminal, since they read the folder's `.session.json`.
+- `-A project` / `-F type` place it in T3's sidebar ([`claude-area`](#claude-area)): they fill
+  `{project}` and `{type}` in `CWS_AFTER_NEW_CMD`; left out, `claude-area` chooses.
+- `--prompt TEXT` is `{prompt}` in `CWS_OPEN_CMD`: in T3, the first message of the thread instead
+  of the kickoff — `--prompt /weekly-review` opens the new request straight into that skill.
+- `-l` lists the 15 most recent sessions with ticket and type.
+- Gone in 3.1.0: `-p` (profiles: the app picks the login), `-L`, `-c` / `--code`, `--cli` and
+  `--t3` (one `CWS_OPEN_CMD` instead).
 
 ## claude-area
 
@@ -129,7 +119,7 @@ claude-t3-sync --apply         make the changes; an undo file goes to _audit/t3/
 claude-t3-sync --undo FILE     put back what that run changed
 claude-t3-sync --open DIR      add DIR to T3 Code under its title, or retitle it, and open it;
                                a request folder with no thread yet gets one, with a kickoff
-               [--prompt TEXT --profile NAME]   start a thread with TEXT instead, and open it
+               [--prompt TEXT]  start a thread with TEXT instead, and open it
 claude-t3-sync --thread ID [--fallback DIR]
                                open the T3 thread that ran Claude session ID, in the T3 app
                 [--days N] [--limit N]
@@ -160,10 +150,9 @@ desktop app through its app link, `t3code://threads/<environment>/<thread>` (`t3
 open a new thread in the project). With no such thread (never run in T3, or deleted there),
 `--fallback DIR` opens DIR's project instead.
 
-`--open DIR --prompt TEXT --profile NAME` starts a thread in DIR's project with TEXT as its first
-message (`t3 thread start`) and opens it. It runs on the T3 Claude instance whose
-`CLAUDE_CONFIG_DIR` is `~/.claude-NAME` (T3's *Settings > Providers*), with the model last used
-on that instance, else `CWS_T3_MODEL`; with neither, T3's project default decides.
+`--open DIR --prompt TEXT` starts a thread in DIR's project with TEXT as its first message
+(`t3 thread start`) and opens it. T3 runs it on its default Claude instance and model for the
+project (*Settings > Providers*); `--profile` and `CWS_T3_MODEL` are gone since 3.1.0.
 
 ## claude-goal
 
@@ -182,30 +171,14 @@ a separate piece of work, start a new session with `claude-new` instead.
 ## claude-resume
 
 ```
-claude-resume [-p PROFILE] [--] [claude args...]
+claude-resume [--] [claude args...]
 ```
 
-Runs Claude Code with a profile (default `CWS_DEFAULT_PROFILE`). Everything except `-p`
-goes to `claude` unchanged, so `claude-resume -p work --resume ID` or `-c` work as usual.
-With no claude arguments it adds `--resume`, which opens the session picker. `--` ends
-its own options, for claude's `-p` (print mode): `claude-resume -p work -- -p "question"`.
-This replaces the per-profile `claude-<name>` aliases.
-
-## claude-vscode
-
-Not run by hand: `install.sh` sets it as the Claude extension's
-`claudeCode.claudeProcessWrapper` in VS Code's user settings (on WSL, the remote machine
-settings in `~/.vscode-server/data/Machine/`). The extension then starts Claude as
-`claude-vscode <claude> [args]` in the workspace folder. If that folder, or one above it,
-has a `.session.json`, Claude gets that session's profile (`CLAUDE_CONFIG_DIR=~/.claude-<profile>`),
-gateway included; anywhere else it runs with whatever the extension's own settings say.
-
-The extension's `claudeCode.environmentVariables` can't do this: it is a machine-wide
-setting, so every window would get the same profile.
-
-Open a request folder as the VS Code workspace (`claude-new -c`, `ws -c`, or
-*File → Open Folder*) so the extension's sessions run there. A window opened on the
-work root gets the default profile and no `.session.json`, like a bare `claude` there.
+Runs Claude Code. Everything goes to `claude` unchanged, so `claude-resume --resume ID` or `-c`
+work as usual; with no arguments it adds `--resume`, which opens the session picker. It uses the
+shell's `CLAUDE_CONFIG_DIR`: [`claude-search`](#claude-search) prints the right one with each
+session it finds (`CLAUDE_CONFIG_DIR=~/.claude-work claude --resume ID`). `-p` is claude's own
+again (print mode); `--` still works before it.
 
 ## claude-type
 
@@ -220,7 +193,7 @@ Types live in `.session.json`: `task_type` is the folder's default, and `session
 maps a session id to its own type. **A session's own type wins**, so one request folder
 can hold sessions that went different ways — resume a folder for something else and only
 that session is relabelled. The session is identified by its transcript in
-`~/.claude-<profile>/projects/`; outside a running session there is nothing to identify,
+`<home>/projects/` (one of `CWS_CLAUDE_HOMES`); outside a running session there is nothing to identify,
 so `claude-type` sets the folder default and says so.
 
 The value must be a task type already used in a request folder or listed in `CWS_TASK_TYPES`.
@@ -293,7 +266,7 @@ leaves it out so the clipboard still matches the tracker's own columns.
 | `--with-type` | yes | yes — for a tracker that has the column |
 | `--no-type` | no | no |
 
-Reads every transcript under `~/.claude-<profile>/projects`, measures time actually
+Reads every transcript under `<home>/projects` for each `CWS_CLAUDE_HOMES` dir (a session once), measures time actually
 worked (stalls capped), and merges the meetings, mail and chats the skills saved in
 `_audit/activity/`. The summary is one row per task and ticket per week; `--detail` is
 every activity behind it. `claude-audit --help` has the full list.
@@ -305,9 +278,10 @@ claude-search QUERY... [--from DATE] [--to DATE] [--ai] [--no-pick] [--t3|--cli]
 ```
 
 Ranks past sessions by ticket or topic across titles, your prompts, Claude's replies,
-commands run and linked meetings/mail. Prints the resume command for each and offers
+commands run and linked meetings/mail. Prints the resume command for each — with the
+`CLAUDE_CONFIG_DIR` of the login it ran on when that isn't `~/.claude` — and offers
 to resume one (`--no-pick` just lists). `--ai` asks Claude to judge relevance.
-With `CWS_OPEN="t3"` (or `--t3`) the session you pick opens in T3 Code instead: the thread that
+When `CWS_OPEN_CMD` opens in T3 (or with `--t3`) the session you pick opens in T3 Code instead: the thread that
 ran it, in the T3 app, or its folder's project when T3 has no thread for it
 ([`claude-t3-sync --thread`](#claude-t3-sync)).
 `--cli` resumes it in the terminal. T3 Code's own search covers titles and project names only,
@@ -328,7 +302,7 @@ copy of its transcript under the old folder.
 
 `--json` adds what the VS Code sidebar shows: each session's auto-title and latest
 prompt (Claude Code keeps both in the transcript), when it started, the files it wrote, and its request
-folder with name, ticket, task type, profile and files. Written files are read once:
+folder with name, ticket, task type and files, and the `config_dir` to resume it with. Written files are read once:
 `~/.cache/claude-worksessions/written.json` remembers how far each transcript was read. A session belongs to the nearest folder with a
 `.session.json` above where it ran, else the `YYYY/MM/DD/slug` folder it is in, else
 the one it was assigned to in `_audit/session-folders.json`.
@@ -340,10 +314,9 @@ is on your PATH (in VS Code: *Shell Command: Install 'code' command in PATH*), a
 same version as the rest; `--update` updates it. Reload open windows after installing.
 
 It adds a sidebar (the history icon) listing your requests and their Claude sessions.
-Open a window on the work root and use it instead of `claude-new -c`'s one window per
-request: every session opens as a **terminal tab in the editor area**, running in its
-own folder with its own profile, so requests on different tickets and profiles sit side
-by side.
+Open a window on the work root: every session opens as a **terminal tab in the editor
+area**, running in its own folder and on the Claude login it ran on, so requests on different
+tickets sit side by side.
 
 | in the sidebar | does |
 |---|---|
@@ -351,8 +324,8 @@ by side.
 | list icon (top) | group by **day**, by **ticket**, or a flat list of **recent** sessions; remembered |
 | funnel icon (top) | **filter** by **day** (today, yesterday, last 7 days, this or last week, this month, or a date — a session counts on every day it was active), **ticket** (tick one or more, or *(no ticket)*) and **artifacts** (with / without). Combines with the search box; remembered; shown in the subtitle. The icon fills while filters are on; *Clear filters* in the `…` menu |
 | arrows icon (top) | sort by **last activity** (a resumed session moves up), **started** (newest first; resuming moves nothing) or **name**; remembered. By day always lists days newest first |
-| a session | open it in a tab (`claude-resume -p <profile> --resume <id>`), or go to its tab if open |
-| **+** on a request | a new session in that request's folder, with its profile |
+| a session | open it in a tab (`claude-resume --resume <id>`, with its `CLAUDE_CONFIG_DIR` when not the default), or go to its tab if open |
+| **+** on a request | a new session in that request's folder (`claude`, on the terminal's login) |
 | **Active** (top) | the sessions a Claude process has open right now — in a tab here, a terminal or the Claude Code panel; they also read *active* with a pulse icon wherever they're listed. Under **Active**, a session opens onto its request's **Files** |
 | pin on a session or request | **Pin** it: a **Pinned** group at the top lists it whatever the grouping and sort (also right-click → Pin / Unpin). Pins live in `<work root>/_config/pinned.json`, so they follow the work root to other machines |
 | folder on a request | reveal it in the Explorer (right-click: in Finder, a new window, set task type) |
@@ -366,7 +339,7 @@ before the first prompt, or only written to from another session): it shows with
 **Files** and no sessions, sorted by when its files last changed.
 
 **Search box.** Above the tree: typing filters it to the sessions whose title, prompts,
-request name, ticket, task type, profile, folder or file names contain every word, and
+request name, ticket, task type, folder or file names contain every word, and
 opens every group so the matches show. A request's **Files** narrow only by the words that
 matched nothing but file names — a request found by its name, ticket or sessions keeps all
 its files — and then say so: **Files 1 of 4**; `Esc` or the clear button in the title bar resets it. **Enter**
@@ -394,7 +367,7 @@ panel), the terminal commands and your skills:
 | Focus the search box · Clear search | |
 
 Sessions are named by Claude's auto-title, else their first prompt; hovering shows the
-title, first and latest prompt, ticket, type, profile, age, and the files the session
+title, first and latest prompt, ticket, type, age, and the files the session
 wrote (from its Write / Edit tool calls). Open sessions have a
 green terminal icon. Tabs are named `TICKET · title`; a tab opened with **+** takes its
 session's name once its first prompt is in. The list refreshes itself as transcripts
@@ -480,7 +453,7 @@ The report — signals, causes, habits to keep, the worst episodes with your wor
 rewrite, and the **trend** — goes to `<work root>/_audit/quality/<from>_<to>_retro.md`;
 `history.json` there keeps one line per period. Verdicts are cached in `judged.json`, so
 re-running a period doesn't call Claude again. The judge uses `claude -p --model sonnet`
-(`--model` to change) with the profile your shell is on.
+(`--model` to change) with the Claude login your shell is on.
 
 Recurring habits are worth moving into `_config/context.md`, so Claude applies them
 without being told.
@@ -488,7 +461,7 @@ without being told.
 ## Prompt-quality hooks
 
 Off by default. With `CWS_HOOKS="1"` in `config.env`, `install.sh` writes them into every
-profile's `settings.json` (hooks you already have are kept); with it off, `install.sh` and
+`CWS_CLAUDE_HOMES` dir's `settings.json` (hooks you already have are kept); with it off, `install.sh` and
 `uninstall.sh` take ours out. Review or disable them with `/hooks`.
 
 **Vague request → ask first** (`claude-hook-vague`, on `UserPromptSubmit`). On the first two
@@ -549,11 +522,11 @@ claude-guard review ID right|wrong [NOTE]   mark one (an id prefix is enough)
 claude-guard mode [off|shadow|warn|enforce] show the mode, or set CWS_GUARD_MODE in config.env
 ```
 
-Every judge decision — goal, done-when, scope before, prompt, verdict, reason, model, profile,
+Every judge decision — goal, done-when, scope before, prompt, verdict, reason, model, judge config dir,
 time — is kept in `<work root>/_audit/guard/judge.jsonl`, and your marks in `reviews.jsonl`
 next to it. The report shows how many were reviewed and the wrong ones with your notes: the
-material for tuning `guard-rules.md`. `CWS_GUARD_PROFILE` picks the profile the judge runs
-under.
+material for tuning `guard-rules.md`. `CWS_GUARD_CONFIG_DIR` picks the Claude config dir the judge runs
+with.
 
 Counts by event, type and decision, the judge's median and p90 time and failures,
 overrides, and the latest pivots, work in other requests and loops with their reasons — the

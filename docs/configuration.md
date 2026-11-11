@@ -13,7 +13,7 @@ Format: `KEY="value"` lines, `#` comments, `$HOME` expanded. Nothing else is
 interpreted — it is not executed as shell.
 
 You don't have to write it by hand: the first `install.sh` asks for everything, and
-`install.sh --profiles` re-asks the profile questions. Editing the file directly works
+`install.sh --reconfigure` asks again. Editing the file directly works
 just as well — re-run `install.sh` afterwards so `CLAUDE.md` catches up.
 
 ## config.env
@@ -33,21 +33,17 @@ just as well — re-run `install.sh` afterwards so `CLAUDE.md` catches up.
 | `CWS_ADR_REGISTER` | `_config/adr-register.md` | the Markdown table of ADRs (with a Status column) whose undecided rows are "decisions pending" |
 | `CWS_TICKET_EXAMPLE` | `PROJ-123` | prompts and help text; any `PREFIX-123` or `Other` is accepted |
 | `CWS_JIRA_CLOUD_ID` | — | the weekly review's Jira query (Atlassian MCP `getAccessibleAtlassianResources` gives it) |
-| `CWS_PROFILES` | `personal work` | Claude profiles; each is `~/.claude-<name>`, picked with `-p <name>` in `claude-new` / `claude-resume` |
-| `CWS_DEFAULT_PROFILE` | first profile | what a bare `claude` uses; the default in `claude-new`'s menu |
-| `CWS_SHARED_PROFILE` | first profile | the profile that owns history, projects, skills, plugins, MCP |
-| `CWS_PROFILE_<name>_DESC` | — | the line shown in `claude-new`'s profile menu |
-| `CWS_PROFILE_<name>_BASE_URL` | — | route that profile through an API gateway (see below) |
+| `CWS_CLAUDE_HOMES` | `~/.claude` | the Claude config dirs whose transcripts `claude-audit`, `claude-search`, `claude-sessions` and the sidebar read, space-separated; see [below](#claude-config-dirs) |
 | `CWS_TASK_TYPES` | permissions, job errors, … | seed list of task types; the ones you have used are suggested first |
 | `CWS_GUARD_MODE` | `off` | [`claude-guard`](commands.md#claude-guard): `off`, `shadow` (log only), `warn` (log and show a notice) or `enforce` (block) |
 | `CWS_GUARD_MAX_EXTENSIONS` | `2` | how many times a session's goal can be widened before the next widening counts as a new objective |
 | `CWS_GUARD_MODEL` | `haiku` | the model of the guard's judge |
-| `CWS_GUARD_PROFILE` | — (the session's own) | the profile the guard's judge runs under — its login or gateway, and its cost |
+| `CWS_GUARD_CONFIG_DIR` | — (the session's own) | the Claude config dir the guard's judge runs with — its login or gateway, and its cost |
 | `CWS_GUARD_JUDGE_TIMEOUT` | `25` | seconds to wait for the judge in `enforce` before letting the prompt through |
 | `CWS_GUARD_IGNORE_NAMES` | — | first parts of dotted names that are code, not data, in your commands (SDK objects), space-separated |
-| `CWS_OPEN` | `cli` | where `claude-new` opens a request: `cli` (Claude in the terminal), `code` (VS Code, as `-c`) or `t3` (T3 Code, as `--t3`) |
-| `CWS_T3_BIN` | `t3` on PATH, else `~/.t3/bin/t3` | T3 Code's command, for `claude-new --t3` and `claude-t3-sync` |
-| `CWS_T3_MODEL` | — | model for threads `claude-new --t3 --prompt` starts, when T3 has no thread on that instance yet to take it from |
+| `CWS_OPEN_CMD` | T3 Code | how `claude-new` opens a request: one command; see [below](#how-a-request-opens) |
+| `CWS_AFTER_NEW_CMD` | `claude-area …` | what `claude-new` runs once the folder exists, before opening it |
+| `CWS_T3_BIN` | `t3` on PATH, else `~/.t3/bin/t3` | T3 Code's command, for `claude-t3-sync` |
 | `CWS_PROJECTS` | empty | big projects, each with its own heading in T3; see [`claude-area`](commands.md#claude-area) |
 | `CWS_TYPES` | empty (off) | the types of request, e.g. `data access investigation`; the last is the fallback |
 | `CWS_AREAS_DIR` | `~/.local/share/claude-worksessions/areas` | where the areas' git data lives; keep it outside the synced work root |
@@ -57,52 +53,52 @@ just as well — re-run `install.sh` afterwards so `CLAUDE.md` catches up.
 | `CWS_INSTALL_YAZI` | `1` | install yazi, glow, pandoc and the Markdown extras |
 
 Changing a value: edit the file, open a new terminal. Re-run `install.sh` when you
-changed the work root or profiles — the work root's `CLAUDE.md` is rendered from them. Org,
+changed the work root or the Claude config dirs — the work root's `CLAUDE.md` is rendered from them. Org,
 role, time zone, ticket example and Jira id are read by your skills at run time, so a new
 session is enough.
 
-## Profiles
+## How a request opens
 
-Have as many as you like. Names are lowercase letters, digits and underscores — no
-dashes, because the name becomes part of `CWS_PROFILE_<name>_DESC` / `_BASE_URL`.
-Each is either a **Claude subscription** — you sign in with
-your account, and `install.sh` offers to open it for you — or an **inference gateway**:
-an Anthropic-compatible `CWS_PROFILE_<name>_BASE_URL` plus a token, which needs no
-login at all. `install.sh --profiles` adds, renames or removes them; a profile you drop
-keeps its `~/.claude-<name>` folder until you delete it yourself.
+`claude-new` makes the folder and its `.session.json`, then runs two command templates:
 
-Each profile is a separate Claude Code config dir. Non-shared profiles symlink these
-items to the shared profile, so every session, skill and MCP server is visible from
-every profile and `claude-audit` sees all work in one place:
+| key | runs | default |
+|---|---|---|
+| `CWS_AFTER_NEW_CMD` | once the folder exists (T3's sidebar grouping, before T3 first sees it) | `claude-area --dir {dir} --pick {project} --type {type}` |
+| `CWS_OPEN_CMD` | to open it | `claude-t3-sync --open {dir} --prompt {prompt}` |
 
-`projects sessions session-env history.jsonl file-history shell-snapshots skills plugins mcp`
+`{dir}`, `{title}` (the request name), `{prompt}` (`--prompt`), `{project}` (`-A`) and `{type}`
+(`-F`) are replaced by their values, shell-quoted, so each stays one argument whatever it holds.
+An empty `CWS_OPEN_CMD` makes `claude-new` print the folder's path; an empty
+`CWS_AFTER_NEW_CMD` runs nothing. Moving to another app is a line, not code:
 
-Each profile keeps its own `settings.json` and login (`.claude.json`) — that is the
-point of having several: e.g. `personal` on a Claude subscription, `work` on a company
-gateway.
+```sh
+CWS_OPEN_CMD="code {dir}"                  # VS Code
+CWS_OPEN_CMD="open -a Terminal {dir}"      # a Terminal window (macOS)
+CWS_AFTER_NEW_CMD=""                       # no T3, so no sidebar grouping
+```
 
-`install.sh` never merges data. If a non-shared profile already has a real
-`projects/` (or any of the above), it warns and leaves it; move its contents into the
-shared profile and re-run.
+A config from before 3.1 has neither line: `CWS_OPEN="t3"` then means the T3 default, and
+`claude-area`, when installed, runs as before.
 
-`~/.claude` is linked to the shared profile if it doesn't exist yet.
+## Claude config dirs
+
+Which Claude login a session uses — a subscription, a company gateway — is the app's choice:
+T3 Code's providers (Settings > Providers, one config dir each), or the IDE. worksessions only
+needs to know where their transcripts are: `CWS_CLAUDE_HOMES`, e.g.
+`"~/.claude-personal ~/.claude-work"`. A projects dir that two of them share through a link is
+read once, and a session id found in an earlier dir is not counted again. Without the setting:
+`~/.claude-<name>` for each name in an older `CWS_PROFILES`, else `~/.claude`.
+
+`install.sh` creates nothing between them and leaves links made by older releases alone.
 
 ## Transcript retention
 
 Claude Code deletes transcripts it hasn't written to for `cleanupPeriodDays` days —
 **30 by default**. Those transcripts are what `claude-audit`, the weekly review, the
 daily recap, `claude-search` and the VS Code sidebar read, so `install.sh` sets
-`"cleanupPeriodDays": 3650` (about ten years) in each profile's `settings.json` where
+`"cleanupPeriodDays": 3650` (about ten years) in each `CWS_CLAUDE_HOMES` dir's `settings.json` where
 it isn't set. A value you set yourself is kept; if it is shorter, `install.sh` warns
 that the audit will lose older sessions.
-
-## Gateway tokens
-
-With `CWS_PROFILE_work_BASE_URL="https://gateway.example.com"`, `install.sh` sets
-`env.ANTHROPIC_BASE_URL` in `~/.claude-work/settings.json` and asks for the token
-once, storing it as `env.ANTHROPIC_AUTH_TOKEN` in that file (mode 600). The token is
-never written to the config or the repo. To change it, edit that `settings.json` or
-delete the key and re-run `install.sh`.
 
 ## context.md — standing context
 

@@ -23,7 +23,7 @@ library (`contextlib`, `datetime`, `hashlib`, `json`, `os`, `re`, `subprocess`, 
 | Configuration | `load_config`, `settings`, `now` |
 | Session folder and state | `session_dir`, `read_json`, `session_goal`, `scope` (context manager), `log` |
 | Identifier extraction | `strings`, `anchors`, `prompt_anchors`, `matches`, `safe_roots`, `safe`, `reached`, `trivial` |
-| Judge | `rules_text`, `judge_profile`, `judge`, `grow`, `apply_verdict` |
+| Judge | `rules_text`, `judge_home_setting`, `judge_home`, `judge`, `grow`, `apply_verdict` |
 | Hooks | `on_prompt`, `on_tool`, `deny`, `on_stop`, `new_turn` |
 | Journal and review | `journal_dir`, `decision_id`, `journal`, `read_jsonl`, `reviews`, `review` |
 | Report | `report` |
@@ -80,7 +80,7 @@ treats every guard failure (a crash, a timeout, a non-zero exit) as non-blocking
 | `timeout` | `CWS_GUARD_JUDGE_TIMEOUT` | `25` | float; unparsable → 25.0 |
 | `root` | `CWS_WORK_ROOT` → `$CLAUDE_WORK_ROOT` → `~/work_sessions` | — | `realpath` |
 | `ignore` | `CODE_NAMES` ∪ `CWS_GUARD_IGNORE_NAMES` (space-separated, lower-cased) | `CODE_NAMES` | — |
-| `profile` | `CWS_GUARD_PROFILE` | `""` (the session's own) | stripped; checked when the judge runs (§7.1) |
+| `judge_home` | `CWS_GUARD_CONFIG_DIR` (`~` expanded); else `~/.claude-<name>` for the older `CWS_GUARD_PROFILE` | `""` (the session's own) | checked when the judge runs (§7.1) |
 | `max_ext` | `CWS_GUARD_MAX_EXTENSIONS` | `2` | int ≥ 0; unparsable → 2. Extensions allowed per goal before one more counts as a pivot (§7.5) |
 
 `CWS_GUARD_JUDGE_TIMEOUT` must stay below the hook timeout that `install.sh` registers for
@@ -328,7 +328,7 @@ the scope of a newer request. The log line is written either way.
 
 ```
 claude -p
-  --settings '{"disableAllHooks": true}'   # the profile's settings load (gateway URL/token), no hook runs
+  --settings '{"disableAllHooks": true}'   # that config dir's settings load (gateway URL/token), no hook runs
   --strict-mcp-config             # no MCP servers
   --model <cfg.model>
   --tools ""                      # no tools
@@ -339,22 +339,21 @@ claude -p
   "<message>"
 ```
 
-- `subprocess.run(..., capture_output=True, text=True, timeout=cfg.timeout, cwd=tempfile.gettempdir(), env=<judge_profile env>)`.
-- **Profile — `judge_profile(cfg)` → `(name, env, error)`.** `env` is `os.environ` plus
-  `CWS_GUARD_JUDGE=1`. With `cfg.profile` set, `CLAUDE_CONFIG_DIR` is replaced by
-  `~/.claude-<profile>`. If that folder doesn't exist, the judge is not called and the
-  result is the error `judge profile dir <path> not found` (fail open). With it unset, the
-  inherited `CLAUDE_CONFIG_DIR` stays, and the name is its basename minus `.claude-`
-  (`default` if unset).
+- `subprocess.run(..., capture_output=True, text=True, timeout=cfg.timeout, cwd=tempfile.gettempdir(), env=<judge_home env>)`.
+- **Config dir — `judge_home(cfg)` → `(dir, env, error)`.** `env` is `os.environ` plus
+  `CWS_GUARD_JUDGE=1`. With `cfg.judge_home` set, `CLAUDE_CONFIG_DIR` is replaced by it. If
+  that folder doesn't exist, the judge is not called and the result is the error
+  `judge config dir <path> not found` (fail open). With it unset, the inherited
+  `CLAUDE_CONFIG_DIR` stays, and the dir reported is that (`inherited` if unset).
 - The working directory is the temp dir, so no project `CLAUDE.md` is picked up.
 - By default `CLAUDE_CONFIG_DIR` is inherited from the hook's environment, so the judge uses
-  the same profile, login and endpoint (API gateway) as the session. `CWS_GUARD_PROFILE`
+  the same login and endpoint (API gateway) as the session. `CWS_GUARD_CONFIG_DIR`
   overrides it.
-- `--bare` is **not** used: it skips the OAuth login that subscription profiles rely on
+- `--bare` is **not** used: it skips the OAuth login that subscription logins rely on
   (verified: "Not logged in").
-- `--setting-sources ""` is **not** used either: it also drops the profile's `settings.json`,
-  where a gateway profile keeps `ANTHROPIC_BASE_URL` and its token (verified: "Not logged in"
-  on the gateway profile). Hooks are switched off with `disableAllHooks` instead.
+- `--setting-sources ""` is **not** used either: it also drops the config dir's `settings.json`,
+  where a gateway login keeps `ANTHROPIC_BASE_URL` and its token (verified: "Not logged in"
+  on the gateway login). Hooks are switched off with `disableAllHooks` instead.
 
 ### 7.2 Message
 
@@ -578,7 +577,7 @@ hook carries on.
 
 ```json
 {"id": "3fa9c1d2e0", "ts": "2026-09-26T21:57:12Z", "folder": "2026/09/26/10-00-00_x",
- "session_id": "…", "prompt_no": 2, "mode": "shadow", "model": "haiku", "profile": "work",
+ "session_id": "…", "prompt_no": 2, "mode": "shadow", "model": "haiku", "judge_home": "/Users/me/.claude-work",
  "judge_ms": 7056, "goal": "…", "done_when": "…", "scope_before": "…", "prompt": "… (≤4000)",
  "enforced": false,
  "verdict": "pivot", "literal": "…", "targets": ["…"], "reason": "…"}
@@ -641,7 +640,7 @@ Continuations are left out of the default list because they are the bulk and rar
 | `claude` not on PATH, not logged in, gateway error, bad output | prompt allowed | `judge_error` |
 | Judge timeout | prompt allowed | `judge_error`, `judge_ms` |
 | Background judge can't start (shadow) | prompt allowed | `judge_error` |
-| `CWS_GUARD_PROFILE` names a profile with no `~/.claude-<name>` | judge not called; prompt allowed | `judge_error`, journal `error` |
+| `CWS_GUARD_CONFIG_DIR` names a folder that doesn't exist | judge not called; prompt allowed | `judge_error`, journal `error` |
 | `_audit/guard/` not writable | decision still applied and logged in the folder | stderr |
 | Hook killed by Claude Code's timeout | non-blocking per spec | no |
 | Judge process fires hooks | none: `disableAllHooks`, and `CWS_GUARD_JUDGE` silences the guard anyway | — |
@@ -652,7 +651,7 @@ Continuations are left out of the default list because they are the bulk and rar
 
 ### 13.1 `install.sh`
 
-For each profile `~/.claude-<p>/settings.json` (in the "Claude Code profiles" step), the
+For each `CWS_CLAUDE_HOMES` dir's `settings.json` (in the "Claude config dirs" step), the
 hook merge adds any missing entry, matched by exact `command`, and keeps the user's own hooks:
 
 | Event | Matcher | Command | Timeout (s) |
@@ -676,8 +675,8 @@ call reads the config and exits.
 
 ### 13.2 `uninstall.sh`
 
-Uninstalls a `worksessions` plugin left by 2.35–2.38 from each profile, removes the three `claude-guard <event>`
-commands (and the other prompt-quality hooks) from each profile's settings, drops empty groups
+Uninstalls a `worksessions` plugin left by 2.35–2.38 from each Claude config dir, removes the three `claude-guard <event>`
+commands (and the other prompt-quality hooks) from each config dir's settings, drops empty groups
 and events, and removes the symlink.
 
 ---
@@ -735,7 +734,7 @@ scanned as before.
 
 ---
 
-## 17. Measured performance (2026-09-26, macOS, Haiku through a subscription profile)
+## 17. Measured performance (2026-09-26, macOS, Haiku through a subscription login)
 
 | Operation | Measured |
 |---|---|
@@ -750,7 +749,7 @@ scanned as before.
 
 | File | Covers |
 |---|---|
-| `tests/test_guard.py` (30 tests) | extraction and matching; `trivial`; folder resolution and settings; config parsing and the ignore list; shadow background spawn and spawn failure; `force:` and widening; enforce pivot blocking without widening the scope; first-prompt rule; late verdicts; each judge failure mode; rules file; no-op outside request folders; no target matching on calls; other-request reads noted once per folder, writes there denied in enforce, unless declared or named; safe roots; loops (denied from the 3rd call, logged once); stop blocking once, shadow stop summary; `main` silence rules and fail-open; corrupt state; report output; judge profile (inherited, configured, missing → fail open); journal content and id join; review listing, `--all`, `--days`, prefix marking, errors; report agreement; journal write failure |
+| `tests/test_guard.py` (30 tests) | extraction and matching; `trivial`; folder resolution and settings; config parsing and the ignore list; shadow background spawn and spawn failure; `force:` and widening; enforce pivot blocking without widening the scope; first-prompt rule; late verdicts; each judge failure mode; rules file; no-op outside request folders; no target matching on calls; other-request reads noted once per folder, writes there denied in enforce, unless declared or named; safe roots; loops (denied from the 3rd call, logged once); stop blocking once, shadow stop summary; `main` silence rules and fail-open; corrupt state; report output; judge config dir (inherited, configured, missing → fail open); journal content and id join; review listing, `--all`, `--days`, prefix marking, errors; report agreement; journal write failure |
 | `tests/test_shell.py` | `claude-new` goal/done flags, interactive prompts and the non-interactive default; `claude-goal` show, re-anchor, scope reset, log line, done-only change and the error outside a folder; `install.sh` registers the guard hooks with their matchers and timeouts and seeds `guard-rules.md`; `uninstall.sh` removes them |
 | `tests/test_quality.py` | `claude-hook-notfound` ignores Bash stdout and still catches stderr and MCP output |
 
@@ -768,7 +767,7 @@ at 99% (`claude-guard` 99%).
 | `CWS_GUARD_MAX_EXTENSIONS` | config | `2` | extensions per goal before the next counts as a pivot |
 | `CWS_GUARD_MODEL` | config | `haiku` | judge model |
 | `CWS_GUARD_JUDGE_TIMEOUT` | config | `25` | seconds (enforce and background) |
-| `CWS_GUARD_PROFILE` | config | — | profile the judge runs under |
+| `CWS_GUARD_CONFIG_DIR` | config | — | Claude config dir the judge runs with (`CWS_GUARD_PROFILE` before 3.1) |
 | `CWS_GUARD_IGNORE_NAMES` | config | — | extra code-object first parts to ignore |
 | `_config/guard-rules.md` | work root | example | the judge's criteria |
 | `LOOP_AFTER` | code | 3 | identical calls per request that make a loop |

@@ -106,7 +106,8 @@ test("the search box matches every word anywhere in a session or its request", (
   const s = ses("abc123", 1, A, { title: "Fix the firewall", last_prompt: "open port 443" });
   assert.ok(M.matches(s, ""));
   assert.ok(M.matches(s, "FIREWALL 443"));
-  assert.ok(M.matches(s, "data-1 work"));            // ticket and profile
+  assert.ok(M.matches(s, "data-1"));                 // ticket
+  assert.ok(!M.matches(s, "data-1 work"));           // a profile from before 3.1 is not searched
   assert.ok(M.matches(s, "10-00-00_a abc1"));         // folder and id
   assert.ok(!M.matches(s, "firewall 80"));
   assert.deepStrictEqual(M.visible(data, { filter: "t-a" }).map(x => x.id), ["a1", "a2"]);

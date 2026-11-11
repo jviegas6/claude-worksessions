@@ -1,7 +1,6 @@
 # claude-worksessions: shell side. Sourced from ~/.zshrc by install.sh.
 #
-#   claude-<profile>      Claude Code with that profile's config dir (~/.claude-<profile>)
-#   claude-new            create a YYYY/MM/DD/HH-mm-ss_slug request folder and start Claude in it
+#   claude-new            create a YYYY/MM/DD/HH-mm-ss_slug request folder and open it (CWS_OPEN_CMD)
 #   claude-goal           show or re-anchor the session goal claude-guard holds the session to
 #   ws [-o|-c|-y]         fuzzy-pick a request folder and cd into it (Finder / VS Code / yazi)
 #   y                     yazi, and cd to wherever you quit it
@@ -38,52 +37,33 @@ fi
 
 export CWS_CONFIG="${CWS_CONFIG:-$HOME/.config/claude-worksessions/config.env}"
 export CLAUDE_WORK_ROOT="${CWS_WORK_ROOT:-${CLAUDE_WORK_ROOT:-$HOME/work_sessions}}"
-: ${CWS_PROFILES:="personal work"}
-: ${CWS_DEFAULT_PROFILE:=${${=CWS_PROFILES}[1]}}
+# The Claude config dirs whose transcripts are searched: CWS_CLAUDE_HOMES, else ~/.claude-<name>
+# for each name in the older CWS_PROFILES, else ~/.claude. The app that runs Claude (T3, an IDE)
+# picks which one a session uses; this list is only where to look.
+if [[ -z "${CWS_CLAUDE_HOMES:-}" ]]; then
+  if [[ -n "${CWS_PROFILES:-}" ]]; then CWS_CLAUDE_HOMES="${(j: :)${(@)${=CWS_PROFILES}/#/$HOME/.claude-}}"
+  else CWS_CLAUDE_HOMES="$HOME/.claude"; fi
+fi
 : ${CWS_TICKET_EXAMPLE:="PROJ-123"}
 # Seed vocabulary for a session's task type; what you actually use is learned from
 # past sessions and suggested first.
 : ${CWS_TASK_TYPES:="permissions, job errors, new features, security, investigation, data quality, tooling, documentation"}
 
-# Default profile for a bare `claude`
-export CLAUDE_CONFIG_DIR="$HOME/.claude-$CWS_DEFAULT_PROFILE"
-
-# `-p NAME` for claude-new and claude-resume: NAME must be one of CWS_PROFILES.
-_cws_check_profile() {
-  local cmd="$1" name="$2"
-  local -a profiles=(${=CWS_PROFILES})
-  if [[ -z "$name" || "$name" == -* ]]; then
-    print -u2 -- "$cmd: -p needs a profile name (one of: ${profiles[*]})"
-    return 1
-  fi
-  if (( ! ${profiles[(Ie)$name]} )); then
-    print -u2 -- "$cmd: unknown profile '$name' (one of: ${profiles[*]}; see claude-new -L)"
-    return 1
-  fi
-}
-
-# Claude Code with a profile: `claude-resume -p work --resume ID`. Everything but -p goes
-# to claude unchanged; with nothing else it adds --resume, which opens the session picker.
-# `--` ends claude-resume's options, for claude's own -p (print mode).
+# claude-resume [--] [claude args...]: Claude Code, resuming by default. Everything goes to
+# claude unchanged; with nothing it adds --resume, which opens the session picker. `--` ends
+# claude-resume's options, for claude's own -p (print mode). CLAUDE_CONFIG_DIR is whatever
+# this shell has (claude-search prints the right one with each session).
 claude-resume() {
   emulate -L zsh
-  local profile="$CWS_DEFAULT_PROFILE"
   case "$1" in
-    -p|--profile) _cws_check_profile claude-resume "$2" || return 1; profile="$2"; shift 2 ;;
     -h|--help)
-      print -r -- 'claude-resume [-p PROFILE] [--] [claude args...]'
-      print -r -- "    run Claude Code with a profile (${=CWS_PROFILES}; default $CWS_DEFAULT_PROFILE)"
-      print -r -- '    no claude args: --resume, i.e. pick a session to resume'
+      print -r -- 'claude-resume [--] [claude args...]'
+      print -r -- '    run Claude Code; no claude args: --resume, i.e. pick a session to resume'
       return 0 ;;
   esac
   [[ "$1" == -- ]] && shift
   (( $# )) || set -- --resume
-  local cfg="$HOME/.claude-$profile"
-  if [[ ! -d "$cfg" ]]; then
-    print -u2 -- "claude-resume: config dir $cfg does not exist"
-    return 1
-  fi
-  CLAUDE_CONFIG_DIR="$cfg" command claude "$@"
+  command claude "$@"
 }
 
 # --- task type ---------------------------------------------------------------------
@@ -125,15 +105,15 @@ _cws_guess_type() {
 }
 
 # The id of the session running in a folder: Claude names its transcript <id>.jsonl in
-# ~/.claude-<profile>/projects/<folder path with non-alphanumerics as dashes>/.
+# <home>/projects/<folder path with non-alphanumerics as dashes>/, for one of CWS_CLAUDE_HOMES.
 _cws_session_id() {
-  "$CWS_PYTHON" - "$1" "$HOME" "$CWS_PROFILES" <<'PYEOF'
+  "$CWS_PYTHON" - "$1" "$CWS_CLAUDE_HOMES" <<'PYEOF'
 import glob, os, re, sys
-folder, home, profiles = sys.argv[1], sys.argv[2], sys.argv[3].split()
+folder, homes = sys.argv[1], sys.argv[2].split()
 enc = re.sub(r"[^A-Za-z0-9]", "-", os.path.abspath(folder))
 best, when = "", -1.0
-for p in profiles:
-    for f in glob.glob(os.path.join(home, ".claude-" + p, "projects", enc, "*.jsonl")):
+for h in homes:
+    for f in glob.glob(os.path.join(os.path.expanduser(h), "projects", enc, "*.jsonl")):
         m = os.path.getmtime(f)
         if m > when:
             best, when = os.path.basename(f)[:-6], m
@@ -417,67 +397,59 @@ print("\n".join(out))
 PYEOF
 }
 
-# Open a request folder where claude-new was asked to: VS Code (its Claude extension starts
-# Claude through claude-vscode) or T3 Code (claude-t3-sync adds it under its ticket and opens it).
-# Nothing waits for either, so ended_at stays empty. Returns 1 for cli: the caller runs Claude.
-# In T3, a prompt starts a thread with it on the profile's Claude instance; without one, a request
-# with no thread yet gets one started with a kickoff message, so T3 registers it.
-_cws_open_request() {
-  case "$2" in
-    code) code -n "$1" ;;
-    t3)   local -a first=(--profile "$4")
-          [[ -n "$3" ]] && first+=(--prompt "$3")
-          claude-t3-sync --open "$1" "${first[@]}" ;;
-    *)    return 1 ;;
-  esac
-  return 0
+# How a request is opened, and what runs just before: two command templates in config.env.
+#   CWS_OPEN_CMD       opens the folder (T3, an editor, a terminal...); empty = print its path
+#   CWS_AFTER_NEW_CMD  runs once the folder exists, before it is opened (T3's sidebar grouping)
+# Placeholders {dir} {title} {prompt} {project} {type} are replaced by shell-quoted values, so
+# each one stays one argument however many spaces or quotes it holds. A config from before 3.1
+# has neither line: CWS_OPEN="t3" then means T3's command, and claude-area, when installed,
+# placed every request, so those are what a missing line means.
+_cws_open_cmd() {
+  if (( ${+CWS_OPEN_CMD} )); then print -r -- "$CWS_OPEN_CMD"
+  elif [[ "${CWS_OPEN:-}" == t3 ]]; then print -r -- 'claude-t3-sync --open {dir} --prompt {prompt}'
+  fi
+}
+_cws_after_new_cmd() {
+  if (( ${+CWS_AFTER_NEW_CMD} )); then print -r -- "$CWS_AFTER_NEW_CMD"
+  elif command -v claude-area >/dev/null 2>&1; then print -r -- 'claude-area --dir {dir} --pick {project} --type {type}'
+  fi
+}
+# _cws_run_template TEMPLATE DIR TITLE PROMPT PROJECT TYPE: fill it in and run it
+_cws_run_template() {
+  local cmd="$1"
+  cmd="${cmd//\{dir\}/${(q)2}}"
+  cmd="${cmd//\{title\}/${(q)3}}"
+  cmd="${cmd//\{prompt\}/${(q)4}}"
+  cmd="${cmd//\{project\}/${(q)5}}"
+  cmd="${cmd//\{type\}/${(q)6}}"
+  eval "$cmd"
 }
 
-# Start Claude in an existing request folder: its recorded profile unless one was given.
+# Open an existing request folder again, through CWS_OPEN_CMD.
 _claude_new_continue() {
-  local dir="$1" profile="$2" prompt="$3" opener="$4" cfg
-  if [[ -z "$profile" ]]; then
-    profile="$(WS_DIR="$dir" "$CWS_PYTHON" -c 'import json,os; print(json.load(open(os.path.join(os.environ["WS_DIR"], ".session.json"))).get("profile") or "")')"
-    profile="${profile:-$CWS_DEFAULT_PROFILE}"
-  fi
-  cfg="$HOME/.claude-$profile"
-  if [[ ! -d "$cfg" ]]; then
-    print -u2 -- "claude-new: config dir $cfg does not exist"; return 1
-  fi
-  print -r -- "→ $profile  continuing in ${dir#$CLAUDE_WORK_ROOT/}"
+  local dir="$1" prompt="$2" title open
+  title="$(WS_DIR="$dir" "$CWS_PYTHON" -c 'import json,os
+try: print(json.load(open(os.path.join(os.environ["WS_DIR"], ".session.json"))).get("name") or "")
+except Exception: print("")')"
+  print -r -- "→ continuing in ${dir#$CLAUDE_WORK_ROOT/}"
   cd "$dir" || return 1
-  _cws_open_request "$dir" "$opener" "$prompt" "$profile" && return
-  CLAUDE_CONFIG_DIR="$cfg" command claude ${prompt:+"$prompt"}
+  open="$(_cws_open_cmd)"
+  if [[ -z "$open" ]]; then print -r -- "$dir"; return 0; fi
+  _cws_run_template "$open" "$dir" "${title:-${dir:t}}" "$prompt" "" ""
 }
 
 claude-new() {
   emulate -L zsh
   setopt local_options no_nomatch
 
-  local profile="" name="" ticket="" canon="" dir slug cfg started ended audit=1 ask_audit=1 ttype="" opener="${CWS_OPEN:-cli}" prompt="" fresh=0
-  local goal="" done_when="" goal_set=0 project="" front=""
+  local name="" ticket="" canon="" dir slug started audit=1 ask_audit=1 ttype="" prompt="" fresh=0
+  local goal="" done_when="" goal_set=0 project="" front="" open after
   local -a paths=()
-  local -a profiles=(${=CWS_PROFILES})
 
   while [[ "$1" == -* ]]; do
     case "$1" in
-      -p|--profile)  _cws_check_profile claude-new "$2" || return 1; profile="$2"; shift 2 ;;
-      -L|--profiles)
-        local p desc url tag
-        for p in $profiles; do
-          desc="CWS_PROFILE_${p}_DESC" url="CWS_PROFILE_${p}_BASE_URL" tag=""
-          [[ "$p" == "$CWS_DEFAULT_PROFILE" ]] && tag+=" default"
-          [[ "$p" == "${CWS_SHARED_PROFILE:-${profiles[1]}}" ]] && tag+=" shared"
-          [[ -d "$HOME/.claude-$p" ]] || tag+=" (no ~/.claude-$p)"
-          printf '  %-12s %-18s %s\n' "$p" "${tag# }" \
-            "${(P)desc:-}${${(P)url}:+  [${(P)url}]}"
-        done
-        return 0 ;;
       -n|--no-audit) audit=0;          shift ;;
       -a|--audit)    ask_audit=0;      shift ;;
-      -c|--code)     opener=code;      shift ;;
-      --t3)          opener=t3;        shift ;;
-      --cli)         opener=cli;       shift ;;
       --prompt)
         if [[ -z "$2" ]]; then print -u2 -- "claude-new: --prompt needs the text to start Claude with"; return 1; fi
         prompt="$2"; shift 2 ;;
@@ -503,35 +475,28 @@ claude-new() {
           local meta="$d/.session.json" info="?"
           [[ -f $meta ]] && info=$("$CWS_PYTHON" -c 'import json,sys
 d = json.load(open(sys.argv[1]))
-print("{:<10} {:<14} {:<16} {:<9}".format("[" + (d.get("profile") or "?") + "]", d.get("ticket") or "-",
+print("{:<14} {:<16} {:<9}".format(d.get("ticket") or "-",
                                   (d.get("task_type") or "-")[:16],
                                   "no-audit" if d.get("audit") is False else ""))' "$meta" 2>/dev/null)
           printf '  %s %s\n' "$info" "${d#$CLAUDE_WORK_ROOT/}"
         done
         return 0 ;;
       -h|--help)
-        print -r -- 'claude-new [-p PROFILE] [-n|-a] [-c|--t3|--cli] [-t TICKET] [-T TYPE] [-A PROJECT] [-F TYPE] [-g GOAL] [--done TEXT] [--path DIR]... [--prompt TEXT] [name]'
-        print -r -- '    create a YYYY/MM/DD/HH-mm-ss_slug folder and start Claude in it'
-        print -r -- '    -c / --code opens the folder in VS Code instead; the Claude extension there'
-        print -r -- '    picks up the profile through claude-vscode'
-        print -r -- '    --t3 adds it to T3 Code as "TICKET · date · name" and starts its first thread there,'
-        print -r -- '    on the profile'"'"'s Claude instance, with a kickoff from .session.json (or --prompt)'
-        print -r -- '    --cli starts Claude in this terminal.'
-        print -r -- "    Without any of them: CWS_OPEN (${CWS_OPEN:-cli})"
-        print -r -- '    --prompt TEXT starts Claude with TEXT as the first prompt, e.g. --prompt /weekly-review;'
-        print -r -- '    with --t3, as a thread on the profile'"'"'s T3 Claude instance. Not with -c'
+        print -r -- 'claude-new [-n|-a] [-t TICKET] [-T TYPE] [-A PROJECT] [-F TYPE] [-g GOAL] [--done TEXT] [--path DIR]... [--prompt TEXT] [name]'
+        print -r -- '    create a YYYY/MM/DD/HH-mm-ss_slug folder, then open it with CWS_OPEN_CMD'
+        print -r -- "    (now: ${$(_cws_open_cmd):-nothing, the folder path is printed})"
+        print -r -- '    --prompt TEXT is the first prompt, e.g. --prompt /weekly-review: {prompt} in CWS_OPEN_CMD'
         print -r -- "    TICKET is mandatory: PREFIX-123 (e.g. $CWS_TICKET_EXAMPLE), or Other"
         print -r -- '    -T / --type is the kind of work (permissions, job errors, ...); asked if omitted'
-        print -r -- '    -A / --project and -F / --front place it in T3 (CWS_PROJECTS, CWS_TYPES); chosen from the context if omitted'
+        print -r -- '    -A / --project and -F / --front place it in T3 (CWS_PROJECTS, CWS_TYPES): {project} and {type}'
+        print -r -- '    in CWS_AFTER_NEW_CMD; chosen from the context if omitted'
         print -r -- '    -g / --goal is what the session should deliver, --done how you will know it did;'
         print -r -- '    both asked if omitted (Enter: the name / nothing). claude-guard keeps work on them'
         print -r -- '    --path DIR (repeatable): a folder or repo outside the request that is part of the work'
         print -r -- '    -n / --no-audit keeps the session out of claude-audit and the weekly review'
         print -r -- '    (claude-search still finds it); -a / --audit keeps it in; asked if neither'
-        print -r -- "    -p / --profile picks the profile (${profiles[*]}); asked if omitted"
         print -r -- '    --new always makes a new folder: no offer to continue in a recent one on the same ticket'
         print -r -- 'claude-new -l    list recent sessions'
-        print -r -- 'claude-new -L    list the configured profiles'
         return 0 ;;
       *) print -u2 -- "claude-new: unknown option $1"; return 1 ;;
     esac
@@ -589,59 +554,12 @@ print("{:<10} {:<14} {:<16} {:<9}".format("[" + (d.get("profile") or "?") + "]",
       go="${go:-1}"
       if [[ "$go" == <-> ]] && (( go >= 1 && go <= ${#recent} )); then
         dir="${${recent[$go]}%%$'	'*}"
-        _claude_new_continue "$dir" "$profile" "$prompt" "$opener"
+        _claude_new_continue "$dir" "$prompt"
         return
       elif [[ "$go" != "$i" ]]; then
         print -u2 -- "claude-new: invalid choice '$go'"; return 1
       fi
     fi
-  fi
-
-  if [[ -z "$profile" ]]; then
-    if (( ${#profiles} == 1 )); then
-      profile="${profiles[1]}"
-    else
-      print -r -- ""
-      local i=1 p desc def=1
-      for p in $profiles; do
-        desc="CWS_PROFILE_${p}_DESC"
-        printf '  %d) %-10s - %s\n' $i "$p" "${(P)desc:-}"
-        [[ "$p" == "$CWS_DEFAULT_PROFILE" ]] && def=$i
-        (( i++ ))
-      done
-      local choice=""
-      read "choice?Profile [$def]: " || return 1
-      choice="${choice:-$def}"
-      if [[ "$choice" == <-> ]] && (( choice >= 1 && choice <= ${#profiles} )); then
-        profile="${profiles[$choice]}"
-      elif (( ${profiles[(Ie)$choice]} )); then
-        profile="$choice"
-      else
-        print -u2 -- "claude-new: invalid profile choice '$choice'"; return 1
-      fi
-    fi
-  fi
-
-  cfg="$HOME/.claude-$profile"
-  if [[ ! -d "$cfg" ]]; then
-    print -u2 -- "claude-new: config dir $cfg does not exist"
-    return 1
-  fi
-  case "$opener" in
-    cli|code|t3) ;;
-    *) print -u2 -- "claude-new: CWS_OPEN must be cli, code or t3 (not '$opener')"; return 1 ;;
-  esac
-  if [[ "$opener" == code && -n "$prompt" ]]; then
-    print -u2 -- "claude-new: --prompt can't be used with -c: VS Code starts Claude itself"
-    return 1
-  fi
-  if [[ "$opener" == code ]] && ! command -v code >/dev/null 2>&1; then
-    print -u2 -- "claude-new: -c needs VS Code's 'code' command on PATH"
-    return 1
-  fi
-  if [[ "$opener" == t3 ]] && ! command -v claude-t3-sync >/dev/null 2>&1; then
-    print -u2 -- "claude-new: --t3 needs claude-t3-sync on PATH (run install.sh)"
-    return 1
   fi
 
   # Task type: what kind of work this is. Suggested from the name, chosen from what
@@ -720,7 +638,7 @@ print("{:<10} {:<14} {:<16} {:<9}".format("[" + (d.get("profile") or "?") + "]",
   fi
 
   started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  WS_NAME="$name" WS_PROFILE="$profile" WS_TICKET="$ticket" WS_SLUG="$slug" WS_TYPE="$ttype" \
+  WS_NAME="$name" WS_TICKET="$ticket" WS_SLUG="$slug" WS_TYPE="$ttype" \
   WS_STARTED="$started" WS_DIR="$dir" WS_AUDIT="$audit" WS_GOAL="$goal" WS_DONE="$done_when" \
   WS_PATHS="${(pj:\n:)paths}" \
     "$CWS_PYTHON" -c '
@@ -729,7 +647,6 @@ p = os.path.join(os.environ["WS_DIR"], ".session.json")
 json.dump({
     "name":       os.environ["WS_NAME"],
     "slug":       os.environ["WS_SLUG"],
-    "profile":    os.environ["WS_PROFILE"],
     "ticket":     os.environ["WS_TICKET"],
     "task_type":  os.environ.get("WS_TYPE", ""),
     "goal":       os.environ["WS_GOAL"],
@@ -743,32 +660,17 @@ json.dump({
 }, open(p, "w"), indent=2)
 '
 
-  print -r -- "→ $profile  $ticket  ${ttype:+[$ttype]  }${dir#$CLAUDE_WORK_ROOT/}${${audit:#1}:+  (no-audit)}"
+  print -r -- "→ $ticket  ${ttype:+[$ttype]  }${dir#$CLAUDE_WORK_ROOT/}${${audit:#1}:+  (no-audit)}"
   cd "$dir" || return 1
 
-  # Its place in T3, before T3 first sees the folder: it caches a project's repository for 15 minutes.
-  if command -v claude-area >/dev/null 2>&1; then
-    claude-area --dir "$dir" --pick ${project:+"$project"} ${front:+--type} ${front:+"$front"} || true
-  fi
-
-  _cws_open_request "$dir" "$opener" "$prompt" "$profile" && return
-
-  CLAUDE_CONFIG_DIR="$cfg" command claude ${prompt:+"$prompt"}
-  local rc=$?
-
-  ended="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  WS_ENDED="$ended" WS_DIR="$dir" "$CWS_PYTHON" -c '
-import json, os
-p = os.path.join(os.environ["WS_DIR"], ".session.json")
-try:
-    d = json.load(open(p))
-except Exception:
-    raise SystemExit(0)
-d["ended_at"] = os.environ["WS_ENDED"]
-json.dump(d, open(p, "w"), indent=2)
-' 2>/dev/null
-
-  return $rc
+  # What runs once the folder exists (T3's sidebar placement, before T3 first sees the folder: it
+  # caches a project's repository for 15 minutes), then what opens it. Nothing waits for the app,
+  # so ended_at stays empty.
+  after="$(_cws_after_new_cmd)"
+  [[ -n "$after" ]] && { _cws_run_template "$after" "$dir" "$name" "$prompt" "$project" "$front" || true; }
+  open="$(_cws_open_cmd)"
+  if [[ -z "$open" ]]; then print -r -- "$dir"; return 0; fi
+  _cws_run_template "$open" "$dir" "$name" "$prompt" "$project" "$front"
 }
 
 # --- navigation ----------------------------------------------------------------------

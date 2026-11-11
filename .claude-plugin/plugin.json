@@ -1,6 +1,6 @@
 {
   "name": "worksessions",
-  "version": "2.38.0",
+  "version": "2.38.1",
   "description": "Work sessions for Claude Code: one dated folder per request, a plan per deliverable, and the pending, plan and workday-recap skills.",
   "author": { "name": "José Viegas" },
   "homepage": "https://github.com/jviegas6/claude-worksessions",

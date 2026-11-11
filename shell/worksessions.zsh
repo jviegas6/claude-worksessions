@@ -748,7 +748,7 @@ json.dump({
 
   # Its place in T3, before T3 first sees the folder: it caches a project's repository for 15 minutes.
   if command -v claude-area >/dev/null 2>&1; then
-    claude-area --dir "$dir" --pick ${project:+"$project"} ${front:+--type "$front"} || true
+    claude-area --dir "$dir" --pick ${project:+"$project"} ${front:+--type} ${front:+"$front"} || true
   fi
 
   _cws_open_request "$dir" "$opener" "$prompt" "$profile" && return

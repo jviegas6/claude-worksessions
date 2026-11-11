@@ -915,14 +915,16 @@ def test_claude_pending_runs_the_skill_in_the_root_out_of_the_audit(tmp_path):
 
 
 def area_stubs(tmp_path):
-    """claude-area and claude-t3-sync stubs that log, in order, to calls.log."""
+    """claude-area and claude-t3-sync stubs that log, in order, to calls.log: the name, then each
+    argument in brackets, so one word holding a space ("[--type data]") shows apart from two."""
     (tmp_path / ".claude-personal").mkdir()
     stub = tmp_path / "bin"
     stub.mkdir()
     log = tmp_path / "calls.log"
     for name in ("claude-area", "claude-t3-sync"):
         p = stub / name
-        p.write_text('#!/bin/sh\necho "{} $*" >> "{}"\n'.format(name, log))
+        p.write_text('#!/bin/sh\n{{ printf %s "{}"; for a in "$@"; do printf " [%s]" "$a"; done; echo; }} >> "{}"\n'
+                     .format(name, log))
         p.chmod(0o755)
     return "{}:{}".format(stub, os.environ["PATH"]), log
 
@@ -932,15 +934,15 @@ def test_claude_new_picks_the_area_before_t3_sees_the_folder(tmp_path):
     r = run_new(tmp_path, '-p personal -n --new -t Other -T tooling -g goal --t3 "x"', PATH=path)
     assert r.returncode == 0, r.stderr
     lines = log.read_text().splitlines()
-    assert lines[0].startswith("claude-area --dir ") and lines[0].endswith(" --pick")
-    assert lines[1].startswith("claude-t3-sync --open ")
+    assert lines[0].startswith("claude-area [--dir] ") and lines[0].endswith(" [--pick]")
+    assert lines[1].startswith("claude-t3-sync [--open] ")
 
 
 def test_claude_new_project_and_type_flags_pass_through(tmp_path):
     path, log = area_stubs(tmp_path)
     r = run_new(tmp_path, '-p personal -n --new -t Other -T tooling -g goal -A contact360 -F data --t3 "x"', PATH=path)
     assert r.returncode == 0, r.stderr
-    assert log.read_text().splitlines()[0].endswith(" --pick contact360 --type data")
+    assert log.read_text().splitlines()[0].endswith(" [--pick] [contact360] [--type] [data]")
 
 
 def type_session(root):

@@ -89,6 +89,30 @@ print("\n".join(out))
 PYEOF
 }
 
+# --- suggestions -------------------------------------------------------------------
+# claude-search --suggest: ticket candidates from the Jira cache and a task type from past
+# requests. Prints tab-separated lines (nothing when there is nothing or it fails):
+#   T<US>key<US>status<US>summary<US>strong(0|1)   up to 3, best first
+#   Y<US>type<US>count     (US: the unit separator, \x1f)
+_CWS_HERE="${${(%):-%x}:A:h}"
+_cws_suggest() {
+  local bin="$_CWS_HERE/../bin/claude-search"
+  [[ -x $bin ]] || bin="$(command -v claude-search 2>/dev/null)"
+  [[ -n $bin ]] || return 0
+  "$bin" --suggest --json "$1" 2>/dev/null | "$CWS_PYTHON" -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except ValueError:
+    sys.exit(0)
+clean = lambda x: " ".join(str(x).split())
+for c in d.get("tickets") or []:
+    print("\x1f".join(["T", c["key"], clean(c["status"]), clean(c["summary"]), "1" if c.get("strong") else "0"]))
+if d.get("type"):
+    print("\x1f".join(["Y", clean(d["type"]["name"]), str(d["type"]["count"])]))
+' 2>/dev/null
+}
+
 # A first guess from the session name; the user can always type their own.
 _cws_guess_type() {
   local n="${1:l}"
@@ -516,9 +540,47 @@ print("{:<14} {:<16} {:<9}".format(d.get("ticket") or "-",
     return 1
   fi
 
+  # Suggestions from the Jira cache and past requests: asked with, never blocking. Only where a
+  # question is asked (a terminal), or for a hint when -t Other was given.
+  local -a sugg=() cand=() f=()
+  local sline stype="" scount=0 ticket_given=0
+  [[ -n "$ticket" ]] && ticket_given=1
+  if [[ ( -t 0 && ( -z "$ticket" || -z "$ttype" ) ) || "${ticket:l}" == other ]]; then
+    sugg=("${(@f)$(_cws_suggest "$name $goal")}")
+    sugg=("${(@)sugg:#}")
+    for sline in $sugg; do
+      case "${sline[1]}" in
+        T) cand+=("$sline") ;;
+        Y) f=("${(@ps:\x1f:)sline}"); stype="${f[2]}"; scount="${f[3]}" ;;
+      esac
+    done
+  fi
+  if [[ "${ticket:l}" == other ]] && (( ${#cand} )); then
+    f=("${(@ps:\x1f:)cand[1]}")
+    [[ "${f[5]}" == 1 ]] && print -u2 -- "hint: maybe ${f[2]} — ${f[4]}"
+  fi
+
   while true; do
     if [[ -z "$ticket" ]]; then
-      read "ticket?Jira ticket (e.g. $CWS_TICKET_EXAMPLE, or Other): " || return 1
+      local dflt="" n=1
+      if (( ${#cand} )); then
+        print -r -- ""
+        print -r -- "  Ticket candidates (a number, a ticket, or Other; Enter for the one in brackets):"
+        for sline in $cand; do
+          f=("${(@ps:\x1f:)sline}")
+          printf '    %d) %s  %s  [%s]\n' $n "${f[2]}" "${f[4]}" "${f[3]}"
+          (( n++ ))
+        done
+        # Enter takes the top candidate only when it is strong; otherwise it means Other.
+        f=("${(@ps:\x1f:)cand[1]}")
+        if [[ "${f[5]}" == 1 ]]; then dflt="${f[2]}"; else dflt="Other"; fi
+      fi
+      read "ticket?Jira ticket${dflt:+ [$dflt]} (e.g. $CWS_TICKET_EXAMPLE, or Other): " || return 1
+      if [[ -n "$dflt" && -z "${ticket//[[:space:]]/}" ]]; then
+        ticket="$dflt"
+      elif [[ "$ticket" == <-> ]] && (( ticket >= 1 && ticket <= ${#cand} )); then
+        ticket="${${(@ps:\x1f:)cand[$ticket]}[2]}"
+      fi
       if [[ -z "${ticket//[[:space:]]/}" ]]; then
         print -u2 -- "claude-new: a ticket is required -- use Other if there is none"
         return 1
@@ -569,6 +631,11 @@ print("{:<14} {:<16} {:<9}".format(d.get("ticket") or "-",
     local guess="$(_cws_guess_type "$name")" pick="" i=1 t tries=0
     if [[ -t 0 ]]; then
       print -r -- ""
+      # What past requests like this one were: it beats the keyword guess when it exists.
+      if [[ -n "$stype" ]]; then
+        guess="$stype"
+        print -r -- "  Suggested: $stype ($scount similar request$([[ $scount == 1 ]] || print -rn s))"
+      fi
       # The type is what STARTED the work, not everything it touches on the way:
       # a job error that needs investigation, a permission change and a doc update
       # is still "job errors".

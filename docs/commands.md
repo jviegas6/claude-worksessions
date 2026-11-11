@@ -23,6 +23,12 @@ login runs there is the app's choice. Nothing waits for the app, so `ended_at` s
   new folder as usual. So a piece of work keeps one
   folder across its sessions instead of one per conversation. `--new` skips the offer;
   `Other` and a run without a terminal never get it.
+- **The ticket is suggested.** Without `-t`, `claude-new` lists up to three candidates from the
+  Jira cache (`_audit/review/jira.json`) that share words with the name and goal, and Enter takes
+  the first only when it is strong (two shared words, ticket still open); otherwise Enter means
+  `Other`. A number picks any listed candidate, a ticket or `Other` is still typed as before. With `-t Other`
+  and a strong candidate (two shared words, ticket still open) it prints one `hint: maybe
+  BTPA-123 — <summary>` line on stderr and carries on: it never asks and never blocks.
 - `-n` / `--no-audit` keeps the session out of `claude-audit` and the weekly review.
   `claude-search` still finds it. `-a` / `--audit` keeps it in. With neither, `claude-new`
   asks *Count it in the weekly review and daily recap? [Y/n]* — Enter keeps it in. Run
@@ -31,7 +37,10 @@ login runs there is the app's choice. Nothing waits for the app, so `ended_at` s
   (permissions, job errors, new features, security, ...). Left out, `claude-new` guesses
   from the name and offers the types you have used before: Enter takes the guess, a
   number picks from the list, anything else is a new type, `-` means none. When nothing
-  in the name matches there is no default — it asks you to pick.
+  in the name matches there is no default — it asks you to pick. At a terminal, past
+  requests of the last 90 days that share words with the name can suggest one: *Suggested: job
+  errors (4 similar requests)*, and Enter takes it. It appears only on a clear win (see
+  `claude-search --suggest`); otherwise the keyword guess applies as before.
   The type is the **trigger**, not the detours: a job error that needs investigation, a
   permission change and a doc update is `job errors`.
 - `-g goal` / `--goal` is what the session should deliver, `--done text` how you will know
@@ -275,6 +284,7 @@ every activity behind it. `claude-audit --help` has the full list.
 
 ```
 claude-search QUERY... [--from DATE] [--to DATE] [--ai] [--no-pick] [--t3|--cli] [--csv FILE]
+claude-search --suggest TEXT [--json]
 ```
 
 Ranks past sessions by ticket or topic across titles, your prompts, Claude's replies,
@@ -286,6 +296,18 @@ ran it, in the T3 app, or its folder's project when T3 has no thread for it
 ([`claude-t3-sync --thread`](#claude-t3-sync)).
 `--cli` resumes it in the terminal. T3 Code's own search covers titles and project names only,
 not what was said, so this is how to find a T3 session by its content.
+
+`--suggest TEXT` is what `claude-new` asks with: TEXT is a new request's name and goal. It prints
+up to three ticket candidates and one task type, or nothing (exit 0) when the Jira cache is missing
+or nothing overlaps; `--json` prints `{"tickets": [...], "type": {...}|null}`. Tickets come from
+`_audit/review/jira.json`, scored by the stemmed words they share with TEXT (the audit's
+tokeniser and synonyms), rarer words counting more; a candidate needs at least one. Tickets
+not marked `mine` count 0.6, closed ones (Done, Closed, Resolved, Cancelled) 0.25, those in the
+ledger's `ignore_tickets` are left out, and each request of the last 60 days with similar words
+that used the ticket adds 1 (up to 3). The task type comes from requests of the
+last 90 days sharing words with TEXT: each votes with the rarity weight of the shared words
+(words in more than 40% of the requests are ignored), and the winner is suggested only with at
+least half of the weighted votes and 3 requests, shown with that count.
 
 ## claude-sessions
 

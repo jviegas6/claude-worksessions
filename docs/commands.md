@@ -121,38 +121,6 @@ in. `--gc` shows what it uses. Deleting a heading's `.git` directory loses only 
 **To undo:** remove `CWS_TYPES` from the config. New requests are no longer grouped. For one that
 is, run `claude-area none`. For a backfill, `claude-area --undo` with the log it printed.
 
-## claude-plan
-
-```
-claude-plan [DIR]       open DIR's plan (default: the current folder) in the default browser
-claude-plan --url DIR   print the URL, open nothing
-claude-plan --serve     run the server in the foreground
-claude-plan --stop      stop the server
-```
-
-A request's plan is `plan.json` in its folder: a header (ticket, title, goal, success,
-deadline) and steps, each with who, status, a date, what has to happen, what can go wrong, the
-check, the rollback, the evidence and the steps it comes after. The editor draws it as a DAG:
-drag a step onto another to put it after, onto its top strip to put it before, onto its sides
-to run it in parallel; the layout comes only from those dependencies. Steps with no date, and a
-plan with no deadline, show in red; both are dates (`YYYY-MM-DD`).
-
-Every save keeps the file it replaces as `plan.vN.json`, and is refused when `plan.json`
-changed on disk since the editor loaded it; with nothing unsaved, the editor reloads by itself
-when Claude updates the file. The `/plan` skill opens it from a session and keeps it current
-while the work goes on; **Open plan** on a request in the VS Code sidebar does the same.
-
-✨ next to a field (or *suggest missing steps* in the header) asks Claude Code: `claude -p` in
-the folder, with its profile, and only Read, Grep and Glob — no MCP servers, no edits, no shell,
-no session kept. The reply goes to the clipboard and **Paste suggestion** shows it under the
-field to accept or reject. It works the same from VS Code, T3 Code or a terminal.
-
-The server (started on demand, in the background) listens on `127.0.0.1` only, on
-`CWS_PLAN_PORT` (8765) or the next free port, serves only folders inside the work root, and
-needs the token from `~/.cache/claude-worksessions/plan-server.json` (mode 0600) on every call;
-the URL it opens carries it. Its log is `~/.cache/claude-worksessions/plan-server.log`.
-`CWS_CLAUDE_BIN` points at another `claude`.
-
 ## claude-t3-sync
 
 ```
@@ -281,8 +249,7 @@ claude-wait them "Ana" "the IP" --note "Asked on Teams; she will check with netw
 
 Run anywhere inside the session folder. The flag lives in `.session.json` as
 `waiting: { on: "me" | "other", who, what, since, where, link }`; the previous flag goes to
-`waiting_history` with an `until`. `claude-sessions --json` carries the flag; `/pending` checks
-Teams and mail against it; **Set waiting…** in the sidebar sets it and a flagged request's
+`waiting_history` with an `until`. `claude-sessions --json` carries the flag; **Set waiting…** in the sidebar sets it and a flagged request's
 tooltip shows it.
 
 Every change is appended to the folder's **`thread.md`** — a dated heading with the new state,
@@ -290,7 +257,6 @@ and under it the `--note` text: what was asked, what was answered and where, wha
 open. That file is the context a later session starts from when the thread comes back (the
 rendered `CLAUDE.md` asks Claude to read it first, to run `claude-wait` with a note when a
 session leaves the ball with someone, and to clear the flag when the matter is settled).
-The `/pending` skill reads the same file to say what is tracked.
 
 ## claude-audit
 
@@ -413,7 +379,6 @@ panel), the terminal commands and your skills:
 | command | does |
 |---|---|
 | New request | `claude-new` in a tab |
-| What's pending? | `claude-pending` in a tab: the `/pending` skill in the work root, out of the audit |
 | Sweep empty folders | `claude-delete --empty-folders` in a tab |
 | Recent sessions… | `claude-sessions` as a pick list; picking opens the session |
 | Search sessions… / with Claude… | `claude-search` (`--ai`), hits in a pick list |

@@ -445,11 +445,9 @@ test("recent sessions, go to request, skills, resume by id, new window", async t
   w.fake.answers.push(items => items[0], undefined);
   await w.run("goToRequest");
 
-  // the profile's skills first, then the plugin's own (this checkout's skills/) as /worksessions:<name>
+  // the profile's skills, nothing else (there is no plugin since 3.0.0)
   w.fake.answers.push(items => {
-    const labels = items.map(i => i.label);
-    assert.strictEqual(labels[0], "/weekly-review");
-    assert.deepStrictEqual(labels.slice(1), fs.readdirSync(path.join(__dirname, "..", "..", "skills")).sort().map(n => "/worksessions:" + n));
+    assert.deepStrictEqual(items.map(i => i.label), ["/weekly-review"]);
     return items[0];
   });
   await w.run("runSkill");
@@ -475,15 +473,13 @@ test("recent sessions, go to request, skills, resume by id, new window", async t
   assert.deepStrictEqual(w.fake.executed.at(-1), ["vscode.openFolder", { fsPath: w.A.path }]);
 });
 
-test("run skill with no skills installed still offers the plugin's own", async t => {
+test("run skill with no skills installed says so and runs nothing", async t => {
   const w = await world(t);
   fs.rmSync(path.join(process.env.HOME, ".claude-personal/skills"), { recursive: true });
-  w.fake.answers.push(items => {
-    assert.ok(items.every(i => i.label.startsWith("/worksessions:")) && items.length > 0);
-    return items.find(i => i.label === "/worksessions:pending");
-  });
+  const n = w.fake.terminals.length;
   await w.run("runSkill");
-  assert.deepStrictEqual(w.fake.terminals.at(-1).sent, ["claude-new --prompt '/worksessions:pending' 'pending'"]);
+  assert.match(w.fake.messages.at(-1)[1], /No skills found/);
+  assert.strictEqual(w.fake.terminals.length, n);
 });
 
 test("files: a Files node per request, folders, opening, reveal, copy, and what a session wrote", async t => {
@@ -1048,7 +1044,7 @@ test("Set waiting…: the flag in .session.json, from a request, a session or a 
   const savedXdg = process.env.XDG_DATA_HOME;
   process.env.XDG_DATA_HOME = path.join(dir, "data");
   t.after(() => { if (savedXdg === undefined) delete process.env.XDG_DATA_HOME; else process.env.XDG_DATA_HOME = savedXdg; });
-  // its own config.env: /pending takes the default profile from it, not from this machine's
+  // its own config.env, not this machine's
   fs.writeFileSync(path.join(dir, "config.env"), 'CWS_PROFILES="personal work"\nCWS_DEFAULT_PROFILE="personal"\n');
   const savedConf = process.env.CWS_CONFIG;
   process.env.CWS_CONFIG = path.join(dir, "config.env");
@@ -1114,41 +1110,8 @@ test("Set waiting…: the flag in .session.json, from a request, a session or a 
   await run("setWaiting", { kind: "request", request: { path: path.join(root, "nowhere"), name: "x" } });
   assert.match(fake.messages.at(-1)[1], /No \.session\.json/);
 
-  // /pending runs claude-pending (out of the audit) in a tab in the work root; the sweep in a tab too
-  await run("pending");
-  assert.deepStrictEqual([fake.terminals.at(-1).sent[0], fake.terminals.at(-1).name, fake.terminals.at(-1).cwd],
-                         ["claude-pending -p personal", "pending", root]);
+  // the sweep runs in a tab in the work root
   await run("sweepEmpty");
   assert.deepStrictEqual([fake.terminals.at(-1).sent[0], fake.terminals.at(-1).cwd], ["claude-delete --empty-folders", root]);
 
-});
-
-test("Open plan: claude-plan with the request's folder; its error is shown; on every request's row", async t => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cws-plan-"));
-  const bin = path.join(dir, "bin");
-  fs.mkdirSync(bin);
-  const log = path.join(dir, "plan.log");
-  fs.writeFileSync(path.join(bin, "claude-sessions"), `#!/bin/sh\necho '{"work_root":"${dir}","sessions":[]}'\n`, { mode: 0o755 });
-  fs.writeFileSync(path.join(bin, "claude-plan"),
-    `#!/bin/sh\necho "$*" >> "${log}"\ncase "$1" in *broken*) echo "claude-plan: not a folder: $1" >&2; exit 1;; esac\n`, { mode: 0o755 });
-  const fake = fakeVscode({ sessionsCommand: path.join(bin, "claude-sessions"), openIn: "terminal" });
-  const ctx = context();
-  await load(fake).activate(ctx);
-  await settle(ctx);
-  const run = el => fake.commands.get("claudeWorksessions.openPlan")(el);
-  const wait = async cond => { for (let i = 0; i < 100 && !cond(); i++) await new Promise(r => setTimeout(r, 10)); };
-
-  run({ request: { path: "/w/2026/11/01/10-00-00_req" } });
-  await wait(() => fs.existsSync(log));
-  assert.deepStrictEqual(fs.readFileSync(log, "utf8").trim().split("\n"), ["/w/2026/11/01/10-00-00_req"]);
-  run(undefined);                                                               // from the palette: nothing
-  run({ request: { path: "/w/broken" } });
-  await wait(() => fake.messages.length && fake.messages.at(-1)[0] === "error");
-  assert.deepStrictEqual(fake.messages.at(-1), ["error", "claude-plan failed: claude-plan: not a folder: /w/broken"]);
-
-  const pkg = require("../package.json");
-  const menus = pkg.contributes.menus["view/item/context"].filter(m => m.command === "claudeWorksessions.openPlan");
-  assert.deepStrictEqual(menus.map(m => m.group), ["inline@2", "1_open@2"]);
-  assert.ok(menus.every(m => /viewItem =~ \/\^request\//.test(m.when)));
-  assert.ok(pkg.contributes.menus.commandPalette.some(m => m.command === "claudeWorksessions.openPlan" && m.when === "false"));
 });

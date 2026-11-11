@@ -2,7 +2,8 @@
 
 A Claude Code work setup for macOS, Linux and Windows (WSL): every request in its own dated folder, several
 Claude profiles sharing one history, a time audit built from the transcripts, search
-across past sessions, and daily/weekly review skills — all driven by one config file.
+across past sessions — all driven by one config file. Skills (a weekly review, a daily recap…)
+are not part of it: install them separately, e.g. with Skillshare; they read the same config file.
 
 | piece | what it does |
 |---|---|
@@ -11,10 +12,8 @@ across past sessions, and daily/weekly review skills — all driven by one confi
 | `claude-new --t3` | the same, then adds the folder to [T3 Code](https://github.com/pingdotgg/t3code) as `TICKET · date · name` and opens it there; `CWS_OPEN` makes any of these the default |
 | `claude-t3-sync` | titles every request folder's T3 Code project by its ticket, and removes empty, idle ones; shows the changes first, `--apply` makes them, `--undo` puts them back |
 | `claude-area` | the request's place in T3 Code's sidebar, its project and type: `claude-new` chooses them from the ticket, name and goal, and `claude-area` changes them without touching the folder or a running thread |
-| `claude-plan` | the request's plan as a DAG of steps (who, date, what has to happen, what can go wrong, check, rollback, order), edited in the browser; ✨ asks Claude for a suggestion, read-only. Also `/plan` in a session and **Open plan** in VS Code |
 | VS Code sidebar | requests and their sessions by day or ticket, each session opened as a tab in its own folder and profile |
-| `claude-wait` | who the ball is with, per request: a flag in `.session.json` and notes in `thread.md`; `/pending` checks Teams and mail against it |
-| `claude-pending` | the `/pending` skill: what in Teams and mail still needs a reply from you, and what you are waiting on, checked against the open topics; nothing created, drafted or sent, and the run stays out of the audit |
+| `claude-wait` | who the ball is with, per request: a flag in `.session.json` and notes in `thread.md` |
 | `claude-resume` | Claude Code with a profile: `claude-resume -p work --resume ID`; no args opens the session picker |
 | `claude-audit` | what you worked on — per day, week, month — from transcripts plus meetings/mail/chats |
 | `claude-search` | find past sessions by ticket or topic, with the command to resume each |
@@ -25,7 +24,6 @@ across past sessions, and daily/weekly review skills — all driven by one confi
 | `claude-retro` | a retrospective on your prompts: where work stalled (a resource that didn't exist, corrections, interruptions, clarifying questions), whether the prompt caused it, and a better version — with a trend from week to week |
 | `claude-md-email` | a Markdown file onto the clipboard, formatted for email (black on white, Calibri, bordered tables) — also **Copy for email** in VS Code |
 | `ws` / `y` | fuzzy-jump to a request folder; browse it in yazi |
-| `workday-recap` skill | reconstructs a day from Claude, Teams, calendar and sent mail |
 | yazi extras | rendered Markdown preview, `Enter` on a `.md` opens it as HTML for pasting into email |
 
 ## Install
@@ -37,14 +35,9 @@ cd ~/Repos/claude-worksessions
 source ~/.zshrc
 ```
 
-The skills are a Claude Code plugin, `worksessions`, that `install.sh` installs into every
-profile: from this checkout (`CWS_PLUGIN_SOURCE="local"`, the default, so an edited skill is live
-on the next session) or from the published repository (`"github"`, moved by `claude plugin update`
-or a plugin manager such as Skillshare). To install only the plugin, without the commands:
-
-```
-/plugin install worksessions --marketplace jviegas6/claude-worksessions
-```
+Since 3.0.0 this is not a Claude Code plugin and ships no skills. A `worksessions` plugin left
+by 2.35–2.38 is removed by `uninstall.sh`, or by hand: `claude plugin uninstall
+worksessions@claude-worksessions` per profile, or `skillshare plugin remove worksessions`.
 
 On a clean **Mac** the installer lists what is missing — Xcode Command Line Tools,
 Homebrew, Claude Code, `fzf`, `pandoc` (for `claude-md-email`), and `yazi glow` for the Markdown extras — asks
@@ -76,8 +69,8 @@ role, time zone (guessed from the system), example ticket key, and then your pro
 as many as you want, each either a **Claude subscription** (you sign in) or an
 **inference gateway** (base URL + token). `./install.sh --profiles` changes them later.
 
-Two things stay outside the package: **connectors** (Atlassian for the weekly review,
-Microsoft 365 for the recap) come with your Claude account once you sign in, and any
+Two things stay outside the package: **connectors** (Atlassian and Microsoft 365, for
+the skills you install) come with your Claude account once you sign in, and any
 **local MCP servers** you use are configured in Claude Code itself.
 
 ## Configure

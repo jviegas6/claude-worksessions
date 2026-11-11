@@ -601,8 +601,8 @@ def test_install_writes_retention_keeping_other_settings(tmp_path):
 
 
 def _fake_claude(tmp_path, log):
-    """A `claude` on PATH that records plugin calls and answers `plugin marketplace list` with
-    what it was told to add, like the real one."""
+    """A `claude` on PATH that records every call (uninstall.sh still removes a leftover plugin)
+    and answers `plugin marketplace list` with what it was told to add, like the real one."""
     bindir = tmp_path / "fakebin"
     bindir.mkdir(exist_ok=True)
     f = bindir / "claude"
@@ -620,7 +620,7 @@ exit 0
     return str(bindir)
 
 
-def test_install_installs_the_plugin_per_profile_and_removes_the_old_hooks(tmp_path):
+def test_install_removes_the_old_hooks_and_installs_no_plugin(tmp_path):
     conf = tmp_path / "ws" / "_config" / "config.env"
     conf.parent.mkdir(parents=True)
     conf.write_text('CWS_WORK_ROOT="{}/ws"\nCWS_PROFILES="personal work"\nCWS_INSTALL_YAZI="0"\n'.format(tmp_path))
@@ -637,49 +637,38 @@ def test_install_installs_the_plugin_per_profile_and_removes_the_old_hooks(tmp_p
         "Stop": [{"hooks": [{"type": "command", "command": bin_ + "/claude-guard stop", "timeout": 20}]}]}}
     (tmp_path / ".claude-personal").mkdir()
     (tmp_path / ".claude-personal" / "settings.json").write_text(json.dumps(old))
-    # a pre-2.35 rendered skill in the shared profile, and one managed by something else (a link)
-    rendered = tmp_path / ".claude-personal" / "skills" / "workday-recap"
-    rendered.mkdir(parents=True)
-    (rendered / "SKILL.md").write_text("old render")
-    (tmp_path / "elsewhere").mkdir()
-    (tmp_path / ".claude-personal" / "skills" / "pending").symlink_to(tmp_path / "elsewhere")
+    # skills in the shared profile belong to the user (e.g. Skillshare): never touched
+    own = tmp_path / ".claude-personal" / "skills" / "weekly-review"
+    own.mkdir(parents=True)
+    (own / "SKILL.md").write_text("mine")
+    # a claude-plan link into the checkout, from before 3.0.0, is dropped
+    os.makedirs(bin_)
+    os.symlink(os.path.join(REPO, "bin", "claude-plan"), os.path.join(bin_, "claude-plan"))
     log = tmp_path / "claude.log"
     env = {k: v for k, v in os.environ.items() if not k.startswith("CWS_")}
     env.update(HOME=str(tmp_path), ZDOTDIR=str(tmp_path), CWS_OS="mac", PATH="/usr/bin:/bin")
     run = lambda *a: subprocess.run(["zsh", os.path.join(REPO, a[0]), *a[1:]], env=env, capture_output=True,
                                     text=True, stdin=subprocess.DEVNULL)
-    # no claude on PATH: says what to run later, touches nothing of the plugin
     r = run("install.sh", "--dry-run", "--yes", "--no-bootstrap")
     assert "personal: [dry-run] removed the prompt-quality hooks from settings.json (CWS_HOOKS is off)" in r.stdout
-    assert "claude not found — install the plugin later" in r.stderr
     assert json.loads((tmp_path / ".claude-personal" / "settings.json").read_text()) == old   # dry run: unchanged
     env["PATH"] = _fake_claude(tmp_path, log) + ":/usr/bin:/bin"
     r = run("install.sh", "--yes", "--no-bootstrap")
-    assert "personal: plugin worksessions installed from " + REPO in r.stdout, r.stdout + r.stderr
-    assert "work: plugin worksessions installed from " + REPO in r.stdout
-    calls = log.read_text().splitlines()
-    for prof in ("personal", "work"):
-        cfg = str(tmp_path / (".claude-" + prof))
-        assert cfg + " plugin marketplace add " + REPO in calls, calls
-        assert cfg + " plugin install worksessions@claude-worksessions --scope user" in calls
+    assert r.returncode == 0, r.stdout + r.stderr
+    # no plugin: install.sh never calls claude plugin
+    assert not log.exists() or "plugin" not in log.read_text()
+    assert "plugin worksessions" not in r.stdout and "marketplace" not in r.stdout
     # our old hook entries are gone, the user's own stays, retention is kept
     s = json.loads((tmp_path / ".claude-personal" / "settings.json").read_text())
     assert s["hooks"] == {"PostToolUse": [{"matcher": "Write", "hooks": [mine]}]}
     assert s["cleanupPeriodDays"] == 3650
     assert "hooks" not in json.loads((tmp_path / ".claude-work" / "settings.json").read_text())
-    # the rendered copy was moved aside, the link left alone with a warning
-    assert not rendered.exists() and list(rendered.parent.glob("workday-recap.bak-*"))
-    assert "moved the rendered copy" in r.stdout
-    assert (tmp_path / ".claude-personal" / "skills" / "pending").is_symlink()
-    assert "pending is a symlink (managed elsewhere)" in r.stderr
+    assert (own / "SKILL.md").read_text() == "mine" and not list(own.parent.glob("*.bak-*"))
+    assert not os.path.lexists(os.path.join(bin_, "claude-plan"))
+    assert "claude-plan is gone since 3.0.0" in r.stdout
     assert (tmp_path / "ws" / "_config" / "guard-rules.md").read_text().startswith("<!-- claude-guard")
     hook = str(tmp_path / ".local" / "bin" / "claude-hook-notfound")
     assert os.path.islink(hook) and os.path.islink(tmp_path / ".local" / "bin" / "claude-retro")
-    # again: the marketplace is already there, only the install is repeated
-    log.write_text("")
-    r = run("install.sh", "--yes", "--no-bootstrap")
-    assert "personal: plugin worksessions installed" in r.stdout
-    assert "plugin marketplace add" not in log.read_text()
     # CWS_HOOKS=1: the six entries are written, kept up to date, and never doubled
     conf.write_text(conf.read_text() + 'CWS_HOOKS="1"\n')
     r = run("install.sh", "--yes", "--no-bootstrap")
@@ -693,27 +682,7 @@ def test_install_installs_the_plugin_per_profile_and_removes_the_old_hooks(tmp_p
     r = run("install.sh", "--yes", "--no-bootstrap")
     assert "personal: prompt-quality hooks in place" in r.stdout
     assert json.loads((tmp_path / ".claude-personal" / "settings.json").read_text())["hooks"]["PostToolUse"][0]["hooks"] == [mine]
-    # github: the local registration is replaced by the published repository, once
-    conf.write_text(conf.read_text() + 'CWS_PLUGIN_SOURCE="github"\n')
-    log.write_text("")
-    r = run("install.sh", "--yes", "--no-bootstrap")
-    assert "personal: claude-worksessions marketplace re-pointed to jviegas6/claude-worksessions" in r.stdout, r.stdout + r.stderr
-    assert "personal: plugin worksessions installed from jviegas6/claude-worksessions" in r.stdout
-    calls = log.read_text().splitlines()
-    cfg = str(tmp_path / ".claude-personal")
-    assert calls.index(cfg + " plugin uninstall worksessions@claude-worksessions --scope user") \
-         < calls.index(cfg + " plugin marketplace remove claude-worksessions") \
-         < calls.index(cfg + " plugin marketplace add jviegas6/claude-worksessions") \
-         < calls.index(cfg + " plugin install worksessions@claude-worksessions --scope user")
-    log.write_text("")
-    r = run("install.sh", "--yes", "--no-bootstrap")
-    assert "re-pointed" not in r.stdout and "plugin marketplace add" not in log.read_text()
-    # off: nothing is called
-    conf.write_text(conf.read_text() + 'CWS_PLUGIN_SOURCE="off"\n')
-    log.write_text("")
-    r = run("install.sh", "--yes", "--no-bootstrap")
-    assert "CWS_PLUGIN_SOURCE=off" in r.stdout and "plugin" not in log.read_text()
-    conf.write_text(conf.read_text() + 'CWS_PLUGIN_SOURCE="github"\n')
+    # uninstall: hooks out, and a plugin left by 2.35-2.38 is removed with its marketplace
     r = run("uninstall.sh")
     assert "removed the prompt-quality hooks from" in r.stdout
     assert "hooks" not in json.loads((tmp_path / ".claude-work" / "settings.json").read_text())
@@ -889,29 +858,6 @@ def test_recent_folder_age_counts_calendar_days(tmp_path):
     (d / ".session.json").write_text(json.dumps({"name": "Late", "ticket": "PROJ-7"}))
     out = zsh('_cws_recent_folders PROJ-7 14', tmp_path)
     assert out.strip().endswith("Late  (1d ago)")
-
-
-def test_claude_pending_runs_the_skill_in_the_root_out_of_the_audit(tmp_path):
-    (tmp_path / ".claude-personal").mkdir()
-    stub = tmp_path / "bin"
-    stub.mkdir()
-    (stub / "claude").write_text('#!/bin/sh\necho "$PWD|$CLAUDE_CONFIG_DIR|$*" > "$HOME/launched"\n')
-    (stub / "claude").chmod(0o755)
-    env = dict(os.environ, CLAUDE_WORK_ROOT=str(tmp_path), CWS_CONFIG=os.devnull, ZDOTDIR=str(tmp_path),
-               HOME=str(tmp_path), CWS_PROFILES="personal work", CWS_DEFAULT_PROFILE="personal",
-               PATH=str(stub) + os.pathsep + os.environ["PATH"])
-    src = 'source "{}/shell/worksessions.zsh"\nclaude-pending'.format(REPO)
-    r = subprocess.run(["zsh", "-fc", src], env=env, capture_output=True, text=True)
-    assert r.returncode == 0, r.stderr
-    cwd, cfg, args = (tmp_path / "launched").read_text().strip().split("|")
-    assert cwd == str(tmp_path) and cfg == str(tmp_path / ".claude-personal")
-    sid = re.fullmatch(r"--session-id ([0-9a-f-]{36}) /pending", args).group(1)
-    # the id is on the no-audit list before Claude starts, so the run never reaches the review
-    assert sid in (tmp_path / "_audit" / "no-audit.txt").read_text()
-    assert "(no-audit)" in r.stdout
-    # -p is checked like claude-new's
-    r = subprocess.run(["zsh", "-fc", src + " -p nope"], env=env, capture_output=True, text=True)
-    assert r.returncode == 1 and "unknown profile 'nope'" in r.stderr
 
 
 def area_stubs(tmp_path):

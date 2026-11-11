@@ -676,7 +676,7 @@ call reads the config and exits.
 
 ### 13.2 `uninstall.sh`
 
-Uninstalls the `worksessions` plugin from each profile, removes the three `claude-guard <event>`
+Uninstalls a `worksessions` plugin left by 2.35–2.38 from each profile, removes the three `claude-guard <event>`
 commands (and the other prompt-quality hooks) from each profile's settings, drops empty groups
 and events, and removes the symlink.
 

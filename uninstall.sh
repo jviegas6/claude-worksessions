@@ -79,7 +79,7 @@ PY
   )
   [[ "$out" == removed ]] && say "removed the prompt-quality hooks from $sfile"
 done
-# The plugin (skills and hooks) and its local marketplace, per profile
+# A worksessions plugin left by releases 2.35 to 2.38, and its local marketplace, per profile
 if command -v claude >/dev/null 2>&1; then
   for pdir in "$HOME"/.claude-*(N/); do
     [[ -L "$pdir" ]] && continue

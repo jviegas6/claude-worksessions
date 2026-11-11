@@ -37,7 +37,6 @@ in each section's title.
 | `install.sh`, `uninstall.sh` | zsh; set up and remove everything outside the repo |
 | `config/*.example.*` | seeds for `<work root>/_config/` |
 | `templates/CLAUDE.md.tmpl` | the work root's `CLAUDE.md` |
-| `.claude-plugin/`, `skills/*/SKILL.md` | the `worksessions` Claude Code plugin: manifest, local marketplace, skills; installed per profile from this checkout |
 | `vscode/` | the sidebar extension (`extension.js`, `model.js`, `package.json`, `package_vsix.py`, `test/`) |
 | `yazi/` | yazi config template, glow styles, `md-email.css`, `md2html.sh` |
 | `tests/` | pytest suite; `vscode/test/` node tests run from `tests/test_vscode.py` |
@@ -167,13 +166,8 @@ backed up.
    `~/.vscode-server/data/Machine`, else `~/.config/Code/User`; JSONC files are reported, not
    edited). Installs the extension when `code --list-extensions --show-versions` differs from
    `VERSION` (§13.7).
-9. **Plugin.** `CWS_PLUGIN_SOURCE` picks the marketplace: `local` (the checkout) or `github`
-   (`jviegas6/claude-worksessions`); `off` leaves it to a plugin manager. Per profile:
-   `claude plugin marketplace add <source>` (a registration from another source is uninstalled
-   and replaced) and `claude plugin install worksessions@claude-worksessions --scope user`;
-   without `claude` on PATH it prints the two commands. A rendered `~/.claude-<shared>/skills/<name>` is moved aside
-   (`.bak-<stamp>`; a symlink is left with a warning). The skills read
-   `~/.config/claude-worksessions/config.env` at run time. Hooks: with `CWS_HOOKS=1` the six
+9. **Hooks.** No plugin and no skills since 3.0.0; a `~/.local/bin/claude-plan` link into the
+   checkout is removed. With `CWS_HOOKS=1` the six
    prompt-quality and guard entries are written into each profile's `settings.json` (an older
    group holding only our hook is brought up to date); off, ours are removed.
 10. **yazi** (if enabled). Renders `yazi.toml`, copies the glow styles, `md-email.css`,
@@ -221,8 +215,8 @@ Written atomically; invalid JSON is reported and left alone.
 
 Removes: the ten `~/.local/bin` links that point into the repo; the `~/.zshrc` block (after a
 backup); the VS Code wrapper setting where it equals the wrapper path; the extension; the pre-2.35 hook
-commands from every `~/.claude-*/settings.json` (dropping empty groups, events and `hooks`); the
-plugin and its marketplace from every profile; the config link. Keeps: the work root, `_config/`,
+commands from every `~/.claude-*/settings.json` (dropping empty groups, events and `hooks`); a
+`worksessions` plugin left by 2.35–2.38 and its marketplace, from every profile; the config link. Keeps: the work root, `_config/`,
 profiles and history, shared-item links, `~/.claude`, gateway env, retention, sign-in markers,
 yazi config, packages.
 
@@ -768,7 +762,7 @@ change.
 | Recent sessions… | quick pick of visible sessions |
 | Set task type… | writes `.session.json` directly (`M.setTaskType`) for a request or a session |
 | Go to request… | open in a new window, reveal, or new session |
-| Run skill… | skills from `~/.claude-<shared>/skills` then each profile's, then the plugin's as `worksessions:<name>`; `claude-new --prompt '/<skill>' '<name>'` |
+| Run skill… | skills from `~/.claude-<shared>/skills` then each profile's; `claude-new --prompt '/<skill>' '<name>'` |
 | Resume session by id… | `claude-resume --resume <id>` |
 | Filter… / Clear filters / Sort… / Change grouping / Refresh / Clear search / Focus search | view state |
 | Pin / Unpin | toggle in `pinned.json` |
@@ -800,49 +794,15 @@ installed version differs.
 
 ## 14. Skills
 
-Rendered by `install.sh` into the shared profile (§3.2 step 9), with `{{…}}` placeholders from the
-config. Both are read-only towards Microsoft 365 and Jira.
+None ship with this package since 3.0.0; install them separately (e.g. with Skillshare). Their
+contract with the commands:
 
-### 14.1 workday-recap
-
-Triggered by "what did I do today/on DATE", recaps, stand-up notes, timesheets.
-
-1. Resolve the day; `get_me` for the user's identity.
-2. Sessions: `claude-audit --day D --sessions --csv -`.
-3. Meetings: `outlook_calendar_search` (wall-clock times as given).
-4. Chats: `chat_message_search`; the user's messages by display name; bursts collapsed; UTC converted.
-5. Sent mail: `outlook_email_search` in Sent Items; UTC converted.
-6. Write-up: headline, merged timeline, where the time went (sessions via `--by-type`; meetings
-   separate), open threads (parked sessions), coverage.
-7. Writes `_audit/activity/YYYY-MM-DD.json` (per `claude-audit --schema`; events carry `subject`;
-   `leave`/`personal`/`notice` classified), runs `claude-audit --day D --detail [--csv]`, and saves
-   the prose to `_daily/YYYY-MM-DD.md`.
-
-Linking evidence, strongest first: a session's output in later mail or chat; a session starting
-during or after a meeting on the same system; `Re:` chains; same chat and topic; same people and
-system. Time alone is never enough.
-
-### 14.2 weekly-review
-
-Not part of the plugin since 2.38.0: the skill is installed separately (e.g. with Skillshare) and
-drives `claude-audit --propose / --apply / --reconcile / --report`. What it does:
-
-Fills the tracker: one row per (week, task, ticket) with phase flags, Leave, Meetings &
-Interactions and utilisation. Reads `_config/review-rules.md` first.
-
-1. Week: this week from Thursday on, else last week.
-2. Evidence: every weekday needs an activity file; missing days gathered with the recap rules
-   (existing files never overwritten).
-3. Jira: `searchJiraIssuesUsingJql` (assignee/reporter/watcher = me, updated in the last ~60 days)
-   → `_audit/review/jira.json`.
-4. `claude-audit --week D --propose`.
-5. Curate with the user in rounds: correlations, task mapping, flags per row, leave, comments.
-   Declared tickets are facts; never re-ask what the ledger holds.
-6. Write `decisions_<monday>.json`; `claude-audit --apply`.
-7. `--reconcile` (ask about `?`, mention `x`), then the summary, `--detail`, `--csv`; the user runs
-   `--copy`. Unmapped hours must be zero before pasting.
-
-Utilisation: leave first (days ÷ 5), then largest remainder in 10 % steps (5 % when needed).
+- **Day files**: `_audit/activity/YYYY-MM-DD.json` in the schema `claude-audit --schema` prints,
+  times already local, events carrying `subject`, calendar entries classed `leave` / `personal` /
+  `notice`. A skill writes them from Microsoft 365; the commands never call the connectors (D7).
+- **Review**: `claude-audit --week D --propose`, `--apply` on a decisions file, `--reconcile`, and
+  `--report` for the weekly email; the ledger changes only through `--apply`.
+- **Settings**: skills read `~/.config/claude-worksessions/config.env` at run time.
 
 ---
 

@@ -1,5 +1,23 @@
 # Changelog
 
+## [3.0.0] — 2026-11-11
+
+- **No plugin, no skills.** The `worksessions` Claude Code plugin (`.claude-plugin/`) and its
+  `plan`, `pending` and `workday-recap` skills are gone; the repository is the commands only.
+  Skills are installed separately (e.g. from a Skillshare source). `weekly-review` lives there
+  and gathers the day files itself (`_audit/activity/`, in the schema `claude-audit --schema`
+  prints); `claude-audit` keeps every option it drives.
+- **No `claude-plan`.** The plan editor (`plan/editor.html`), its server and the sidebar's
+  **Open plan** are removed, with `CWS_PLAN_PORT` and `CWS_CLAUDE_BIN`. Existing `plan.json` files
+  are left in their folders as history. `install.sh` removes a `~/.local/bin/claude-plan` link
+  into the checkout.
+- **No `claude-pending`**, and no **What's pending?** in the sidebar: the `/pending` skill it ran is gone.
+- `CWS_PLUGIN_SOURCE` is gone: `install.sh` no longer calls `claude plugin`, and no longer moves
+  skills in the shared profile aside. **Run skill…** in VS Code lists only your profiles' skills.
+- **Removing a leftover install** (2.35 to 2.38): `uninstall.sh` uninstalls the plugin and its
+  marketplace from every profile; by hand, `claude plugin uninstall worksessions@claude-worksessions`
+  per profile, or `skillshare plugin remove worksessions` if Skillshare installed it.
+
 ## [2.38.2] — 2026-11-11
 
 - **`claude-search` showed no snippet for a word with a synonym.** A search for "firewall" found the

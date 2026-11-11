@@ -448,23 +448,6 @@ async function setWaiting(bar, el) {
   bar.refresh();
 }
 
-// /pending: what needs a reply and what I am waiting on, in a Claude tab in the work root.
-// claude-pending keeps the run out of the audit (no request folder, no review row).
-function pending(bar) {
-  const conf = config();
-  const profile = conf.CWS_DEFAULT_PROFILE || (conf.CWS_PROFILES || "").split(/\s+/)[0];
-  bar.terminal("pending", bar.data.work_root, "claude-pending" + (profile ? ` -p ${profile}` : ""), "pending");
-}
-
-// Open plan: the request's plan.json as a DAG in the browser editor. claude-plan starts its
-// local server when needed and opens the default browser; nothing runs in a terminal.
-function openPlan(el) {
-  const r = el && el.request;
-  if (!r) return;
-  run(binPath("claude-plan"), [r.path]).catch(err =>
-    vscode.window.showErrorMessage(`claude-plan failed: ${err.message}`));
-}
-
 // Sweep empty folders: request folders with no session and no files, older than a week, to the bin.
 function sweepEmpty(bar) {
   bar.terminal("sweep empty folders", bar.data.work_root, "claude-delete --empty-folders", "sweep");
@@ -669,18 +652,13 @@ function skillDirs() {
   return [shared, ...profiles].map(p => path.join(HOME, ".claude-" + p, "skills"));
 }
 
-// The plugin's own skills (this checkout's skills/), invoked as /worksessions:<name>.
-function pluginSkills() {
-  return M.readSkills([path.join(__dirname, "..", "skills")]).map(s => ({ ...s, name: "worksessions:" + s.name }));
-}
-
 async function runSkill(bar) {
-  const skills = [...M.readSkills(skillDirs()), ...pluginSkills()];
-  if (!skills.length) return vscode.window.showInformationMessage("No skills found in ~/.claude-*/skills or the plugin.");
+  const skills = M.readSkills(skillDirs());
+  if (!skills.length) return vscode.window.showInformationMessage("No skills found in ~/.claude-*/skills.");
   const pick = await vscode.window.showQuickPick(skills.map(s => ({ label: "/" + s.name, detail: s.description, skill: s })),
                                                  { placeHolder: "Run a skill — it starts a new request", matchOnDetail: true });
   if (!pick) return;
-  const name = pick.skill.name.replace(/^worksessions:/, "").replace(/-/g, " ");   // request name: the skill, in words
+  const name = pick.skill.name.replace(/-/g, " ");   // request name: the skill, in words
   bar.newRequest(`--prompt ${shq("/" + pick.skill.name)} ${shq(name)}`, "new request · /" + pick.skill.name);
 }
 
@@ -918,9 +896,7 @@ function activate(context) {
     vscode.window.registerWebviewViewProvider("claudeWorksessions.search", box),
     cmd("refresh", () => bar.refresh()),
     cmd("setWaiting", el => setWaiting(bar, el)),
-    cmd("pending", () => pending(bar)),
     cmd("sweepEmpty", () => sweepEmpty(bar)),
-    cmd("openPlan", el => openPlan(el)),
     cmd("grouping", async () => {
       const pick = await vscode.window.showQuickPick(
         M.GROUPINGS.map(g => ({ label: M.GROUPING_LABELS[g], g, description: g === bar.grouping ? "current" : "" })),

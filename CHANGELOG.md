@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.38.0] — 2026-11-11
+
+- **`weekly-review` is no longer part of the plugin.** The skill (the weekly tracker and the weekly
+  report email) is installed separately, e.g. from a Skillshare source, as `/weekly-review`.
+  `claude-audit` keeps every option it drives (`--propose`, `--apply`, `--reconcile`, `--report`),
+  and the ledger, `_audit/` and `_config/review-rules.md` are unchanged. `install.sh` no longer
+  touches a `skills/weekly-review` folder in the shared profile.
+
 ## [2.37.0] — 2026-11-11
 
 - `CWS_PLUGIN_SOURCE` chooses where the `worksessions` plugin is installed from: `local` (this checkout,

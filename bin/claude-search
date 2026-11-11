@@ -220,6 +220,9 @@ def booking(doc, ledger, tasks):
 def snippet(doc, stems):
     if not stems:
         return ""
+    # The stems are normalised (firewall -> fw); the text isn't. Look for the words each
+    # synonym stands for too, so "firewall" finds "open the firewall" and "kv" finds "keyvault".
+    stems = set(stems) | {CA._stem(raw) for raw, word in CA.SYNONYMS.items() if CA._stem(word) in stems}
     pattern = re.compile(r"\b(" + "|".join(re.escape(s) for s in sorted(stems, key=len, reverse=True)) + r")\w*", re.I)
     for field, who in (("prompts", "you"), ("assistant", "claude")):
         text = doc["snip"].get(field) or ""

@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.38.2] — 2026-11-11
+
+- **`claude-search` showed no snippet for a word with a synonym.** A search for "firewall" found the
+  session (both sides are normalised to `fw`) but looked for `fw` in the raw text, so the excerpt
+  was empty. The snippet now looks for every word a synonym stands for. The test that recorded
+  this as a known failure (`xfail`) now passes, and covers `kv` and `dbx` too.
+
 ## [2.38.1] — 2026-11-11
 
 - **`claude-new -F TYPE` didn't place the request in T3.** zsh passed `--type TYPE` to `claude-area`

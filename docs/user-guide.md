@@ -34,7 +34,7 @@ accounted for, without you maintaining anything by hand:
 | **Several Claude accounts** (a subscription, a company gateway) sharing **one history** | profiles, one shared |
 | **Your time** per day, week or month, per ticket and task type | `claude-audit` reads the Claude transcripts |
 | **Search** across every past session | `claude-search` |
-| **A daily recap and a weekly tracker** filled from Claude, Teams, calendar, mail and Jira | the `workday-recap` and `weekly-review` skills |
+| **A daily recap and a weekly tracker** filled from Claude, Teams, calendar, mail and Jira | the `workday-recap` skill; a `weekly-review` skill you install separately |
 | **Guard rails** on how Claude works: asks when a request is vague or something doesn't exist; stays on the request | the prompt-quality hooks and `claude-guard` |
 | **A sidebar in VS Code** listing requests and sessions, each session in its own tab and profile | the Work sessions extension |
 
@@ -225,7 +225,8 @@ Sessions started with `claude-new -n` (or listed in `_audit/no-audit.txt`, as `c
 
 ## 9. The daily recap and the weekly review
 
-Both are Claude skills. Start them in their own request so they get a folder, ticket and type:
+Both are Claude skills; `workday-recap` comes with the plugin, `weekly-review` is installed
+separately (since 2.38.0). Start them in their own request so they get a folder, ticket and type:
 
 ```sh
 claude-new --prompt /workday-recap -t Other "recap"

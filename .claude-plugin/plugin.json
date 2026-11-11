@@ -1,10 +1,10 @@
 {
   "name": "worksessions",
-  "version": "2.37.0",
-  "description": "Work sessions for Claude Code: one dated folder per request, a plan per deliverable, and the pending, plan, weekly-review and workday-recap skills.",
+  "version": "2.38.0",
+  "description": "Work sessions for Claude Code: one dated folder per request, a plan per deliverable, and the pending, plan and workday-recap skills.",
   "author": { "name": "José Viegas" },
   "homepage": "https://github.com/jviegas6/claude-worksessions",
   "repository": "https://github.com/jviegas6/claude-worksessions",
   "license": "MIT",
-  "keywords": ["work-sessions", "audit", "weekly-review", "hooks"]
+  "keywords": ["work-sessions", "audit", "hooks"]
 }

@@ -52,7 +52,7 @@ flowchart LR
   T --> PY[Python commands<br/>claude-audit · claude-sessions · claude-search<br/>claude-delete · claude-retro]
   W --> PY
   PY --> W
-  SK[Skills<br/>workday-recap · weekly-review] --> M365[(Microsoft 365<br/>connector)]
+  SK[Skills<br/>workday-recap] --> M365[(Microsoft 365<br/>connector)]
   SK --> J[(Jira<br/>connector)]
   SK --> PY
   SK --> W
@@ -104,7 +104,7 @@ flowchart LR
 | `bin/claude-md-email` | Python | Markdown → inline-styled HTML on the clipboard |
 | `bin/claude-vscode` | zsh | process wrapper that gives the VS Code Claude extension the request's profile |
 | `vscode/` | JavaScript extension | the Work sessions sidebar |
-| `skills/workday-recap`, `skills/weekly-review` | Claude skills | recap a day, fill the weekly tracker |
+| `skills/workday-recap` | Claude skill | recap a day |
 | `templates/CLAUDE.md.tmpl` | template | the standing instructions every session reads |
 
 ### 4.3 Code reuse between commands

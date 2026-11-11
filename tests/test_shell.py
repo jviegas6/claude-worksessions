@@ -638,7 +638,7 @@ def test_install_installs_the_plugin_per_profile_and_removes_the_old_hooks(tmp_p
     (tmp_path / ".claude-personal").mkdir()
     (tmp_path / ".claude-personal" / "settings.json").write_text(json.dumps(old))
     # a pre-2.35 rendered skill in the shared profile, and one managed by something else (a link)
-    rendered = tmp_path / ".claude-personal" / "skills" / "weekly-review"
+    rendered = tmp_path / ".claude-personal" / "skills" / "workday-recap"
     rendered.mkdir(parents=True)
     (rendered / "SKILL.md").write_text("old render")
     (tmp_path / "elsewhere").mkdir()
@@ -668,7 +668,7 @@ def test_install_installs_the_plugin_per_profile_and_removes_the_old_hooks(tmp_p
     assert s["cleanupPeriodDays"] == 3650
     assert "hooks" not in json.loads((tmp_path / ".claude-work" / "settings.json").read_text())
     # the rendered copy was moved aside, the link left alone with a warning
-    assert not rendered.exists() and list(rendered.parent.glob("weekly-review.bak-*"))
+    assert not rendered.exists() and list(rendered.parent.glob("workday-recap.bak-*"))
     assert "moved the rendered copy" in r.stdout
     assert (tmp_path / ".claude-personal" / "skills" / "pending").is_symlink()
     assert "pending is a symlink (managed elsewhere)" in r.stderr

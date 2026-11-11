@@ -824,6 +824,9 @@ system. Time alone is never enough.
 
 ### 14.2 weekly-review
 
+Not part of the plugin since 2.38.0: the skill is installed separately (e.g. with Skillshare) and
+drives `claude-audit --propose / --apply / --reconcile / --report`. What it does:
+
 Fills the tracker: one row per (week, task, ticket) with phase flags, Leave, Meetings &
 Interactions and utilisation. Reads `_config/review-rules.md` first.
 

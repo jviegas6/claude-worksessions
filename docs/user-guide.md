@@ -12,7 +12,7 @@ the [Low-Level Design](lld.md).
 - [6. Working from VS Code](#6-working-from-vs-code)
 - [7. Finding past work](#7-finding-past-work)
 - [8. Where your time went: the audit](#8-where-your-time-went-the-audit)
-- [9. The daily recap and the weekly review](#9-the-daily-recap-and-the-weekly-review)
+- [9. Skills: the weekly review and others](#9-skills-the-weekly-review-and-others)
 - [10. Improving how you prompt](#10-improving-how-you-prompt)
 - [11. Tidying up](#11-tidying-up)
 - [12. Sharing results by email](#12-sharing-results-by-email)
@@ -34,7 +34,7 @@ accounted for, without you maintaining anything by hand:
 | **Several Claude accounts** (a subscription, a company gateway) sharing **one history** | profiles, one shared |
 | **Your time** per day, week or month, per ticket and task type | `claude-audit` reads the Claude transcripts |
 | **Search** across every past session | `claude-search` |
-| **A daily recap and a weekly tracker** filled from Claude, Teams, calendar, mail and Jira | the `workday-recap` skill; a `weekly-review` skill you install separately |
+| **A daily recap and a weekly tracker** filled from Claude, Teams, calendar, mail and Jira | a skill you install separately (e.g. `weekly-review`), on top of `claude-audit` |
 | **Guard rails** on how Claude works: asks when a request is vague or something doesn't exist; stays on the request | the prompt-quality hooks and `claude-guard` |
 | **A sidebar in VS Code** listing requests and sessions, each session in its own tab and profile | the Work sessions extension |
 
@@ -214,35 +214,31 @@ claude-audit --week --csv       # a CSV in <work root>/_audit/
 ```
 
 Time is measured from the Claude transcripts: the time you actually worked, with long stalls
-capped. Meetings, mail and chats saved by the recap and review skills are merged in. The
+capped. Meetings, mail and chats saved by your skills (day files) are merged in. The
 profile, ticket and type of each session come from its `.session.json`, which is why sessions
 should start with `claude-new`.
 
-Sessions started with `claude-new -n` (or listed in `_audit/no-audit.txt`, as `claude-pending` does for its own run) are left out.
+Sessions started with `claude-new -n` (or listed in `_audit/no-audit.txt`) are left out.
 `claude-search` still finds them.
 
 ---
 
-## 9. The daily recap and the weekly review
+## 9. Skills: the weekly review and others
 
-Both are Claude skills; `workday-recap` comes with the plugin, `weekly-review` is installed
-separately (since 2.38.0). Start them in their own request so they get a folder, ticket and type:
+This package ships no skills since 3.0.0. Keep yours where you manage them (e.g. a Skillshare
+source) and install them into the profiles; they read `~/.config/claude-worksessions/config.env`.
+Start one in its own request so it gets a folder, ticket and type:
 
 ```sh
-claude-new --prompt /workday-recap -t Other "recap"
 claude-new --prompt /weekly-review -t Other "weekly review"
 ```
 
-In VS Code: Command Palette → *Work sessions: Run skill…*.
+In VS Code: Command Palette → *Work sessions: Run skill…* lists the skills in your profiles.
 
-- **workday-recap** rebuilds one day in time order from your Claude sessions, Teams chats,
-  calendar and sent mail. Use it for stand-up notes, a timesheet, or to see where a day went.
-- **weekly-review** fills your weekly tracker (task, ticket, comments, phase, leave, meetings,
-  utilisation) from sessions, Teams, calendar, mail, out-of-office and Jira. It asks only about
-  what's new or ambiguous, and records its decisions so next week starts from them.
-
-They need the Microsoft 365 and Atlassian connectors, which come with your Claude account once
-you're signed in. House rules for the review go in `_config/review-rules.md`.
+A weekly-review skill writes day files (`claude-audit --schema`) and drives `claude-audit
+--propose / --apply / --reconcile / --report`; its decisions live in the ledger. Skills that read
+Teams, mail or Jira need the Microsoft 365 and Atlassian connectors, which come with your Claude
+account. House rules for the review go in `_config/review-rules.md`.
 
 ---
 

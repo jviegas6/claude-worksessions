@@ -52,7 +52,7 @@ flowchart LR
   T --> PY[Python commands<br/>claude-audit · claude-sessions · claude-search<br/>claude-delete · claude-retro]
   W --> PY
   PY --> W
-  SK[Skills<br/>workday-recap] --> M365[(Microsoft 365<br/>connector)]
+  SK[Skills<br/>installed separately] --> M365[(Microsoft 365<br/>connector)]
   SK --> J[(Jira<br/>connector)]
   SK --> PY
   SK --> W
@@ -81,7 +81,7 @@ flowchart LR
 |---|---|---|
 | **Entry** | `claude-new`, `claude-resume`, `ws`, VS Code sidebar | start and resume work in the right folder with the right profile |
 | **Metadata** | `.session.json`, `claude-type`, `claude-goal` | what a request is: ticket, profile, task type, goal, audit flag |
-| **Agent configuration** | profiles, `install.sh`, rendered `CLAUDE.md`, the `worksessions` plugin (skills), optional hooks | how Claude runs: which account, which standing context, which rules |
+| **Agent configuration** | profiles, `install.sh`, rendered `CLAUDE.md`, optional hooks | how Claude runs: which account, which standing context, which rules |
 | **Guard rails** | `claude-hook-vague`, `claude-hook-notfound`, `claude-guard` | live checks on prompts and tool calls |
 | **Derived data** | `claude-sessions`, `claude-audit`, `claude-search`, `claude-retro` | read-only views over transcripts and folders |
 | **Decisions** | weekly-review skill, `claude-audit --propose/--apply`, ledger | human decisions recorded once and reused |
@@ -93,7 +93,7 @@ flowchart LR
 | Component | Kind | Role |
 |---|---|---|
 | `shell/worksessions.zsh` | zsh, sourced from `~/.zshrc` | `claude-new`, `claude-resume`, `claude-type`, `claude-goal`, `ws`, `y`; loads the config; makes a bare `claude` use the default profile |
-| `install.sh` / `uninstall.sh` | zsh | set up and remove everything outside the repo: config, work root, profiles, hooks, links, VS Code, skills, yazi, `~/.zshrc` block |
+| `install.sh` / `uninstall.sh` | zsh | set up and remove everything outside the repo: config, work root, profiles, hooks, links, VS Code, yazi, `~/.zshrc` block |
 | `bin/claude-audit` | Python | the core library and the time audit: transcripts → sessions → subjects → tracker rows; the ledger |
 | `bin/claude-sessions` | Python | session list, and the JSON feed for the sidebar (sessions, requests, files, deletability) |
 | `bin/claude-search` | Python | BM25 search over an incremental index, with ticket evidence and optional Claude re-ranking |
@@ -104,7 +104,6 @@ flowchart LR
 | `bin/claude-md-email` | Python | Markdown → inline-styled HTML on the clipboard |
 | `bin/claude-vscode` | zsh | process wrapper that gives the VS Code Claude extension the request's profile |
 | `vscode/` | JavaScript extension | the Work sessions sidebar |
-| `skills/workday-recap` | Claude skill | recap a day |
 | `templates/CLAUDE.md.tmpl` | template | the standing instructions every session reads |
 
 ### 4.3 Code reuse between commands
@@ -225,8 +224,8 @@ flowchart LR
 
 Each profile is its own Claude Code config folder with its own login or gateway `env`,
 settings and hooks. The **shared** profile owns the history-bearing folders; every other profile
-links to them. So any session can be resumed, searched and audited from any profile; the skills
-come from the `worksessions` plugin, installed in each profile from the checkout. Which profile ran a session comes from `.session.json`, not from where its
+links to them. So any session can be resumed, searched and audited from any profile; skills are
+installed separately (e.g. with Skillshare), not by this package. Which profile ran a session comes from `.session.json`, not from where its
 transcript sits (they all sit in the shared folder).
 
 ## 8. Design decisions
@@ -256,7 +255,7 @@ transcript sits (they all sit in the shared folder).
 | Privacy | everything local or in the user's synced folder; the only network calls are Claude's own (`claude -p` for search re-ranking, retro and the guard judge) and the skills' connectors |
 | Performance | incremental caches for written files and the search index; the sidebar debounces refreshes; the guard's tool hook is ~36 ms |
 | Testability | ~330 pytest tests plus node tests for the extension; a 95 % coverage gate on `bin/`; zsh tested by running it; a real Linux install in CI |
-| Upgrades | `install.sh --update` moves the checkout to the newest release tag, prints the changelog gained and re-renders; `bin/` and `shell/` follow the checkout immediately, and so do the plugin's skills when `CWS_PLUGIN_SOURCE="local"` |
+| Upgrades | `install.sh --update` moves the checkout to the newest release tag, prints the changelog gained and re-renders; `bin/` and `shell/` follow the checkout immediately |
 
 ## 10. Constraints and assumptions
 
@@ -265,7 +264,7 @@ transcript sits (they all sit in the shared folder).
   and hook contract are relied on as documented or observed; changes upstream may need
   adaptation.
 - Local time is the machine's time zone; there's no per-user zone override in the audit.
-- Rendered files (`CLAUDE.md`, skills, yazi config) change only when `install.sh` runs.
+- Rendered files (`CLAUDE.md`, yazi config) change only when `install.sh` runs.
 
 ## 11. Risks
 

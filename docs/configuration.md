@@ -14,7 +14,7 @@ interpreted — it is not executed as shell.
 
 You don't have to write it by hand: the first `install.sh` asks for everything, and
 `install.sh --profiles` re-asks the profile questions. Editing the file directly works
-just as well — re-run `install.sh` afterwards so the skills and `CLAUDE.md` catch up.
+just as well — re-run `install.sh` afterwards so `CLAUDE.md` catches up.
 
 ## config.env
 
@@ -58,7 +58,7 @@ just as well — re-run `install.sh` afterwards so the skills and `CLAUDE.md` ca
 
 Changing a value: edit the file, open a new terminal. Re-run `install.sh` when you
 changed the work root or profiles — the work root's `CLAUDE.md` is rendered from them. Org,
-role, time zone, ticket example and Jira id are read by the skills at run time, so a new
+role, time zone, ticket example and Jira id are read by your skills at run time, so a new
 session is enough.
 
 ## Profiles

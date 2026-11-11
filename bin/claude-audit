@@ -377,7 +377,7 @@ def split_by_day(session):
 
 ACTIVITY_SCHEMA = """
 --activity expects a JSON array of events already converted to LOCAL time
-(the caller normalises; see the workday-recap skill, step 0.5):
+(the caller normalises: calendar wall clock as given, mail and chat UTC converted):
 
   [{"source": "meeting" | "email" | "chat",
     "start":  "2026-09-09T09:00:00",       # required, local ISO, no zone suffix
@@ -2547,7 +2547,7 @@ def run_friday(args, first, last, busy_cap, read_cap, today):
     design = untouched_design_tickets(acts, first, last)
     missing = missing_activity(args.activity, list(daterange(first, min(last, today))))
     if missing:
-        notes.insert(0, "no Teams/calendar/mail data for {} -- gather it first (workday-recap)".format(
+        notes.insert(0, "no Teams/calendar/mail data for {} -- gather the day files first".format(
             describe_days(missing)))
     guesses = sum(1 for r in rows if not r["decided"])
     if guesses:

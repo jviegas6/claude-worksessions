@@ -451,11 +451,15 @@ def test_main_prints_results(search, corpus, monkeypatch, capsys):
     assert "Thu 10 Sep" in out
 
 
-@pytest.mark.xfail(strict=True, reason="snippet() matches stems literally; synonyms (firewall -> fw) never match the text")
-def test_snippet_for_synonym_word(search):
-    doc = make_doc(search, "s", prompts="open the firewall for databricks")
-    res = search.search("firewall", [doc], search.CA.empty_ledger(), {}, {})[0]
-    assert res[0]["snippet"].startswith('you: "open the firewall')
+@pytest.mark.parametrize("query, text", [
+    ("firewall", "open the firewall for databricks"),   # the word itself, normalised to fw
+    ("kv", "rotate the keyvault secret"),               # the short form finds the long one
+    ("dbx", "the databricks job failed"),               # and the other way round
+])
+def test_snippet_for_synonym_word(search, query, text):
+    doc = make_doc(search, "s", prompts=text)
+    res = search.search(query, [doc], search.CA.empty_ledger(), {}, {})[0]
+    assert res[0]["snippet"].startswith('you: "' + text.split()[0])
 
 
 def test_main_ticket_search_shows_jira_title(search, corpus, monkeypatch, capsys):

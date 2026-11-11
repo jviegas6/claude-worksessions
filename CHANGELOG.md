@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.37.0] — 2026-11-11
+
+- `CWS_PLUGIN_SOURCE` chooses where the `worksessions` plugin is installed from: `local` (this checkout,
+  the default: an edited skill is live on the next session), `github` (the published repository,
+  moved by `claude plugin update` or a plugin manager such as Skillshare) or `off` (a plugin manager
+  installs it). `install.sh` replaces a marketplace registered from the other source.
+
 ## [2.36.0] — 2026-11-11
 
 - **Hooks are opt-in.** The plugin no longer ships `hooks/hooks.json`. With `CWS_HOOKS="1"` in

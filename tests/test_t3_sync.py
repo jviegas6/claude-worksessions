@@ -29,7 +29,7 @@ def t3(home, monkeypatch):
     db = t3home / "userdata" / "statev2.sqlite"
     con = sqlite3.connect(str(db))
     con.execute("create table projection_projects (project_id text, title text, workspace_root text, "
-                "created_at text, deleted_at text)")
+                "created_at text, deleted_at text, default_model_selection_json text)")
     con.execute("create table orchestration_v2_projection_threads (thread_id text, project_id text, deleted_at text, "
                 "provider_instance_id text, payload_json text, updated_at text)")
     con.execute("create table orchestration_v2_projection_provider_threads (thread_id text, payload_json text, updated_at text)")
@@ -48,7 +48,8 @@ def t3(home, monkeypatch):
         def project(self, folder, title, threads=0, pid=None):
             pid = pid or "p-" + os.path.basename(str(folder))
             con = sqlite3.connect(str(db))
-            con.execute("insert into projection_projects values (?, ?, ?, '', null)", (pid, title, str(folder)))
+            con.execute("insert into projection_projects (project_id, title, workspace_root, created_at) "
+                        "values (?, ?, ?, '')", (pid, title, str(folder)))
             for i in range(threads):
                 con.execute("insert into orchestration_v2_projection_threads (thread_id, project_id) values (?, ?)",
                             (pid + str(i), pid))
@@ -75,6 +76,26 @@ def t3(home, monkeypatch):
                         (thread_id, json.dumps(payload)))
             con.commit()
             con.close()
+
+        def used(self, provider, model, when, deleted=False):
+            """A thread that ran on that provider instance and model, last updated at WHEN."""
+            con = sqlite3.connect(str(db))
+            con.execute("insert into orchestration_v2_projection_threads values (?, 'p', ?, ?, ?, ?)",
+                        ("u-" + when, "2026-11-01" if deleted else None, provider,
+                         json.dumps({"modelSelection": {"instanceId": provider, "model": model}}), when))
+            con.commit()
+            con.close()
+
+        def default_model(self, folder):
+            con = sqlite3.connect(str(db))
+            con.execute("update projection_projects set default_model_selection_json = ? where workspace_root = ?",
+                        ('{"model": "m"}', str(folder)))
+            con.commit()
+            con.close()
+
+        def providers(self, **enabled):
+            (t3home / "userdata" / "settings.json").write_text(json.dumps(
+                {"providerInstances": {k: {"driver": "claudeAgent", "enabled": v} for k, v in enabled.items()}}))
 
         def server(self):
             (t3home / "userdata" / "environment-id").write_text("env-1\n")
@@ -306,9 +327,52 @@ def test_open_with_a_prompt_starts_a_thread(t3, sync, monkeypatch, home):
     sync.main(["--open", str(d), "--prompt", "/weekly-review 2026-10-26"])
     real = os.path.realpath(str(d))
     title = "Other · 2026-11-01 · weekly review"
-    # T3 picks the Claude instance: no --provider or --model
+    # no thread used a model yet and nothing configured: t3 is left to choose
     assert t3.calls()[-1] == "thread start {} /weekly-review 2026-10-26 --title {}".format(real, title)
     assert opened == [[("open" if sys.platform == "darwin" else "xdg-open"), "t3code://threads/env-1/th-new"]]
+
+
+def _start_args(t3, sync, monkeypatch, d):
+    t3.server()
+    _no_open(sync, monkeypatch)
+    sync.main(["--open", str(d), "--prompt", "hi"])
+    start = t3.calls()[-1]
+    assert start.startswith("thread start ")
+    return start
+
+
+def test_a_project_without_a_default_model_gets_the_last_one_used(t3, sync, monkeypatch):
+    # t3 refuses "the project has no default model" without --provider and --model
+    d = t3.request("2026/11/12/11-09-45_ingestions", {"ticket": "Other", "name": "ingestions"})
+    t3.used("claudeAgent", "claude-sonnet-5-5", "2026-11-11T23:05:33Z")
+    t3.used("claudeAgent", "claude-opus-5-5", "2026-11-12T11:10:32Z")
+    t3.used("codex", "gpt-x", "2026-11-12T12:00:00Z", deleted=True)
+    assert _start_args(t3, sync, monkeypatch, d).endswith(
+        "--title Other · 2026-11-12 · ingestions --provider claudeAgent --model claude-opus-5-5")
+
+
+def test_the_last_model_used_skips_a_disabled_instance(t3, sync, monkeypatch):
+    d = t3.request("2026/11/12/11-09-45_ingestions", {"ticket": "Other", "name": "ingestions"})
+    t3.providers(claudeAgent=True, old=False)
+    t3.used("claudeAgent", "claude-opus-5-5", "2026-11-12T10:00:00Z")
+    t3.used("old", "claude-opus-5", "2026-11-12T11:00:00Z")
+    assert _start_args(t3, sync, monkeypatch, d).endswith("--provider claudeAgent --model claude-opus-5-5")
+
+
+def test_configured_provider_and_model_win(t3, sync, monkeypatch):
+    d = t3.request("2026/11/12/11-09-45_ingestions", {"ticket": "Other", "name": "ingestions"})
+    t3.used("claudeAgent", "claude-opus-5-5", "2026-11-12T11:10:32Z")
+    monkeypatch.setitem(sync.CA.CONFIG, "CWS_T3_PROVIDER", "claudeAgent_gateway")
+    monkeypatch.setitem(sync.CA.CONFIG, "CWS_T3_MODEL", "claude-sonnet-5-5")
+    assert _start_args(t3, sync, monkeypatch, d).endswith("--provider claudeAgent_gateway --model claude-sonnet-5-5")
+
+
+def test_a_project_with_its_own_default_model_keeps_it(t3, sync, monkeypatch):
+    d = t3.request("2026/11/12/11-09-45_ingestions", {"ticket": "Other", "name": "ingestions"})
+    t3.project(d, "Other · 2026-11-12 · ingestions")
+    t3.default_model(os.path.realpath(str(d)))
+    t3.used("claudeAgent", "claude-opus-5-5", "2026-11-12T11:10:32Z")
+    assert "--provider" not in _start_args(t3, sync, monkeypatch, d)
 
 
 def test_profile_flag_is_gone(sync, capsys):

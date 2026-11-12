@@ -44,6 +44,7 @@ just as well — re-run `install.sh` afterwards so `CLAUDE.md` catches up.
 | `CWS_OPEN_CMD` | T3 Code | how `claude-new` opens a request: one command; see [below](#how-a-request-opens) |
 | `CWS_AFTER_NEW_CMD` | `claude-area …` | what `claude-new` runs once the folder exists, before opening it |
 | `CWS_T3_BIN` | `t3` on PATH, else `~/.t3/bin/t3` | T3 Code's command, for `claude-t3-sync` |
+| `CWS_T3_PROVIDER`, `CWS_T3_MODEL` | the thread you used last in T3 | the provider instance id (T3's `providerInstances`, e.g. `claudeAgent`) and model of a thread `claude-t3-sync` starts in a project with no default model; T3 refuses one without them. Used only when both are set |
 | `CWS_PROJECTS` | empty | big projects, each with its own heading in T3; see [`claude-area`](commands.md#claude-area) |
 | `CWS_TYPES` | empty (off) | the types of request, e.g. `data access investigation`; the last is the fallback |
 | `CWS_AREAS_DIR` | `~/.local/share/claude-worksessions/areas` | where the areas' git data lives; keep it outside the synced work root |

@@ -1,5 +1,15 @@
 # Changelog
 
+## [3.1.1] — 2026-11-12
+
+- **`claude-new` opens a request in T3 again.** `claude-t3-sync --open` started the request's
+  thread without `--provider`/`--model`, assuming T3 falls back to a default; a project `t3` has
+  just added has no default model, so T3 refused every new request ("Pass modelSelection: the
+  project has no default model"). A project with no default model now gets `CWS_T3_PROVIDER` and
+  `CWS_T3_MODEL` when both are set, else the provider instance and model of the thread you used
+  last in T3 (on an instance still enabled); a project with its own default keeps it.
+  `CWS_T3_MODEL`, dropped in 3.1.0, is back alongside `CWS_T3_PROVIDER`.
+
 ## [3.1.0] — 2026-11-11
 
 - **No profiles.** The app that runs Claude picks the login: T3 Code's providers (one config dir

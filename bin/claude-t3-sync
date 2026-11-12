@@ -8,7 +8,9 @@
                                  a request folder with no thread yet gets one, started with a
                                  short kickoff from its .session.json (t3 needs a message)
                  [--prompt TEXT] start a thread there instead, with TEXT, and open it (on the
-                                 Claude instance T3 uses by default)
+                                 project's default model; a project with none gets
+                                 CWS_T3_PROVIDER/CWS_T3_MODEL, else the provider and model
+                                 of the thread you used last in T3)
   claude-t3-sync --thread ID     open the T3 thread that ran Claude session ID, in the T3 app
                  [--fallback DIR]  (no such thread: --open DIR instead)
 
@@ -265,6 +267,58 @@ def thread_count(path):
     return sum(n for _, _, folder, n in projects() if folder and os.path.realpath(folder) == real)
 
 
+def project_has_default_model(path):
+    """True if the T3 project of that folder has its own default model (then t3 uses it)."""
+    db, real = t3_db(), os.path.realpath(path)
+    if not os.path.isfile(db):
+        return False
+    con = sqlite3.connect("file:{}?mode=ro".format(db), uri=True)
+    try:
+        rows = con.execute("select workspace_root, default_model_selection_json from projection_projects "
+                           "where deleted_at is null").fetchall()
+    except sqlite3.Error:
+        return False
+    finally:
+        con.close()
+    return any(sel and folder and os.path.realpath(folder) == real for folder, sel in rows)
+
+
+def enabled_instances():
+    """The provider instance ids enabled in T3's settings; None when the settings can't be read."""
+    try:
+        with open(os.path.join(t3_userdata(), "settings.json")) as fh:
+            instances = json.load(fh).get("providerInstances")
+    except (OSError, ValueError):
+        return None
+    if not isinstance(instances, dict):
+        return None
+    return {iid for iid, inst in instances.items() if (inst or {}).get("enabled", True)}
+
+
+def model_selection():
+    """(provider instance, model) for a new thread: CWS_T3_PROVIDER and CWS_T3_MODEL when both are
+    set, else the pair of the thread you used last in T3 on an enabled instance; None if neither."""
+    provider, model = CA.CONFIG.get("CWS_T3_PROVIDER"), CA.CONFIG.get("CWS_T3_MODEL")
+    if provider and model:
+        return provider, model
+    db = t3_db()
+    if not os.path.isfile(db):
+        return None
+    con = sqlite3.connect("file:{}?mode=ro".format(db), uri=True)
+    try:
+        rows = con.execute(
+            "select provider_instance_id, json_extract(payload_json, '$.modelSelection.model') "
+            "from orchestration_v2_projection_threads where deleted_at is null and provider_instance_id is not null "
+            "and json_extract(payload_json, '$.modelSelection.model') is not null "
+            "order by updated_at desc limit 50").fetchall()
+    except sqlite3.Error:
+        rows = []
+    finally:
+        con.close()
+    enabled = enabled_instances()
+    return next(((p, m) for p, m in rows if enabled is None or p in enabled), None)
+
+
 def kickoff_prompt(path):
     """The first message of a request's thread, from its .session.json."""
     d = meta(path)
@@ -283,7 +337,8 @@ def kickoff_prompt(path):
 
 def open_in_t3(path, prompt=None, kickoff=False):
     """Add the folder to T3 under its title, or retitle the project it already is; open it.
-    With a prompt, start a thread there instead (T3 picks the Claude instance) and open that. With
+    With a prompt, start a thread there instead (model_selection when the project has no
+    default model) and open that. With
     kickoff, a request folder whose project has no thread yet gets one, started with a kickoff
     message (kickoff_prompt), so the session is registered in T3 even before you write to it."""
     path = os.path.realpath(path)
@@ -299,6 +354,12 @@ def open_in_t3(path, prompt=None, kickoff=False):
         prompt = kickoff_prompt(path)
     if prompt:
         args = ["thread", "start", path, prompt, "--title", CA.thread_title(meta(path)) or name]
+        if not project_has_default_model(path):
+            # t3 refuses a thread in a project with no default model unless it is given one
+            # (and ignores --provider without --model); a project t3 just added has none.
+            pick = model_selection()
+            if pick:
+                args += ["--provider", pick[0], "--model", pick[1]]
         ok, err, tid = t3(*args, out=True)
         if not ok or not tid:
             raise SystemExit("claude-t3-sync: T3 Code could not start a thread in {}: {}".format(path, err))
